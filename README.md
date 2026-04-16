@@ -1,36 +1,114 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# QuizForge 🎯
 
-## Getting Started
+> A production-grade, multi-tenant Telegram Quiz Dashboard built with Next.js 14, Prisma, and PostgreSQL.
 
-First, run the development server:
+## Features
+
+- **Multi-tenant** — any Telegram group owner can self-onboard
+- **Quiz Builder** — dynamic options (2–10), correct answer selector, live preview, topic routing
+- **Poll Support** — regular polls with multiple-answer mode
+- **Real-time Analytics** — Recharts line/bar/pie charts, admin leaderboard, activity timeline
+- **Webhook Receiver** — captures live `poll_answer` events from Telegram
+- **Quiz History** — sortable/filterable table with CSV export
+- **Admin Management** — auto-detected from Telegram, approve/revoke dashboard access
+- **Telegram Login** — HMAC-SHA256 verified, no OAuth dependency
+- **Dual Deploy** — HestiaCP (VPS) + Azure App Service support
+
+## Quick Start
+
+### 1. Prerequisites
+
+- Node.js 20+
+- A Telegram Bot ([@agridmu_bot](https://t.me/agridmu_bot))  
+- PostgreSQL database ([Neon.tech](https://neon.tech) free tier works great)
+
+### 2. Setup
 
 ```bash
+# Clone and install
+git clone <your-repo>
+cd quizforge
+npm install
+
+# Configure environment
+cp .env.example .env.local
+# Edit .env.local with your database URL, auth secret, etc.
+
+# Generate Prisma client & run migrations
+npx prisma generate
+npx prisma migrate dev --name init
+
+# Start development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) — you'll be redirected to the login page.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. First-Time Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Log in with your Telegram account via the login page
+2. Click **Add Group** and enter your group's Chat ID (e.g. `-1003107991544`)
+3. Make sure `@agridmu_bot` is already an admin in the group
+4. Go to **Settings → Register Webhook** to enable live poll answer tracking
 
-## Learn More
+### 4. Finding Your Group Chat ID
 
-To learn more about Next.js, take a look at the following resources:
+- Forward a message from your group to [@userinfobot](https://t.me/userinfobot)
+- Or use the Telegram API: `https://api.telegram.org/bot<TOKEN>/getUpdates`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Environment Variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+See [`.env.example`](.env.example) for all required variables.
 
-## Deploy on Vercel
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `AUTH_SECRET` | Random 32-byte secret for JWT signing |
+| `TELEGRAM_BOT_TOKEN` | Your bot token from @BotFather |
+| `NEXT_PUBLIC_BOT_USERNAME` | Bot username without @ |
+| `WEBHOOK_BASE_URL` | Public URL for Telegram to POST updates |
+| `NEXTAUTH_URL` | Your app's public URL |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Deployment
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### HestiaCP (VPS)
+
+```bash
+# Upload code to server, then:
+bash deployment/hestia-deploy.sh
+```
+
+### Azure App Service
+
+Push to `main` branch — GitHub Actions will automatically:
+1. Install dependencies
+2. Run Prisma migrations
+3. Build the app
+4. Deploy to Azure
+
+See [`deployment/azure-deploy.yml`](deployment/azure-deploy.yml) for required GitHub Secrets.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router, Turbopack) |
+| Database | PostgreSQL via Prisma 5 |
+| Auth | Custom Telegram Login Widget + jose JWT |
+| Charts | Recharts |
+| Animations | CSS animations + Framer Motion |
+| Hosting | Azure App Service + HestiaCP |
+
+## Database Schema
+
+- **User** — Telegram users who have logged in
+- **Group** — Telegram groups added to the dashboard  
+- **GroupMember** — User ↔ Group membership with roles (OWNER/ADMIN/VIEWER)
+- **Quiz** — All sent quizzes with full metadata
+- **PollAnswer** — Individual answers from Telegram webhook
+- **Topic** — Cached forum topics per group
+- **BotConfig** — Per-group bot settings and webhook secrets
+
+## License
+
+MIT

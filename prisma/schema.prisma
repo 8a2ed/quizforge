@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  ADMIN
+  VIEWER
+}
+
+enum QuizType {
+  QUIZ
+  POLL
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id          String   @id @default(cuid())
+  telegramId  String   @unique
+  firstName   String
+  lastName    String?
+  username    String?
+  photoUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  memberships  GroupMember[]
+  sentQuizzes  Quiz[]
+
+  @@map("users")
+}
+
+model Group {
+  id           String   @id @default(cuid())
+  chatId       String   @unique
+  title        String
+  username     String?
+  photoUrl     String?
+  isForum      Boolean  @default(false)
+  memberCount  Int?
+  addedAt      DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  members     GroupMember[]
+  quizzes     Quiz[]
+  topics      Topic[]
+  botConfig   BotConfig?
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  role      Role     @default(ADMIN)
+  approved  Boolean  @default(true)
+  joinedAt  DateTime @default(now())
+
+  userId   String
+  groupId  String
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group  Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@map("group_members")
+}
+
+model Quiz {
+  id               String    @id @default(cuid())
+  question         String
+  options          String[]
+  correctOptionId  Int?
+  explanation      String?
+  type             QuizType  @default(QUIZ)
+  isAnonymous      Boolean   @default(true)
+  allowsMultiple   Boolean   @default(false)
+  openPeriod       Int?
+  topicId          Int?
+  topicName        String?
+  scheduledAt      DateTime?
+  sentAt           DateTime?
+  messageId        Int?
+  pollId           String?
+  createdAt        DateTime  @default(now())
+
+  groupId   String
+  sentById  String
+
+  group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  sentBy   User   @relation(fields: [sentById], references: [id])
+  answers  PollAnswer[]
+
+  @@map("quizzes")
+}
+
+model PollAnswer {
+  id          String   @id @default(cuid())
+  optionIds   Int[]
+  answeredAt  DateTime @default(now())
+
+  quizId          String
+  telegramUserId  String
+  firstName       String?
+  username        String?
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@unique([quizId, telegramUserId])
+  @@map("poll_answers")
+}
+
+model Topic {
+  id                String  @id @default(cuid())
+  topicId           Int
+  name              String
+  iconColor         Int?
+  iconCustomEmojiId String?
+  isClosed          Boolean @default(false)
+
+  groupId String
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, topicId])
+  @@map("topics")
+}
+
+model BotConfig {
+  id                 String  @id @default(cuid())
+  webhookSecret      String  @default(cuid())
+  defaultAnonymous   Boolean @default(true)
+  defaultOpenPeriod  Int     @default(0)
+  defaultType        QuizType @default(QUIZ)
+  allowMultiple      Boolean @default(false)
+  updatedAt          DateTime @updatedAt
+
+  groupId String @unique
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("bot_configs")
+}
