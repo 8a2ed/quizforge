@@ -38,6 +38,7 @@ export interface TelegramChatMember {
   user: TelegramUser;
   can_post_messages?: boolean;
   can_manage_chat?: boolean;
+  can_manage_topics?: boolean;
 }
 
 export interface TelegramForumTopic {

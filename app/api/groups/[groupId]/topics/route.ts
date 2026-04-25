@@ -35,8 +35,28 @@ export async function GET(
 
   // Always attempt to fetch live from Telegram first
   try {
-    const result = await telegram.getForumTopics(group.chatId);
-    topics = result.topics || [];
+    // Try numeric chatId first, then @username fallback (Telegram quirk with some groups)
+    let result: { topics: TelegramForumTopic[] } | null = null;
+    let lastError = "";
+
+    try {
+      result = await telegram.getForumTopics(group.chatId);
+    } catch (e1: unknown) {
+      lastError = e1 instanceof Error ? e1.message : String(e1);
+      // Fallback: try with @username
+      try {
+        const chatInfo = await telegram.getChat(group.chatId);
+        if (chatInfo.username) {
+          result = await telegram.getForumTopics(`@${chatInfo.username}`);
+        } else {
+          throw new Error(lastError);
+        }
+      } catch (e2: unknown) {
+        throw e2;
+      }
+    }
+
+    topics = result?.topics || [];
     fetchedFromTelegram = true;
 
     // Update isForum flag if stale
