@@ -144,7 +144,7 @@ export default function TopicsPage() {
       {/* Add topic form */}
       <div className="card animate-fade-up animate-delay-2" style={{ marginBottom: "var(--space-5)" }}>
         <h4 style={{ marginBottom: "var(--space-4)" }}>➕ Add Topic Manually</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "var(--space-3)", alignItems: "end" }}>
+        <div className="topics-add-form" style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "var(--space-3)", alignItems: "end" }}>
           <div className="input-wrapper" style={{ marginBottom: 0 }}>
             <label className="input-label">Topic ID</label>
             <input

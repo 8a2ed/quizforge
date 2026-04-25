@@ -18,6 +18,7 @@ const ICONS = {
   history:     "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
   bulk:        "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4",
   analytics:   "M18 20V10M12 20V4M6 20v-6",
+  topics:      "M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z",
   admins:      "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
   instructors: "M15 7a4 4 0 11-8 0 4 4 0 018 0zM3 20a9 9 0 0118 0H3z",
   settings:    "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z",
@@ -33,6 +34,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Extract groupId from path — e.g. /dashboard/abc123/history → abc123
   const groupId = pathname.match(/\/dashboard\/([^/]+)/)?.[1];
+
+  // Lock body scroll when mobile sidebar is open
+  useEffect(() => {
+    document.body.classList.toggle("sidebar-open", mobileOpen);
+    return () => document.body.classList.remove("sidebar-open");
+  }, [mobileOpen]);
+
+  // Close sidebar on route change
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -58,7 +68,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         { href: `/dashboard/${groupId}/bulk`,      icon: ICONS.bulk,      label: "Bulk Loader" },
         { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
         { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"   },
-        { href: `/dashboard/${groupId}/topics`,    icon: "💬",            label: "Topics"      },
+        { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: "Topics"      },
         { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: "Admins"      },
         { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: "Settings"    },
       ]
@@ -88,8 +98,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         />
       )}
 
-      {/* Sidebar — hidden on mobile via CSS */}
-      <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
+      {/* Sidebar — slides in on mobile */}
+      <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
         <div className="sidebar-logo">
           <div className="logo-mark">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">

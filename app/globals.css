@@ -1286,3 +1286,182 @@ tr:hover td { background: var(--clr-bg-elevated); }
 @media (min-width: 641px) {
   .show-mobile { display: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE SIDEBAR SLIDE-IN (when open)
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .sidebar.mobile-open {
+    display: flex !important;
+    transform: translateX(0) !important;
+    box-shadow: 0 0 60px rgba(0,0,0,0.8);
+  }
+  .sidebar {
+    transform: translateX(-100%);
+    display: flex !important; /* Always render for animation */
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE GLOBAL FIXES
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Prevent iOS input zoom — inputs must be >= 16px */
+  .input, .select, textarea.input {
+    font-size: 16px !important;
+  }
+
+  /* Minimum touch target size — 44px per Apple HIG */
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 36px; }
+  .nav-item { min-height: 44px; }
+  .bottom-tab-item { min-height: 44px; }
+
+  /* Disable hover transforms on touch devices */
+  .card:hover { transform: none; }
+  .stat-card:hover { transform: none; }
+  .group-card:hover { transform: translateY(-2px); }
+  .btn-primary:hover { transform: none; box-shadow: 0 4px 16px rgba(79,127,255,0.35); }
+
+  /* Toast above bottom tab bar */
+  .toast-container {
+    bottom: calc(65px + env(safe-area-inset-bottom) + 12px);
+    right: var(--space-4);
+    left: var(--space-4);
+  }
+  .toast {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  /* Section header wraps on small screens */
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
+  }
+  .section-header > div:last-child {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .section-header > div:last-child .btn,
+  .section-header > div:last-child a {
+    flex: 1;
+    min-width: 130px;
+    justify-content: center;
+  }
+
+  /* Page body breathing room */
+  .page-body {
+    padding: var(--space-4);
+  }
+
+  /* Cards full-bleed feel */
+  .card {
+    padding: var(--space-4);
+  }
+
+  /* h1 sizing */
+  h1 { font-size: 1.6rem; }
+
+  /* Better bottom tab bar with safe area */
+  .bottom-tab-bar {
+    padding-bottom: max(env(safe-area-inset-bottom), 8px);
+    height: auto;
+    min-height: 60px;
+  }
+
+  /* Step buttons bigger on mobile */
+  .step-btn { width: 44px; height: 44px; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   QUIZ BUILDER MOBILE TWEAKS
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Settings panel loses sticky position on mobile */
+  .quiz-builder > div:last-child .card {
+    position: static !important;
+  }
+
+  /* Option check buttons bigger */
+  .option-correct-check {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Quiz type buttons full-width */
+  .quiz-builder .card:first-child > div > div {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVE TABLE MOBILE REFINEMENTS
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Actions column always on right side */
+  .responsive-table td[data-label="Actions"] {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+    border: none !important;
+    padding: 0;
+  }
+  .responsive-table td[data-label="Actions"]::before {
+    display: none;
+  }
+  .responsive-table tr {
+    padding-right: calc(var(--space-4) + 80px); /* space for actions */
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REDUCED MOTION
+═══════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SMOOTH MOBILE SCROLLING
+═══════════════════════════════════════════════════════════ */
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent; /* Remove tap flash on mobile */
+}
+
+/* Smooth momentum scrolling in sidebar */
+.sidebar-nav {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TOPICS PAGE MOBILE
+═══════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  /* Stack the add-topic form on very small screens */
+  .topics-add-form {
+    grid-template-columns: 1fr !important;
+  }
+  .topics-add-form .btn {
+    width: 100%;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BETTER SIDEBAR OPEN STATE ON MOBILE
+═══════════════════════════════════════════════════════════ */
+body.sidebar-open {
+  overflow: hidden; /* Prevent scroll when sidebar open */
+}
+
