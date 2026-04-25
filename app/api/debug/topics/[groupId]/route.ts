@@ -80,11 +80,12 @@ export async function GET(
   try {
     const me = await telegram.getMe();
     const member = await telegram.getChatMember(group.chatId, me.id);
+    const m = member as unknown as Record<string, unknown>;
     results.botMembership = {
       ok: true,
       status: member.status,
-      can_manage_chat: (member as Record<string,unknown>).can_manage_chat,
-      can_manage_topics: (member as Record<string,unknown>).can_manage_topics,
+      can_manage_chat: m.can_manage_chat,
+      can_manage_topics: m.can_manage_topics,
     };
   } catch (e: unknown) {
     results.botMembership = { ok: false, error: String(e) };
