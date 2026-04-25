@@ -93,7 +93,7 @@ export async function POST(
             chat_id: auth.membership.group.chatId,
             message_thread_id: q.topicId ? Number(q.topicId) : undefined,
             question,
-            options: options.map(text => ({ text })),
+            options: options.map((text: string) => ({ text })),
             type: type === "QUIZ" ? "quiz" : "regular",
             is_anonymous: isAnonymous,
             correct_option_id: correctOptionId !== null ? correctOptionId : undefined,

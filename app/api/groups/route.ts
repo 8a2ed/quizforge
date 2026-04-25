@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
   if (!chatId) return NextResponse.json({ error: "chatId is required" }, { status: 400 });
 
   // ─── Step 1: Verify bot can access the chat ───────────────────────────────
-  let chat;
+  let chat: { title?: string; username?: string; is_forum?: boolean } | undefined;
   try {
     chat = await telegram.getChat(chatId);
   } catch (err: any) {
