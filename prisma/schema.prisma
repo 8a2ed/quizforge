@@ -24,7 +24,7 @@ enum QuizType {
 
 model User {
   id          String   @id @default(cuid())
-  telegramId  String   @unique
+  telegramId  String?  @unique
   firstName   String
   lastName    String?
   username    String?
@@ -35,8 +35,21 @@ model User {
   // Relations
   memberships  GroupMember[]
   sentQuizzes  Quiz[]
+  credential   InstructorCredential?
 
   @@map("users")
+}
+
+model InstructorCredential {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("instructor_credentials")
 }
 
 model Group {
