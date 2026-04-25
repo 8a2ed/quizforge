@@ -37,9 +37,13 @@ export async function GET(
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
     const type = searchParams.get("type");
+    const status = searchParams.get("status"); // active | closed | deleted
     const topicId = searchParams.get("topicId");
     const sentById = searchParams.get("sentById");
     const q = searchParams.get("q");
+
+    // Fetch group for title
+    const group = await withRetry(() => prisma.group.findUnique({ where: { id: groupId } }));
 
     // Only fetch quizzes that have been sent (not pending scheduled ones)
     const where: Record<string, unknown> = { groupId, sentAt: { not: null } };
@@ -47,6 +51,9 @@ export async function GET(
     if (topicId) where.topicId = parseInt(topicId);
     if (sentById) where.sentById = sentById;
     if (q) where.question = { contains: q, mode: "insensitive" };
+    if (status === "deleted") where.deletedAt = { not: null };
+    else if (status === "closed") { where.deletedAt = null; where.pollClosed = true; }
+    else if (status === "active") { where.deletedAt = null; where.pollClosed = false; }
 
     const [quizzes, total] = await Promise.all([
       withRetry(() => prisma.quiz.findMany({
@@ -94,6 +101,7 @@ export async function GET(
     return NextResponse.json({
       quizzes: enriched,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      groupTitle: group?.title || null,
     });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

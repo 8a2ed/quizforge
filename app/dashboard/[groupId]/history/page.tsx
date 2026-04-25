@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { formatDate, truncate } from "@/lib/utils";
 
@@ -38,10 +38,12 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const showToast = (type: string, msg: string) => {
     setToast({ type, msg });
@@ -52,6 +54,7 @@ export default function HistoryPage() {
     setLoading(true);
     const qs = new URLSearchParams({ page: String(page), limit: "15" });
     if (typeFilter) qs.set("type", typeFilter);
+    if (statusFilter) qs.set("status", statusFilter);
     if (search) qs.set("q", search);
     fetch(`/api/groups/${groupId}/history?${qs}`)
       .then((r) => r.json())
@@ -59,8 +62,21 @@ export default function HistoryPage() {
         setQuizzes(d.quizzes || []);
         setPagination(d.pagination);
         setLoading(false);
-      });
-  }, [groupId, page, typeFilter, search]);
+      })
+      .catch(() => setLoading(false));
+  }, [groupId, page, typeFilter, statusFilter, search]);
+
+  // Keyboard shortcut: press "/" to focus search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -136,51 +152,84 @@ export default function HistoryPage() {
 
       {/* Filters */}
       <div className="card animate-fade-up animate-delay-1" style={{ marginBottom: "var(--space-5)", padding: "var(--space-4)" }}>
-        <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
-          {/* Search */}
-          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
-              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-            </svg>
-            <input
-              className="input"
-              style={{ paddingLeft: 40 }}
-              placeholder="Search questions…"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { setSearch(searchInput); setPage(1); }
-              }}
-            />
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+          {/* Search row */}
+          <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
+            <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+              <input
+                ref={searchRef}
+                className="input"
+                style={{ paddingLeft: 40, paddingRight: searchInput ? 36 : 12 }}
+                placeholder="Search questions… (press / to focus)"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { setSearch(searchInput); setPage(1); }
+                  if (e.key === "Escape") { setSearchInput(""); setSearch(""); setPage(1); (e.target as HTMLInputElement).blur(); }
+                }}
+              />
+              {searchInput && (
+                <button
+                  onClick={() => { setSearchInput(""); setSearch(""); setPage(1); }}
+                  style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--clr-text-muted)", cursor: "pointer", padding: 2, lineHeight: 1 }}
+                >✕</button>
+              )}
+            </div>
+            <select
+              className="select"
+              style={{ width: "auto", minWidth: 130 }}
+              value={typeFilter}
+              onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
+            >
+              <option value="">All types</option>
+              <option value="quiz">🎯 Quiz</option>
+              <option value="poll">📊 Poll</option>
+            </select>
+            <button className="btn btn-primary btn-sm" onClick={() => { setSearch(searchInput); setPage(1); }}>Search</button>
           </div>
 
-          {/* Type filter */}
-          <select
-            className="select"
-            style={{ width: "auto", minWidth: 140 }}
-            value={typeFilter}
-            onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
-          >
-            <option value="">All types</option>
-            <option value="quiz">🎯 Quiz</option>
-            <option value="poll">📊 Poll</option>
-          </select>
-
-          {/* Search button */}
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => { setSearch(searchInput); setPage(1); }}
-          >Search</button>
-
-          {(search || typeFilter) && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => { setSearch(""); setSearchInput(""); setTypeFilter(""); setPage(1); }}
-            >
-              Clear
-            </button>
-          )}
+          {/* Status pills */}
+          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Status:</span>
+            {[
+              { value: "",        label: "All" },
+              { value: "active",  label: "🟢 Active" },
+              { value: "closed",  label: "⏹ Closed" },
+              { value: "deleted", label: "🗑 Deleted" },
+            ].map((s) => (
+              <button
+                key={s.value}
+                onClick={() => { setStatusFilter(s.value); setPage(1); }}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: "var(--radius-full)",
+                  border: "1px solid",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "all var(--duration-fast)",
+                  background: statusFilter === s.value ? "var(--clr-brand)" : "var(--clr-bg-elevated)",
+                  borderColor: statusFilter === s.value ? "var(--clr-brand)" : "var(--clr-border)",
+                  color: statusFilter === s.value ? "white" : "var(--clr-text-secondary)",
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+            {(search || typeFilter || statusFilter) && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ marginLeft: "auto" }}
+                onClick={() => { setSearch(""); setSearchInput(""); setTypeFilter(""); setStatusFilter(""); setPage(1); }}
+              >
+                Clear All ✕
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
