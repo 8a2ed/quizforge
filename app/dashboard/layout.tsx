@@ -58,6 +58,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         { href: `/dashboard/${groupId}/bulk`,      icon: ICONS.bulk,      label: "Bulk Loader" },
         { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
         { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"   },
+        { href: `/dashboard/${groupId}/topics`,    icon: "💬",            label: "Topics"      },
         { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: "Admins"      },
         { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: "Settings"    },
       ]

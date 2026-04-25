@@ -5,6 +5,26 @@ import { telegram, type TelegramForumTopic } from "@/lib/telegram";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
+// Helper: try getForumTopics with numeric ID then @username fallback
+async function tryGetForumTopics(chatId: string): Promise<{ topics: TelegramForumTopic[]; via: string } | null> {
+  // Try numeric chatId
+  try {
+    const r = await telegram.getForumTopics(chatId);
+    return { topics: r.topics || [], via: chatId };
+  } catch { /* fall through */ }
+
+  // Try @username
+  try {
+    const chat = await telegram.getChat(chatId);
+    if (chat.username) {
+      const r = await telegram.getForumTopics(`@${chat.username}`);
+      return { topics: r.topics || [], via: `@${chat.username}` };
+    }
+  } catch { /* fall through */ }
+
+  return null;
+}
+
 async function getAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return null;
@@ -19,7 +39,7 @@ async function getAuth(req: NextRequest, groupId: string) {
   } catch { return null; }
 }
 
-// GET — fetch topics (live from Telegram, fall back to DB cache)
+// GET — fetch topics (Telegram live → @username fallback → DB cache)
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -33,60 +53,35 @@ export async function GET(
   let fetchedFromTelegram = false;
   let telegramError: string | null = null;
 
-  // Always attempt to fetch live from Telegram first
-  try {
-    // Try numeric chatId first, then @username fallback (Telegram quirk with some groups)
-    let result: { topics: TelegramForumTopic[] } | null = null;
-    let lastError = "";
-
-    try {
-      result = await telegram.getForumTopics(group.chatId);
-    } catch (e1: unknown) {
-      lastError = e1 instanceof Error ? e1.message : String(e1);
-      // Fallback: try with @username
-      try {
-        const chatInfo = await telegram.getChat(group.chatId);
-        if (chatInfo.username) {
-          result = await telegram.getForumTopics(`@${chatInfo.username}`);
-        } else {
-          throw new Error(lastError);
-        }
-      } catch (e2: unknown) {
-        throw e2;
-      }
-    }
-
-    topics = result?.topics || [];
+  const result = await tryGetForumTopics(group.chatId);
+  if (result) {
+    topics = result.topics;
     fetchedFromTelegram = true;
 
-    // Update isForum flag if stale
+    // Update isForum flag
     if (topics.length > 0 && !group.isForum) {
       await withRetry(() => prisma.group.update({ where: { id: groupId }, data: { isForum: true } }));
     }
 
-    // Cache/sync all topics in DB
-    if (topics.length > 0) {
-      await Promise.all(
-        topics.map((t) => withRetry(() => prisma.topic.upsert({
-          where: { groupId_topicId: { groupId, topicId: t.message_thread_id } },
-          update: { name: t.name, iconColor: t.icon_color, isClosed: t.is_closed ?? false },
-          create: {
-            groupId,
-            topicId: t.message_thread_id,
-            name: t.name,
-            iconColor: t.icon_color,
-            iconCustomEmojiId: t.icon_custom_emoji_id ?? null,
-            isClosed: t.is_closed ?? false,
-          },
-        }))
-      ));
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    telegramError = msg;
-    console.warn(`[Topics] Telegram fetch failed for group ${groupId}:`, msg);
+    // Cache all topics in DB
+    await Promise.all(
+      topics.map((t) => withRetry(() => prisma.topic.upsert({
+        where: { groupId_topicId: { groupId, topicId: t.message_thread_id } },
+        update: { name: t.name, iconColor: t.icon_color, isClosed: t.is_closed ?? false },
+        create: {
+          groupId,
+          topicId: t.message_thread_id,
+          name: t.name,
+          iconColor: t.icon_color,
+          iconCustomEmojiId: t.icon_custom_emoji_id ?? null,
+          isClosed: t.is_closed ?? false,
+        },
+      }))
+    );
+  } else {
+    telegramError = "Telegram API returned 'Not Found' for getForumTopics (known issue with some groups)";
 
-    // Fall back to DB cache
+    // Fall back to DB-cached topics
     const cached = await withRetry(() => prisma.topic.findMany({
       where: { groupId },
       orderBy: { topicId: "asc" },
@@ -102,7 +97,7 @@ export async function GET(
   return NextResponse.json({ topics, fromCache: !fetchedFromTelegram, telegramError });
 }
 
-// POST — manually add/import a topic by ID (fallback when bot can't fetch automatically)
+// POST — manually add a topic
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -128,13 +123,10 @@ export async function POST(
     },
   }));
 
-  return NextResponse.json({
-    ok: true,
-    topic: { message_thread_id: topic.topicId, name: topic.name },
-  });
+  return NextResponse.json({ ok: true, topic: { message_thread_id: topic.topicId, name: topic.name } });
 }
 
-// DELETE — remove a manually-added topic
+// DELETE — remove a topic
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -144,9 +136,6 @@ export async function DELETE(
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { topicId } = await req.json();
-  await withRetry(() => prisma.topic.deleteMany({
-    where: { groupId, topicId: Number(topicId) },
-  }));
-
+  await withRetry(() => prisma.topic.deleteMany({ where: { groupId, topicId: Number(topicId) } }));
   return NextResponse.json({ ok: true });
 }
