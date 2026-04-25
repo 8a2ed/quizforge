@@ -110,12 +110,12 @@ export async function POST(
     return NextResponse.json({ error: "telegramUsername is required" }, { status: 400 });
   }
 
-  // Find user by Telegram username — try exact case-insensitive first, then contains
+  // Find user by Telegram username — try exact case-insensitive first, then fuzzy
   let user = await prisma.user.findFirst({
     where: { username: { equals: raw, mode: "insensitive" } },
   });
 
-  // Fallback: partial match (handles underscores, case differences)
+  // Fallback 1: strip underscores for fuzzy match
   if (!user) {
     const allUsers = await prisma.user.findMany({
       where: { username: { not: null } },
@@ -126,9 +126,16 @@ export async function POST(
     ) || null;
   }
 
+  // Fallback 2: search by firstName (for users with no public Telegram username)
+  if (!user) {
+    user = await prisma.user.findFirst({
+      where: { firstName: { contains: raw, mode: "insensitive" } },
+    });
+  }
+
   if (!user) {
     return NextResponse.json({
-      error: `No account found for @${raw}. Ask them to log in at quiz.agridmulms.me/login with Telegram first, then try again.`,
+      error: `No account found for "${raw}". Make sure they log in at quiz.agridmulms.me/login with Telegram first. You can also search by their first name if their Telegram username is private.`,
       notFound: true,
     }, { status: 404 });
   }

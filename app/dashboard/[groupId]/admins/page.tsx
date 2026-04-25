@@ -146,13 +146,13 @@ export default function AdminsPage() {
         <p style={{ fontSize: "0.85rem", color: "var(--clr-text-muted)", marginBottom: "var(--space-4)" }}>
           The person must first log in at{" "}
           <strong>quiz.agridmulms.me/login</strong> with their Telegram account.
-          Then enter their username here.
+          Then enter their <strong>@username</strong> or <strong>first name</strong> here.
         </p>
         <form onSubmit={handleInvite} style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <input
               className="input"
-              placeholder="@username (e.g. ahmed_ramy)"
+              placeholder="@username or first name (e.g. Azza)"
               value={inviteUsername}
               onChange={(e) => { setInviteUsername(e.target.value); setInviteError(""); setInviteSuccess(""); }}
             />
