@@ -119,11 +119,10 @@ export async function POST(
   if (!user) {
     const allUsers = await prisma.user.findMany({
       where: { username: { not: null } },
-      select: { id: true, firstName: true, username: true },
     });
     user = allUsers.find(
       (u) => u.username?.toLowerCase().replace(/_/g, "") === raw.toLowerCase().replace(/_/g, "")
-    ) || null;
+    ) ?? null;
   }
 
   // Fallback 2: search by firstName (for users with no public Telegram username)
