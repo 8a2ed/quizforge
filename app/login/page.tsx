@@ -22,6 +22,14 @@ export default function LoginPage() {
 
   useEffect(() => { setIsDev(process.env.NODE_ENV === "development"); }, []);
 
+  // If already logged in, go straight to dashboard
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(r => r.json())
+      .then(d => { if (d.user) router.replace("/dashboard"); })
+      .catch(() => {});
+  }, [router]);
+
   const handleAuth = useCallback(async (user: Record<string, string>) => {
     const params = new URLSearchParams(user);
     try {
