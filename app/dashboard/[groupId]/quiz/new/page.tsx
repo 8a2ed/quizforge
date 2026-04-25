@@ -39,6 +39,11 @@ export default function NewQuizPage() {
   const [scheduledAt, setScheduledAt] = useState<string>("");
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loadingTopics, setLoadingTopics] = useState(false);
+  const [topicError, setTopicError] = useState<string | null>(null);
+  const [showManualTopic, setShowManualTopic] = useState(false);
+  const [manualTopicId, setManualTopicId] = useState("");
+  const [manualTopicName, setManualTopicName] = useState("");
+  const [addingTopic, setAddingTopic] = useState(false);
   const [sending, setSending] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [sentCount, setSentCount] = useState(0);
@@ -68,16 +73,45 @@ export default function NewQuizPage() {
   }, [searchParams]);
 
   // Load topics
-  useEffect(() => {
+  const loadTopics = useCallback(() => {
     setLoadingTopics(true);
+    setTopicError(null);
     fetch(`/api/groups/${groupId}/topics`)
       .then((r) => r.json())
       .then((d) => {
         setTopics(d.topics || []);
+        if (d.telegramError) setTopicError(d.telegramError);
         setLoadingTopics(false);
       })
-      .catch(() => setLoadingTopics(false));
+      .catch(() => {
+        setTopicError("Network error fetching topics");
+        setLoadingTopics(false);
+      });
   }, [groupId]);
+
+  useEffect(() => { loadTopics(); }, [loadTopics]);
+
+  const handleAddManualTopic = async () => {
+    if (!manualTopicId || !manualTopicName.trim()) return;
+    setAddingTopic(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/topics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topicId: Number(manualTopicId), name: manualTopicName.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setManualTopicId("");
+        setManualTopicName("");
+        setShowManualTopic(false);
+        loadTopics();
+        addToast("success", `Topic "${data.topic.name}" added!`);
+      }
+    } finally {
+      setAddingTopic(false);
+    }
+  };
 
   const addToast = useCallback((type: Toast["type"], message: string) => {
     const id = ++toastId;
@@ -408,7 +442,19 @@ export default function NewQuizPage() {
 
             {/* Topic */}
             <div className="input-wrapper" style={{ marginBottom: "var(--space-4)" }}>
-              <label className="input-label">Send to Topic</label>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-2)" }}>
+                <label className="input-label" style={{ marginBottom: 0 }}>Send to Topic</label>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={loadTopics}
+                  disabled={loadingTopics}
+                  title="Refresh topics from Telegram"
+                  style={{ fontSize: "0.75rem", padding: "2px 8px" }}
+                >
+                  {loadingTopics ? "…" : "↻ Refresh"}
+                </button>
+              </div>
+
               {loadingTopics ? (
                 <div className="skeleton" style={{ height: 44 }} />
               ) : topics.length > 0 ? (
@@ -423,13 +469,58 @@ export default function NewQuizPage() {
                   <option value="">General (no topic)</option>
                   {topics.map((t) => (
                     <option key={t.message_thread_id} value={t.message_thread_id}>
-                      {t.name}
+                      {t.is_closed ? "🔒 " : ""}{t.name}
                     </option>
                   ))}
                 </select>
               ) : (
-                <div style={{ padding: "11px var(--space-4)", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", color: "var(--clr-text-muted)", fontSize: "0.875rem", border: "1px solid var(--clr-border)" }}>
-                  No topics found (or group has no forum mode)
+                <div style={{ padding: "10px var(--space-3)", background: "rgba(251,191,36,0.08)", borderRadius: "var(--radius-md)", border: "1px solid rgba(251,191,36,0.25)", fontSize: "0.8rem" }}>
+                  <div style={{ color: "#fbbf24", fontWeight: 600, marginBottom: 4 }}>⚠ Topics not available</div>
+                  <div style={{ color: "var(--clr-text-muted)", lineHeight: 1.5 }}>
+                    {topicError?.includes("not enough rights") || topicError?.includes("PEER_ID_INVALID") || topicError
+                      ? "Make @agridmu_bot an Admin with \"Manage Topics\" permission in your group settings."
+                      : "Group has no forum topics enabled."}
+                  </div>
+                </div>
+              )}
+
+              {/* Manual topic entry toggle */}
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowManualTopic(!showManualTopic)}
+                style={{ marginTop: "var(--space-2)", fontSize: "0.75rem", color: "var(--clr-text-muted)" }}
+              >
+                {showManualTopic ? "▲ Hide" : "＋ Add topic manually"}
+              </button>
+
+              {showManualTopic && (
+                <div style={{ marginTop: "var(--space-2)", display: "flex", flexDirection: "column", gap: "var(--space-2)", padding: "var(--space-3)", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+                  <p style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", margin: 0 }}>
+                    Find topic ID: Open the topic in Telegram Web → the URL ends with <code>/thread/ID</code>
+                  </p>
+                  <input
+                    className="input"
+                    placeholder="Topic ID (e.g. 3677)"
+                    value={manualTopicId}
+                    onChange={e => setManualTopicId(e.target.value.replace(/\D/g, ""))}
+                    type="number"
+                    style={{ fontSize: "0.85rem" }}
+                  />
+                  <input
+                    className="input"
+                    placeholder="Topic name (e.g. اقتصاد زراعي)"
+                    value={manualTopicName}
+                    onChange={e => setManualTopicName(e.target.value)}
+                    style={{ fontSize: "0.85rem" }}
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAddManualTopic}
+                    disabled={addingTopic || !manualTopicId || !manualTopicName.trim()}
+                    style={{ justifyContent: "center" }}
+                  >
+                    {addingTopic ? "Adding…" : "Save Topic"}
+                  </button>
                 </div>
               )}
             </div>
