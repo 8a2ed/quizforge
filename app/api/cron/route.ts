@@ -40,12 +40,23 @@ export async function GET(req: Request) {
     // 2. Process them concurrently (or sequentially if rate limits apply, let's do sequentially to be safe)
     for (const quiz of dueQuizzes) {
       try {
-        const params = {
+        const params: {
+          chat_id: string;
+          message_thread_id?: number;
+          question: string;
+          options: { text: string }[];
+          type: "regular" | "quiz";
+          is_anonymous: boolean;
+          allows_multiple_answers: boolean;
+          correct_option_id?: number;
+          explanation?: string;
+          open_period?: number;
+        } = {
           chat_id: quiz.group.chatId,
           message_thread_id: quiz.topicId || undefined,
           question: quiz.question,
           options: quiz.options.map((t) => ({ text: t })),
-          type: "regular" as const, 
+          type: "regular",
           is_anonymous: quiz.isAnonymous,
           allows_multiple_answers: quiz.allowsMultiple,
           correct_option_id: quiz.correctOptionId ?? undefined,
