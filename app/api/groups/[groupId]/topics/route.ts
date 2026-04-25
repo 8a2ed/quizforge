@@ -5,15 +5,20 @@ import { telegram, type TelegramForumTopic } from "@/lib/telegram";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
-// Helper: try getForumTopics with numeric ID then @username fallback
-async function tryGetForumTopics(chatId: string): Promise<{ topics: TelegramForumTopic[]; via: string } | null> {
-  // Try numeric chatId
+interface ForumTopicsResult {
+  topics: TelegramForumTopic[];
+  via: string;
+}
+
+// Try getForumTopics with numeric ID, then @username fallback
+async function tryGetForumTopics(chatId: string): Promise<ForumTopicsResult | null> {
+  // Attempt 1: numeric chatId
   try {
     const r = await telegram.getForumTopics(chatId);
     return { topics: r.topics || [], via: chatId };
-  } catch { /* fall through */ }
+  } catch { /* fall through to username */ }
 
-  // Try @username
+  // Attempt 2: @username
   try {
     const chat = await telegram.getChat(chatId);
     if (chat.username) {
@@ -31,15 +36,19 @@ async function getAuth(req: NextRequest, groupId: string) {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
     const userId = (payload as { sub: string }).sub;
-    const membership = await withRetry(() => prisma.groupMember.findUnique({
-      where: { userId_groupId: { userId, groupId } },
-      include: { group: true },
-    }));
+    const membership = await withRetry(() =>
+      prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId, groupId } },
+        include: { group: true },
+      })
+    );
     return membership || null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-// GET — fetch topics (Telegram live → @username fallback → DB cache)
+// GET — fetch topics (Telegram live → @username → DB cache)
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -54,38 +63,42 @@ export async function GET(
   let telegramError: string | null = null;
 
   const result = await tryGetForumTopics(group.chatId);
+
   if (result) {
     topics = result.topics;
     fetchedFromTelegram = true;
 
-    // Update isForum flag
     if (topics.length > 0 && !group.isForum) {
-      await withRetry(() => prisma.group.update({ where: { id: groupId }, data: { isForum: true } }));
+      await withRetry(() =>
+        prisma.group.update({ where: { id: groupId }, data: { isForum: true } })
+      );
     }
 
-    // Cache all topics in DB
     await Promise.all(
-      topics.map((t) => withRetry(() => prisma.topic.upsert({
-        where: { groupId_topicId: { groupId, topicId: t.message_thread_id } },
-        update: { name: t.name, iconColor: t.icon_color, isClosed: t.is_closed ?? false },
-        create: {
-          groupId,
-          topicId: t.message_thread_id,
-          name: t.name,
-          iconColor: t.icon_color,
-          iconCustomEmojiId: t.icon_custom_emoji_id ?? null,
-          isClosed: t.is_closed ?? false,
-        },
-      }))
+      topics.map((t) =>
+        withRetry(() =>
+          prisma.topic.upsert({
+            where: { groupId_topicId: { groupId, topicId: t.message_thread_id } },
+            update: { name: t.name, iconColor: t.icon_color, isClosed: t.is_closed ?? false },
+            create: {
+              groupId,
+              topicId: t.message_thread_id,
+              name: t.name,
+              iconColor: t.icon_color,
+              iconCustomEmojiId: t.icon_custom_emoji_id ?? null,
+              isClosed: t.is_closed ?? false,
+            },
+          })
+        )
+      )
     );
   } else {
-    telegramError = "Telegram API returned 'Not Found' for getForumTopics (known issue with some groups)";
+    telegramError =
+      "Telegram API returned Not Found for getForumTopics on this group — add topics manually";
 
-    // Fall back to DB-cached topics
-    const cached = await withRetry(() => prisma.topic.findMany({
-      where: { groupId },
-      orderBy: { topicId: "asc" },
-    }));
+    const cached = await withRetry(() =>
+      prisma.topic.findMany({ where: { groupId }, orderBy: { topicId: "asc" } })
+    );
     topics = cached.map((t) => ({
       message_thread_id: t.topicId,
       name: t.name,
@@ -106,27 +119,29 @@ export async function POST(
   const membership = await getAuth(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { topicId, name } = await req.json();
-  if (!topicId || !name?.trim()) {
+  const body = await req.json();
+  const topicId = Number(body.topicId);
+  const name = String(body.name || "").trim();
+
+  if (!topicId || !name) {
     return NextResponse.json({ error: "topicId and name are required" }, { status: 400 });
   }
 
-  const topic = await withRetry(() => prisma.topic.upsert({
-    where: { groupId_topicId: { groupId, topicId: Number(topicId) } },
-    update: { name: name.trim() },
-    create: {
-      groupId,
-      topicId: Number(topicId),
-      name: name.trim(),
-      iconColor: 0,
-      isClosed: false,
-    },
-  }));
+  const topic = await withRetry(() =>
+    prisma.topic.upsert({
+      where: { groupId_topicId: { groupId, topicId } },
+      update: { name },
+      create: { groupId, topicId, name, iconColor: 0, isClosed: false },
+    })
+  );
 
-  return NextResponse.json({ ok: true, topic: { message_thread_id: topic.topicId, name: topic.name } });
+  return NextResponse.json({
+    ok: true,
+    topic: { message_thread_id: topic.topicId, name: topic.name },
+  });
 }
 
-// DELETE — remove a topic
+// DELETE — remove a topic from QuizForge (not from Telegram)
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -135,7 +150,9 @@ export async function DELETE(
   const membership = await getAuth(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { topicId } = await req.json();
-  await withRetry(() => prisma.topic.deleteMany({ where: { groupId, topicId: Number(topicId) } }));
+  const body = await req.json();
+  await withRetry(() =>
+    prisma.topic.deleteMany({ where: { groupId, topicId: Number(body.topicId) } })
+  );
   return NextResponse.json({ ok: true });
 }
