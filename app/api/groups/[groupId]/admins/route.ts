@@ -110,10 +110,21 @@ export async function POST(
     return NextResponse.json({ error: "telegramUsername is required" }, { status: 400 });
   }
 
-  // Find user by Telegram username (case-insensitive)
-  const user = await prisma.user.findFirst({
+  // Find user by Telegram username — try exact case-insensitive first, then contains
+  let user = await prisma.user.findFirst({
     where: { username: { equals: raw, mode: "insensitive" } },
   });
+
+  // Fallback: partial match (handles underscores, case differences)
+  if (!user) {
+    const allUsers = await prisma.user.findMany({
+      where: { username: { not: null } },
+      select: { id: true, firstName: true, username: true },
+    });
+    user = allUsers.find(
+      (u) => u.username?.toLowerCase().replace(/_/g, "") === raw.toLowerCase().replace(/_/g, "")
+    ) || null;
+  }
 
   if (!user) {
     return NextResponse.json({
@@ -122,14 +133,27 @@ export async function POST(
     }, { status: 404 });
   }
 
-  // Already a member?
+  // Already a member? Just ensure they're approved
   const existing = await prisma.groupMember.findUnique({
     where: { userId_groupId: { userId: user.id, groupId } },
   });
   if (existing) {
+    if (existing.approved) {
+      return NextResponse.json({
+        error: `${user.firstName} (@${user.username}) is already an active member of this group.`,
+        alreadyMember: true,
+      }, { status: 409 });
+    }
+    // Re-approve if they were revoked
+    await prisma.groupMember.update({
+      where: { userId_groupId: { userId: user.id, groupId } },
+      data: { approved: true, role: "ADMIN" },
+    });
     return NextResponse.json({
-      error: `@${raw} is already a member of this group.`,
-    }, { status: 409 });
+      ok: true,
+      restored: true,
+      user: { id: user.id, firstName: user.firstName, username: user.username },
+    });
   }
 
   await prisma.groupMember.create({

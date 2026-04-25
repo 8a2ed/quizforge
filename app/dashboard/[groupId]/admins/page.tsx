@@ -96,7 +96,14 @@ export default function AdminsPage() {
       const data = await res.json();
       if (data.ok) {
         setInviteUsername("");
-        setInviteSuccess(`✓ ${data.user.firstName} added as Admin!`);
+        if (data.restored) {
+          setInviteSuccess(`✓ ${data.user.firstName}'s access has been restored!`);
+        } else {
+          setInviteSuccess(`✓ ${data.user.firstName} added as Admin!`);
+        }
+        load();
+      } else if (res.status === 409 && data.alreadyMember) {
+        setInviteSuccess(`ℹ️ ${data.error} They already have full access.`);
         load();
       } else {
         setInviteError(data.error || "Failed to add user");
