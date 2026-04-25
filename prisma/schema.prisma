@@ -102,6 +102,8 @@ model Quiz {
   topicName        String?
   scheduledAt      DateTime?
   sentAt           DateTime?
+  deletedAt        DateTime? // set when manually deleted from Telegram
+  pollClosed       Boolean   @default(false) // set when Telegram poll is stopped
   messageId        Int?
   pollId           String?
   createdAt        DateTime  @default(now())

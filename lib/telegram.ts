@@ -8,7 +8,7 @@ async function call<T>(method: string, body?: Record<string, unknown>): Promise<
     cache: "no-store",
   });
   const json = await res.json();
-  if (!json.ok) throw new Error(`Telegram API error: ${json.description} (${method})`);
+  if (!json.ok) throw new Error(json.description || `Telegram API error (${method})`);
   return json.result as T;
 }
 
@@ -99,11 +99,15 @@ export const telegram = {
     return call("sendPoll", params as unknown as Record<string, unknown>);
   },
 
-  setWebhook(url: string, secret_token: string): Promise<boolean> {
+  deleteMessage(chat_id: string | number, message_id: number): Promise<boolean> {
+    return call("deleteMessage", { chat_id, message_id });
+  },
+
+  setWebhook(url: string, secret_token?: string): Promise<boolean> {
     return call("setWebhook", {
       url,
-      secret_token,
-      allowed_updates: ["poll_answer"],
+      ...(secret_token ? { secret_token } : {}),
+      allowed_updates: ["poll_answer", "poll", "message"],
       drop_pending_updates: false,
     });
   },

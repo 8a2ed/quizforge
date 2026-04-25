@@ -26,15 +26,15 @@ export async function GET(
     const group = membership.group;
     let topics: TelegramForumTopic[] = [];
     let fetchedFromTelegram = false;
+    let telegramError: string | null = null;
 
-    // Always attempt to fetch from Telegram regardless of the isForum DB flag.
-    // The flag may be stale (set to false during dev-mode group import).
+    // Always attempt to fetch live from Telegram
     try {
       const result = await telegram.getForumTopics(group.chatId);
       topics = result.topics || [];
       fetchedFromTelegram = true;
 
-      // If we got topics, the group IS a forum — update the flag if it was wrong
+      // Update forum flag if it was wrong
       if (topics.length > 0 && !group.isForum) {
         await withRetry(() => prisma.group.update({
           where: { id: groupId },
@@ -61,18 +61,13 @@ export async function GET(
           )
         );
       }
-    } catch (telegramErr: any) {
-      // Telegram says it's not a forum group, or bot doesn't have rights
-      const msg = telegramErr?.message || "";
-      
-      // If the error explicitly says not a forum, fall through to cached topics
-      // If it's a bot access error, return helpful message
-      if (msg.includes("not a supergroup") || msg.includes("PEER_ID_INVALID")) {
-        return NextResponse.json({ topics: [], warning: "Group not accessible by bot" });
-      }
+    } catch (telegramErr: unknown) {
+      const msg = telegramErr instanceof Error ? telegramErr.message : String(telegramErr);
+      telegramError = msg;
+      console.warn(`[Topics] Telegram error for group ${groupId}:`, msg);
 
-      // Fall back to DB-cached topics from previous successful fetches
-      const cached = await withRetry(() => prisma.topic.findMany({ 
+      // Fall back to DB-cached topics
+      const cached = await withRetry(() => prisma.topic.findMany({
         where: { groupId },
         orderBy: { topicId: "asc" },
       }));
@@ -84,7 +79,11 @@ export async function GET(
       }));
     }
 
-    return NextResponse.json({ topics, fromCache: !fetchedFromTelegram });
+    return NextResponse.json({
+      topics,
+      fromCache: !fetchedFromTelegram,
+      telegramError, // exposed so the UI can show a helpful message
+    });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

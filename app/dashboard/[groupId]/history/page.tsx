@@ -11,6 +11,8 @@ interface Quiz {
   isAnonymous: boolean;
   topicName: string | null;
   sentAt: string;
+  deletedAt: string | null;
+  pollClosed: boolean;
   options: string[];
   correctOptionId: number | null;
   explanation: string | null;
@@ -70,6 +72,18 @@ export default function HistoryPage() {
       router.push(`/dashboard/${groupId}/quiz/new?draft=${draft}`);
     } else {
       showToast("error", data.error || "Failed to duplicate");
+    }
+  };
+
+  const handleDelete = async (quiz: Quiz) => {
+    if (!confirm(`Delete "${quiz.question.slice(0, 60)}"?\n\nThis will remove it from Telegram and your history.`)) return;
+    const res = await fetch(`/api/groups/${groupId}/quiz/${quiz.id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (data.ok) {
+      showToast("success", data.telegramDeleted ? "Deleted from Telegram & history" : "Marked as deleted (message may already be removed from Telegram)");
+      load(); // refresh list
+    } else {
+      showToast("error", data.error || "Failed to delete");
     }
   };
 
@@ -217,9 +231,17 @@ export default function HistoryPage() {
                         </div>
                       </td>
                       <td data-label="Type">
-                        <span className={`badge ${quiz.type === "QUIZ" ? "badge-brand" : "badge-accent"}`}>
-                          {quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"}
-                        </span>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          <span className={`badge ${quiz.type === "QUIZ" ? "badge-brand" : "badge-accent"}`}>
+                            {quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"}
+                          </span>
+                          {quiz.deletedAt && (
+                            <span className="badge" style={{ background: "rgba(239,68,68,0.15)", color: "#f87171", fontSize: "0.7rem" }}>🗑 Deleted</span>
+                          )}
+                          {quiz.pollClosed && !quiz.deletedAt && (
+                            <span className="badge" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24", fontSize: "0.7rem" }}>⏹ Closed</span>
+                          )}
+                        </div>
                       </td>
                       <td data-label="Topic" style={{ color: "var(--clr-text-muted)", fontSize: "0.85rem" }}>
                         {quiz.topicName || "General"}
@@ -280,6 +302,18 @@ export default function HistoryPage() {
                               <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
                             </svg>
                           </button>
+                          {!quiz.deletedAt && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              title="Delete from Telegram & history"
+                              style={{ color: "var(--clr-danger)" }}
+                              onClick={() => handleDelete(quiz)}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                              </svg>
+                            </button>
+                          )}
                           <button
                             className="btn btn-ghost btn-sm"
                             title="Expand details"
