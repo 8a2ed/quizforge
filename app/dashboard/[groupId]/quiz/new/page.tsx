@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -509,8 +509,9 @@ export default function NewQuizPage() {
                   style={{ fontSize: "0.85rem" }} />
               ) : (
                 <div>
-                  <input ref={fileInputRef} type="file" accept="image/*" capture="environment"
+                  <input ref={fileInputRef} type="file" accept="image/*"
                     style={{ display: "none" }} onChange={handleFileChange} />
+
                   <button className="btn btn-secondary"
                     style={{ width: "100%", justifyContent: "center", gap: 8, fontSize: "0.85rem" }}
                     onClick={() => fileInputRef.current?.click()}>
@@ -531,9 +532,21 @@ export default function NewQuizPage() {
               )}
 
               {imagePreviewUrl && (
-                <div style={{ marginTop: 8, borderRadius: 8, overflow: "hidden", height: 100, background: "rgba(0,0,0,0.3)" }}>
-                  <img src={imagePreviewUrl} alt="Preview" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                    onError={() => setImagePreviewUrl("")} />
+                <div style={{
+                  marginTop: 8,
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  height: 90,
+                  width: "100%",
+                  background: "rgba(0,0,0,0.3)",
+                  flexShrink: 0,
+                }}>
+                  <img
+                    src={imagePreviewUrl}
+                    alt="Preview"
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    onError={() => setImagePreviewUrl("")}
+                  />
                 </div>
               )}
             </div>
@@ -690,9 +703,20 @@ export default function NewQuizPage() {
 
               {/* Image preview inside phone mock */}
               {imagePreviewUrl && (
-                <div style={{ borderRadius: 8, overflow: "hidden", marginBottom: 8, height: 90 }}>
-                  <img src={imagePreviewUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                    onError={() => {}} />
+                <div style={{
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  marginBottom: 8,
+                  height: 90,
+                  width: "100%",
+                  flexShrink: 0,
+                }}>
+                  <img
+                    src={imagePreviewUrl}
+                    alt=""
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    onError={() => {}}
+                  />
                 </div>
               )}
 
