@@ -119,6 +119,32 @@ export const telegram = {
     return call("sendPhoto", params as unknown as Record<string, unknown>);
   },
 
+  /** Upload a base64-encoded image to Telegram via multipart (Node 18+ native Blob) */
+  async sendPhotoBase64(params: {
+    chat_id: string | number;
+    message_thread_id?: number;
+    photoBase64: string;  // raw base64, no data-URL prefix
+    mimeType?: string;
+    caption?: string;
+  }): Promise<TelegramPhotoMessage> {
+    const mimeType = params.mimeType || "image/jpeg";
+    // Convert base64 → Blob via data-URL fetch (works in Node 18+, no Buffer needed)
+    const dataUrl = `data:${mimeType};base64,${params.photoBase64}`;
+    const blobRes = await fetch(dataUrl);
+    const blob = await blobRes.blob();
+
+    const fd = new FormData();
+    fd.append("chat_id", String(params.chat_id));
+    if (params.message_thread_id) fd.append("message_thread_id", String(params.message_thread_id));
+    if (params.caption) fd.append("caption", params.caption);
+    fd.append("photo", blob, "photo.jpg");
+
+    const res = await fetch(`${BASE}/sendPhoto`, { method: "POST", body: fd, cache: "no-store" });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.description || "Telegram sendPhoto error");
+    return json.result as TelegramPhotoMessage;
+  },
+
   deleteMessage(chat_id: string | number, message_id: number): Promise<boolean> {
     return call("deleteMessage", { chat_id, message_id });
   },

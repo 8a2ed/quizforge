@@ -11,12 +11,10 @@ async function getAuthorizedUser(req: NextRequest, groupId: string) {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
     const userId = (payload as { sub: string }).sub;
-
     const membership = await prisma.groupMember.findUnique({
       where: { userId_groupId: { userId, groupId } },
       include: { group: true, user: true },
     });
-
     if (!membership || !membership.approved) return null;
     return { membership, userId, telegramId: (payload as { telegramId: string }).telegramId };
   } catch {
@@ -24,7 +22,6 @@ async function getAuthorizedUser(req: NextRequest, groupId: string) {
   }
 }
 
-// POST /api/groups/[groupId]/quiz/send
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -36,7 +33,7 @@ export async function POST(
   const body = await req.json();
   const {
     question,
-    options,
+    options,         // already shuffled client-side if needed
     type = "quiz",
     isAnonymous = true,
     correctOptionId,
@@ -47,21 +44,24 @@ export async function POST(
     topicName,
     scheduledAt,
     mediaUrl,
+    mediaBase64,     // base64 image from file picker
+    mediaMimeType,   // e.g. "image/jpeg"
     recurrence,
   } = body;
 
   // Validations
-  if (!question?.trim()) return NextResponse.json({ error: "Question is required" }, { status: 400 });
-  if (!options || options.length < 2) return NextResponse.json({ error: "At least 2 options required" }, { status: 400 });
-  if (type === "quiz" && (correctOptionId === undefined || correctOptionId === null)) {
+  if (!question?.trim())
+    return NextResponse.json({ error: "Question is required" }, { status: 400 });
+  if (!options || options.length < 2)
+    return NextResponse.json({ error: "At least 2 options required" }, { status: 400 });
+  if (type === "quiz" && (correctOptionId === undefined || correctOptionId === null))
     return NextResponse.json({ error: "Correct option required for quiz type" }, { status: 400 });
-  }
 
   const chatId = auth.membership.group.chatId;
   const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
   const isFuture = scheduledDate && scheduledDate > new Date();
 
-  // Common quiz data payload
+  // Shared DB payload
   const quizData = {
     question: question.trim(),
     options,
@@ -79,8 +79,8 @@ export async function POST(
     sentById: auth.userId,
   };
 
+  // ── Scheduled: save for cron ──────────────────────────────────────────────
   if (isFuture) {
-    // Save to DB for the cron job to pick up later
     const quiz = await withRetry(() => prisma.quiz.create({
       data: { ...quizData, scheduledAt: scheduledDate, sentAt: null },
       include: { sentBy: { select: { firstName: true, username: true } } },
@@ -88,24 +88,36 @@ export async function POST(
     return NextResponse.json({ ok: true, quiz, scheduled: true });
   }
 
-  // ── Send to Telegram immediately ──────────────────────────────────────────
+  // ── Send immediately ───────────────────────────────────────────────────────
   let replyToMessageId: number | undefined;
 
-  // Step 1: If media URL provided, send the image first
-  if (mediaUrl?.trim()) {
+  // Step 1: Send image (URL or binary from gallery/camera)
+  const hasMedia = mediaBase64 || mediaUrl?.trim();
+  if (hasMedia) {
     try {
-      const photoMsg = await telegram.sendPhoto({
-        chat_id: chatId,
-        message_thread_id: topicId || undefined,
-        photo: mediaUrl.trim(),
-        caption: question.trim(),
-        parse_mode: "HTML",
-      });
-      replyToMessageId = photoMsg.message_id;
+      if (mediaBase64) {
+        // Upload base64 image from gallery/camera picker
+        const photoMsg = await telegram.sendPhotoBase64({
+          chat_id: chatId,
+          message_thread_id: topicId || undefined,
+          photoBase64: mediaBase64,
+          mimeType: mediaMimeType || "image/jpeg",
+          caption: question.trim(),
+        });
+        replyToMessageId = photoMsg.message_id;
+      } else if (mediaUrl?.trim()) {
+        const photoMsg = await telegram.sendPhoto({
+          chat_id: chatId,
+          message_thread_id: topicId || undefined,
+          photo: mediaUrl.trim(),
+          caption: question.trim(),
+          parse_mode: "HTML",
+        });
+        replyToMessageId = photoMsg.message_id;
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to send image";
-      console.warn("[Quiz Send] Could not send photo:", msg, "— proceeding without media");
-      // Non-fatal: if image fails, still send the poll (without the image)
+      console.warn("[Quiz Send] Photo upload failed:", err instanceof Error ? err.message : err);
+      // Non-fatal — still send the poll without image
     }
   }
 
@@ -129,9 +141,9 @@ export async function POST(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to send to Telegram";
     const hint = msg.includes("bot was kicked") || msg.includes("chat not found")
-      ? " — Make sure @agridmu_bot is added as an admin to this group first!"
+      ? " — Make sure @agridmu_bot is added as an admin to this group!"
       : msg.includes("ETELEGRAM") || msg.includes("Telegram API error")
-      ? " — Check that TELEGRAM_BOT_TOKEN in .env is correct."
+      ? " — Check TELEGRAM_BOT_TOKEN in .env."
       : "";
     return NextResponse.json({ error: msg + hint }, { status: 500 });
   }
