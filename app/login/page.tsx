@@ -8,6 +8,14 @@ const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME || "agridmu_bot";
 declare global {
   interface Window {
     onTelegramAuth: (user: Record<string, string>) => void;
+    Telegram?: {
+      WebApp?: {
+        initData: string;
+        initDataUnsafe?: { user?: { id: number; first_name: string; username?: string } };
+        ready: () => void;
+        expand: () => void;
+      };
+    };
   }
 }
 
@@ -19,6 +27,8 @@ export default function LoginPage() {
   const [credPass, setCredPass] = useState("");
   const [credLoading, setCredLoading] = useState(false);
   const [credError, setCredError] = useState("");
+  const [miniAppLoading, setMiniAppLoading] = useState(false);
+  const [miniAppError, setMiniAppError] = useState("");
 
   useEffect(() => { setIsDev(process.env.NODE_ENV === "development"); }, []);
 
@@ -28,6 +38,36 @@ export default function LoginPage() {
       .then(r => r.json())
       .then(d => { if (d.user) router.replace("/dashboard"); })
       .catch(() => {});
+  }, [router]);
+
+  // Telegram Mini App auto-login
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (!tg?.initDataUnsafe?.user || !tg.initData) return;
+
+    // Notify the Mini App SDK we are ready
+    tg.ready();
+    tg.expand();
+    setMiniAppLoading(true);
+
+    fetch("/api/auth/telegram-webapp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: tg.initData }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          router.replace("/dashboard");
+        } else {
+          setMiniAppLoading(false);
+          setMiniAppError(d.error || "Mini App auth failed");
+        }
+      })
+      .catch(() => {
+        setMiniAppLoading(false);
+        setMiniAppError("Network error during Mini App login");
+      });
   }, [router]);
 
   const handleAuth = useCallback(async (user: Record<string, string>) => {
@@ -165,28 +205,42 @@ export default function LoginPage() {
           </button>
         </div>
 
-        {/* Telegram Widget */}
+        {/* Telegram Widget or Mini App Loading */}
         {tab === "telegram" && (
           <div style={{ textAlign: "center", marginTop: "var(--space-5)" }}>
-            <p style={{ color: "var(--clr-text-secondary)", marginBottom: "var(--space-5)", fontSize: "0.9rem" }}>
-              Sign in with your Telegram account to continue
-            </p>
-            <div id="tg-widget" className="tg-widget-container" />
-            {isDev && (
-              <a
-                href="/api/auth/dev-redirect"
-                className="btn btn-secondary"
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", marginTop: "var(--space-4)", gap: 8, textDecoration: "none" }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                </svg>
-                Developer Admin Login
-              </a>
+            {miniAppLoading ? (
+              <div style={{ padding: "var(--space-6)", color: "var(--clr-text-secondary)" }}>
+                <div className="spinner" style={{ margin: "0 auto var(--space-4)" }} />
+                <p style={{ fontSize: "0.9rem" }}>Authenticating via Telegram…</p>
+              </div>
+            ) : (
+              <>
+                {miniAppError && (
+                  <div className="alert alert-error" style={{ marginBottom: "var(--space-4)", textAlign: "left" }}>
+                    {miniAppError}
+                  </div>
+                )}
+                <p style={{ color: "var(--clr-text-secondary)", marginBottom: "var(--space-5)", fontSize: "0.9rem" }}>
+                  Sign in with your Telegram account to continue
+                </p>
+                <div id="tg-widget" className="tg-widget-container" />
+                {isDev && (
+                  <a
+                    href="/api/auth/dev-redirect"
+                    className="btn btn-secondary"
+                    style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", marginTop: "var(--space-4)", gap: 8, textDecoration: "none" }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                    </svg>
+                    Developer Admin Login
+                  </a>
+                )}
+                <p style={{ color: "var(--clr-text-muted)", fontSize: "0.75rem", marginTop: "var(--space-4)" }}>
+                  Your identity is verified server-side via HMAC-SHA256 · No password needed
+                </p>
+              </>
             )}
-            <p style={{ color: "var(--clr-text-muted)", fontSize: "0.75rem", marginTop: "var(--space-4)" }}>
-              Your identity is verified server-side via HMAC-SHA256 · No password needed
-            </p>
           </div>
         )}
 

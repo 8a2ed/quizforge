@@ -46,6 +46,8 @@ export async function POST(
     topicId,
     topicName,
     scheduledAt,
+    mediaUrl,
+    recurrence,
   } = body;
 
   // Validations
@@ -56,37 +58,58 @@ export async function POST(
   }
 
   const chatId = auth.membership.group.chatId;
-
   const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
   const isFuture = scheduledDate && scheduledDate > new Date();
+
+  // Common quiz data payload
+  const quizData = {
+    question: question.trim(),
+    options,
+    correctOptionId: type === "quiz" ? correctOptionId : null,
+    explanation: explanation?.trim() || null,
+    type: type === "quiz" ? "QUIZ" as const : "POLL" as const,
+    isAnonymous,
+    allowsMultiple: type === "poll" ? allowsMultiple : false,
+    openPeriod: openPeriod || null,
+    topicId: topicId || null,
+    topicName: topicName || null,
+    mediaUrl: mediaUrl?.trim() || null,
+    recurrence: recurrence || null,
+    groupId,
+    sentById: auth.userId,
+  };
 
   if (isFuture) {
     // Save to DB for the cron job to pick up later
     const quiz = await withRetry(() => prisma.quiz.create({
-      data: {
-        question: question.trim(),
-        options,
-        correctOptionId: type === "quiz" ? correctOptionId : null,
-        explanation: explanation?.trim() || null,
-        type: type === "quiz" ? "QUIZ" : "POLL",
-        isAnonymous,
-        allowsMultiple: type === "poll" ? allowsMultiple : false,
-        openPeriod: openPeriod || null,
-        topicId: topicId || null,
-        topicName: topicName || null,
-        scheduledAt: scheduledDate,
-        sentAt: null,
-        groupId,
-        sentById: auth.userId,
-      },
-      include: {
-        sentBy: { select: { firstName: true, username: true } },
-      },
+      data: { ...quizData, scheduledAt: scheduledDate, sentAt: null },
+      include: { sentBy: { select: { firstName: true, username: true } } },
     }));
     return NextResponse.json({ ok: true, quiz, scheduled: true });
   }
 
-  // Send to Telegram immediately
+  // ── Send to Telegram immediately ──────────────────────────────────────────
+  let replyToMessageId: number | undefined;
+
+  // Step 1: If media URL provided, send the image first
+  if (mediaUrl?.trim()) {
+    try {
+      const photoMsg = await telegram.sendPhoto({
+        chat_id: chatId,
+        message_thread_id: topicId || undefined,
+        photo: mediaUrl.trim(),
+        caption: question.trim(),
+        parse_mode: "HTML",
+      });
+      replyToMessageId = photoMsg.message_id;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to send image";
+      console.warn("[Quiz Send] Could not send photo:", msg, "— proceeding without media");
+      // Non-fatal: if image fails, still send the poll (without the image)
+    }
+  }
+
+  // Step 2: Send the poll
   let message;
   try {
     message = await telegram.sendPoll({
@@ -101,10 +124,10 @@ export async function POST(
       explanation_parse_mode: "HTML",
       allows_multiple_answers: type === "poll" ? allowsMultiple : undefined,
       open_period: openPeriod && openPeriod > 0 ? openPeriod : undefined,
+      reply_to_message_id: replyToMessageId,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to send to Telegram";
-    // Give a helpful hint for common local dev mistakes
     const hint = msg.includes("bot was kicked") || msg.includes("chat not found")
       ? " — Make sure @agridmu_bot is added as an admin to this group first!"
       : msg.includes("ETELEGRAM") || msg.includes("Telegram API error")
@@ -113,28 +136,16 @@ export async function POST(
     return NextResponse.json({ error: msg + hint }, { status: 500 });
   }
 
-  // Save to DB
+  // Step 3: Save to DB
   const quiz = await withRetry(() => prisma.quiz.create({
     data: {
-      question: question.trim(),
-      options,
-      correctOptionId: type === "quiz" ? correctOptionId : null,
-      explanation: explanation?.trim() || null,
-      type: type === "quiz" ? "QUIZ" : "POLL",
-      isAnonymous,
-      allowsMultiple: type === "poll" ? allowsMultiple : false,
-      openPeriod: openPeriod || null,
-      topicId: topicId || null,
-      topicName: topicName || null,
+      ...quizData,
+      scheduledAt: null,
       sentAt: new Date(),
       messageId: message.message_id,
       pollId: message.poll?.id || null,
-      groupId,
-      sentById: auth.userId,
     },
-    include: {
-      sentBy: { select: { firstName: true, username: true } },
-    },
+    include: { sentBy: { select: { firstName: true, username: true } } },
   }));
 
   return NextResponse.json({ ok: true, quiz, scheduled: false });

@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function createPrismaClient() {
+  // Use DIRECT_URL for migrations, DATABASE_URL for queries (Neon pooler)
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     datasources: {
@@ -18,28 +19,48 @@ export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
 /**
- * Wraps a Prisma query with automatic retry logic for Neon DB auto-pause.
- * Neon serverless databases go to sleep after inactivity (E57P01 error).
- * The first retry after wake-up always succeeds.
+ * Retry wrapper with exponential backoff for Neon DB auto-pause / transient errors.
+ * Neon serverless databases go to sleep after inactivity (E57P01).
+ * The first reconnect attempt always succeeds within 500–1500ms.
  */
-export async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 500): Promise<T> {
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries = 4,
+  baseDelayMs = 300
+): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
-    } catch (error: any) {
-      const isNeonSleep =
-        error?.message?.includes("terminating connection") ||
-        error?.message?.includes("E57P01") ||
-        error?.code === "P1001" || // Can't reach DB
-        error?.code === "P1017";   // Server closed connection
+    } catch (error: unknown) {
+      const err = error as { message?: string; code?: string };
+      const isTransient =
+        err?.message?.includes("terminating connection") ||
+        err?.message?.includes("E57P01") ||
+        err?.message?.includes("connection pool") ||
+        err?.message?.includes("prepared statement") ||
+        err?.code === "P1001" || // Can't reach DB
+        err?.code === "P1008" || // Timeout
+        err?.code === "P1017";   // Server closed connection
 
-      if (isNeonSleep && attempt < retries) {
-        console.warn(`[DB] Neon wakeup detected (attempt ${attempt}/${retries}), retrying in ${delayMs}ms...`);
-        await new Promise((r) => setTimeout(r, delayMs));
+      if (isTransient && attempt < retries) {
+        // Exponential backoff: 300ms → 600ms → 1200ms
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(
+          `[DB] Transient error on attempt ${attempt}/${retries}, retrying in ${delay}ms... (${err?.code || err?.message?.slice(0, 50)})`
+        );
+        await new Promise((r) => setTimeout(r, delay));
         continue;
       }
       throw error;
     }
   }
   throw new Error("Max DB retries exceeded");
+}
+
+/**
+ * Lightweight keep-alive ping to prevent Neon from sleeping during long sessions.
+ * Call this from a cron route (/api/cron) every 4 minutes.
+ */
+export async function dbPing() {
+  await prisma.$queryRaw`SELECT 1`;
 }

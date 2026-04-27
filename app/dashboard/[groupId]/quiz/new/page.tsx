@@ -37,6 +37,8 @@ export default function NewQuizPage() {
   const [openPeriod, setOpenPeriod] = useState(0);
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
   const [scheduledAt, setScheduledAt] = useState<string>("");
+  const [recurrence, setRecurrence] = useState<string>("");
+  const [mediaUrl, setMediaUrl] = useState<string>("");
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loadingTopics, setLoadingTopics] = useState(false);
   const [topicError, setTopicError] = useState<string | null>(null);
@@ -148,8 +150,9 @@ export default function NewQuizPage() {
     setCorrectOptionId(null);
     setExplanation("");
     setScheduledAt("");
+    setRecurrence("");
+    setMediaUrl("");
     // Intentionally preserve: type, isAnonymous, allowsMultiple, openPeriod, selectedTopic
-    // so you can send multiple quizzes to the same topic without re-configuring
   };
 
   const handleSend = async () => {
@@ -175,6 +178,8 @@ export default function NewQuizPage() {
           topicId: selectedTopic?.message_thread_id,
           topicName: selectedTopic?.name,
           scheduledAt: scheduledAt || undefined,
+          mediaUrl: mediaUrl.trim() || undefined,
+          recurrence: scheduledAt && recurrence ? recurrence : undefined,
         }),
       });
       const data = await res.json();
@@ -434,11 +439,30 @@ export default function NewQuizPage() {
                 type="datetime-local"
                 className="input"
                 value={scheduledAt}
-                onChange={(e) => setScheduledAt(e.target.value)}
+                onChange={(e) => { setScheduledAt(e.target.value); if (!e.target.value) setRecurrence(""); }}
                 min={new Date().toISOString().slice(0, 16)}
               />
               <div className="toggle-desc">Leave blank to send immediately</div>
             </div>
+
+            {/* Recurrence — only shown when a schedule is set */}
+            {scheduledAt && (
+              <div className="input-wrapper" style={{ marginBottom: "var(--space-4)" }}>
+                <label className="input-label">🔁 Repeat</label>
+                <select
+                  className="select"
+                  value={recurrence}
+                  onChange={(e) => setRecurrence(e.target.value)}
+                >
+                  <option value="">No repeat (one-time)</option>
+                  <option value="daily">📅 Daily</option>
+                  <option value="weekly">📆 Weekly</option>
+                  <option value="biweekly">🗓 Every 2 weeks</option>
+                  <option value="monthly">🗃 Monthly</option>
+                </select>
+                <div className="toggle-desc">Next quiz auto-scheduled after sending</div>
+              </div>
+            )}
 
             {/* Topic */}
             <div className="input-wrapper" style={{ marginBottom: "var(--space-4)" }}>
@@ -537,6 +561,19 @@ export default function NewQuizPage() {
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Media URL */}
+            <div className="input-wrapper" style={{ marginBottom: "var(--space-4)" }}>
+              <label className="input-label">📎 Attach Image (optional)</label>
+              <input
+                className="input"
+                type="url"
+                placeholder="https://example.com/image.jpg"
+                value={mediaUrl}
+                onChange={(e) => setMediaUrl(e.target.value)}
+              />
+              <div className="toggle-desc">Image sent before the poll as a Telegram photo</div>
             </div>
 
             {/* Toggles */}

@@ -100,7 +100,9 @@ model Quiz {
   openPeriod       Int?
   topicId          Int?
   topicName        String?
+  mediaUrl         String?   // optional image attached before the poll
   scheduledAt      DateTime?
+  recurrence       String?   // "daily" | "weekly" | "biweekly" | "monthly" | null
   sentAt           DateTime?
   deletedAt        DateTime? // set when manually deleted from Telegram
   pollClosed       Boolean   @default(false) // set when Telegram poll is stopped
@@ -117,6 +119,7 @@ model Quiz {
 
   @@map("quizzes")
 }
+
 
 model PollAnswer {
   id          String   @id @default(cuid())

@@ -58,6 +58,7 @@ export interface SendPollParams {
   chat_id: string | number;
   message_thread_id?: number;
   question: string;
+  question_parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
   options: Array<{ text: string }>;
   type?: "quiz" | "regular";
   is_anonymous?: boolean;
@@ -67,6 +68,20 @@ export interface SendPollParams {
   allows_multiple_answers?: boolean;
   open_period?: number;
   is_closed?: boolean;
+  reply_to_message_id?: number;
+}
+
+export interface SendPhotoParams {
+  chat_id: string | number;
+  message_thread_id?: number;
+  photo: string; // URL or file_id
+  caption?: string;
+  parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+  reply_to_message_id?: number;
+}
+
+export interface TelegramPhotoMessage {
+  message_id: number;
 }
 
 // ─── API Methods ──────────────────────────────────────────────────────────────
@@ -98,6 +113,10 @@ export const telegram = {
 
   sendPoll(params: SendPollParams): Promise<TelegramMessage> {
     return call("sendPoll", params as unknown as Record<string, unknown>);
+  },
+
+  sendPhoto(params: SendPhotoParams): Promise<TelegramPhotoMessage> {
+    return call("sendPhoto", params as unknown as Record<string, unknown>);
   },
 
   deleteMessage(chat_id: string | number, message_id: number): Promise<boolean> {
