@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 interface Group {
   id: string;
@@ -119,6 +120,7 @@ function AddGroupModal({ onClose, onAdd }: { onClose: () => void; onAdd: (g: Gro
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -132,11 +134,16 @@ export default function DashboardPage() {
       fetch("/api/groups").then((r) => r.json()),
       fetch("/api/auth/me").then((r) => r.json()),
     ]).then(([groupsData, userData]) => {
-      setGroups(groupsData.groups || []);
+      const groupList: Group[] = groupsData.groups || [];
+      setGroups(groupList);
       setUser(userData.user);
       setLoading(false);
+      // Auto-redirect to the single group's dashboard (skip the list page)
+      if (groupList.length === 1) {
+        router.replace(`/dashboard/${groupList[0].id}`);
+      }
     }).catch(() => setLoading(false));
-  }, []);
+  }, [router]);
 
   const handleDeleteGroup = async (group: Group, deleteAll: boolean) => {
     setDeletingId(group.id);

@@ -4,18 +4,6 @@ import { prisma, withRetry } from "@/lib/db";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
-async function authorize(req: NextRequest, groupId: string) {
-  const token = req.cookies.get("qf_session")?.value;
-  if (!token) return null;
-  const { payload } = await jwtVerify(token, JWT_SECRET).catch(() => ({ payload: null }));
-  if (!payload) return null;
-  const userId = (payload as { sub: string }).sub;
-  return withRetry(() => prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId, groupId } },
-    include: { group: true },
-  }));
-}
-
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -28,33 +16,39 @@ export async function GET(
     const { payload } = await jwtVerify(token, JWT_SECRET);
     const userId = (payload as { sub: string }).sub;
 
-    const membership = await withRetry(() => prisma.groupMember.findUnique({
-      where: { userId_groupId: { userId, groupId } },
-    }));
+    // Auth check + group title in one query
+    const [membership, group] = await Promise.all([
+      withRetry(() => prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId, groupId } },
+      })),
+      withRetry(() => prisma.group.findUnique({
+        where: { id: groupId },
+        select: { id: true, title: true },
+      })),
+    ]);
+
     if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { searchParams } = req.nextUrl;
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
-    const type = searchParams.get("type");
-    const status = searchParams.get("status"); // active | closed | deleted
-    const topicId = searchParams.get("topicId");
+    const page    = Math.max(1, parseInt(searchParams.get("page")  || "1"));
+    const limit   = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20")));
+    const type     = searchParams.get("type");
+    const status   = searchParams.get("status"); // active | closed | deleted
+    const topicId  = searchParams.get("topicId");
     const sentById = searchParams.get("sentById");
-    const q = searchParams.get("q");
+    const q        = searchParams.get("q");
 
-    // Fetch group for title
-    const group = await withRetry(() => prisma.group.findUnique({ where: { id: groupId } }));
-
-    // Only fetch quizzes that have been sent (not pending scheduled ones)
+    // Build where clause
     const where: Record<string, unknown> = { groupId, sentAt: { not: null } };
-    if (type) where.type = type.toUpperCase();
-    if (topicId) where.topicId = parseInt(topicId);
+    if (type)     where.type    = type.toUpperCase();
+    if (topicId)  where.topicId = parseInt(topicId);
     if (sentById) where.sentById = sentById;
-    if (q) where.question = { contains: q, mode: "insensitive" };
-    if (status === "deleted") where.deletedAt = { not: null };
-    else if (status === "closed") { where.deletedAt = null; where.pollClosed = true; }
-    else if (status === "active") { where.deletedAt = null; where.pollClosed = false; }
+    if (q)        where.question = { contains: q, mode: "insensitive" };
+    if (status === "deleted")      where.deletedAt = { not: null };
+    else if (status === "closed")  { where.deletedAt = null; where.pollClosed = true; }
+    else if (status === "active")  { where.deletedAt = null; where.pollClosed = false; }
 
+    // Fetch quizzes + total count in parallel
     const [quizzes, total] = await Promise.all([
       withRetry(() => prisma.quiz.findMany({
         where,
@@ -69,34 +63,39 @@ export async function GET(
       withRetry(() => prisma.quiz.count({ where })),
     ]);
 
-    // Batch correct-rate calculation (one query instead of N queries)
-    const quizIds = quizzes.filter(q => q.type === "QUIZ" && q.correctOptionId !== null).map(q => q.id);
-    const correctCounts = quizIds.length > 0
-      ? await withRetry(() => prisma.pollAnswer.groupBy({
-          by: ["quizId"],
-          where: {
-            quizId: { in: quizIds },
-          },
-          _count: { id: true },
-        }))
-      : [];
+    // ── Batch correct-rate in ONE raw SQL query (eliminates N+1) ─────────────
+    // Counts rows where the correct option is in the user's selected options array.
+    const quizIdsForRate = quizzes
+      .filter((q) => q.type === "QUIZ" && q.correctOptionId !== null && q._count.answers > 0)
+      .map((q) => q.id);
 
-    // Build a map: quizId -> correct count (note: groupBy doesn't filter by optionIds easily)
-    // So we use a simpler per-quiz approach but run in parallel
-    const correctRates = await Promise.all(
-      quizzes.map(async (quiz) => {
-        if (quiz.type !== "QUIZ" || quiz.correctOptionId === null || quiz._count.answers === 0) {
-          return { id: quiz.id, rate: null };
+    const rateMap: Record<string, number | null> = {};
+
+    if (quizIdsForRate.length > 0) {
+      type RateRow = { quiz_id: string; correct_count: bigint };
+      const rows = await prisma.$queryRaw<RateRow[]>`
+        SELECT
+          pa."quizId"  AS quiz_id,
+          COUNT(pa.id) AS correct_count
+        FROM "poll_answers" pa
+        JOIN "quizzes" q ON q.id = pa."quizId"
+        WHERE pa."quizId" = ANY(${quizIdsForRate}::text[])
+          AND q."correctOptionId" = ANY(pa."optionIds")
+        GROUP BY pa."quizId"
+      `;
+
+      for (const row of rows) {
+        const quiz = quizzes.find((q) => q.id === row.quiz_id);
+        if (quiz && quiz._count.answers > 0) {
+          rateMap[row.quiz_id] = Math.round((Number(row.correct_count) / quiz._count.answers) * 100);
         }
-        const correct = await withRetry(() => prisma.pollAnswer.count({
-          where: { quizId: quiz.id, optionIds: { has: quiz.correctOptionId! } },
-        }));
-        return { id: quiz.id, rate: Math.round((correct / quiz._count.answers) * 100) };
-      })
-    );
-    const rateMap = Object.fromEntries(correctRates.map(r => [r.id, r.rate]));
+      }
+    }
 
-    const enriched = quizzes.map(q => ({ ...q, correctRate: rateMap[q.id] ?? null }));
+    const enriched = quizzes.map((q) => ({
+      ...q,
+      correctRate: rateMap[q.id] ?? null,
+    }));
 
     return NextResponse.json({
       quizzes: enriched,
