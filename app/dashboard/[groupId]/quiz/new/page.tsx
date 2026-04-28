@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { E } from "@/lib/emoji";
 
 interface Topic {
   message_thread_id: number;
@@ -176,7 +177,7 @@ export default function NewQuizPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
-      addToast("error", "Image too large â€” please pick one under 5 MB.");
+      addToast("error", "Image too large - please pick one under 5 MB.");
       return;
     }
     setImageFile(file);
@@ -246,7 +247,7 @@ export default function NewQuizPage() {
       addToast("success",
         scheduledAt
           ? `â° Quiz #${newCount} scheduled!`
-          : `âœ… Quiz #${newCount} sent to Telegram!`
+          : `${E.ok} Quiz #${newCount} sent to Telegram!`
       );
       resetForm();
     } catch (e) {
@@ -276,7 +277,7 @@ export default function NewQuizPage() {
           openPeriod,
         }),
       });
-      if (res.ok) addToast("success", "Template saved! âœ…");
+      if (res.ok) addToast("success", `Template saved! ${E.ok}`);
       else addToast("error", "Failed to save template");
     } catch {
       addToast("error", "Network error");
@@ -304,7 +305,7 @@ export default function NewQuizPage() {
       <div className="toast-container">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.type}`}>
-            {t.type === "success" ? "âœ“" : t.type === "error" ? "âœ•" : "â„¹"}
+            {t.type === "success" ? E.check : t.type === "error" ? E.cross : E.info}
             {t.message}
           </div>
         ))}
@@ -322,7 +323,7 @@ export default function NewQuizPage() {
                 border: "1px solid rgba(52,211,153,0.3)", borderRadius: "var(--radius-full)",
                 padding: "2px 10px", fontSize: "0.75rem", fontWeight: 700,
               }}>
-                âœ“ {sentCount} sent this session
+                {E.check} {sentCount} sent this session
               </span>
             )}
           </p>
@@ -334,7 +335,7 @@ export default function NewQuizPage() {
               className="btn btn-ghost btn-sm"
               style={{ border: "1px solid var(--clr-border)" }}
             >
-              ðŸ“‹ View History ({sentCount})
+              {E.history} View History ({sentCount})
             </Link>
           )}
           <button
@@ -342,7 +343,7 @@ export default function NewQuizPage() {
             onClick={handleSaveTemplate}
             disabled={savingTemplate}
           >
-            {savingTemplate ? "Savingâ€¦" : "ðŸ’¾ Save as Template"}
+            {savingTemplate ? "Saving..." : E.save + " Save as Template"}
           </button>
           <button
             className="btn btn-primary btn-lg"
@@ -352,7 +353,7 @@ export default function NewQuizPage() {
             {sending ? (
               <>
                 <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "white", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} />
-                Sendingâ€¦
+                Sending...
               </>
             ) : (
               <>
@@ -384,7 +385,7 @@ export default function NewQuizPage() {
                   }}
                   style={{ height: 56, flexDirection: "column", gap: 4 }}
                 >
-                  <span style={{ fontSize: "1.2rem" }}>{t === "quiz" ? "ðŸŽ¯" : "ðŸ“Š"}</span>
+                  <span style={{ fontSize: "1.2rem" }}>{t === "quiz" ? E.quiz : E.poll}</span>
                   <span style={{ fontSize: "0.8rem" }}>{t === "quiz" ? "Quiz (correct answer)" : "Poll (multiple choice)"}</span>
                 </button>
               ))}
@@ -397,7 +398,7 @@ export default function NewQuizPage() {
               <label className="input-label">Question</label>
               <textarea
                 className="input"
-                placeholder="Enter your question hereâ€¦ (up to 300 characters)"
+                placeholder={"Enter your question here... (up to 300 characters)"}
                 value={question}
                 onChange={(e) => setQuestion(e.target.value.slice(0, 300))}
                 rows={3}
@@ -414,7 +415,7 @@ export default function NewQuizPage() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-5)" }}>
               <h4>Answer Options</h4>
               <div className="step-display">
-                <button className="step-btn" onClick={() => setOptionCountSafe(optionCount - 1)}>âˆ’</button>
+                <button className="step-btn" onClick={() => setOptionCountSafe(optionCount - 1)}>-</button>
                 <span className="step-value">{optionCount}</span>
                 <button className="step-btn" onClick={() => setOptionCountSafe(optionCount + 1)}>+</button>
               </div>
@@ -422,7 +423,7 @@ export default function NewQuizPage() {
 
             {type === "quiz" && (
               <p style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", marginBottom: "var(--space-4)", background: "var(--clr-bg-elevated)", padding: "var(--space-3)", borderRadius: "var(--radius-md)" }}>
-                <strong style={{ color: "var(--clr-success)" }}>âœ“</strong> Click the circle on the left of the correct answer to mark it
+                <strong style={{ color: "var(--clr-success)" }}>{E.check}</strong> Click the circle on the left of the correct answer to mark it
               </p>
             )}
 
@@ -468,7 +469,7 @@ export default function NewQuizPage() {
                 <label className="input-label">Explanation (optional)</label>
                 <textarea
                   className="input"
-                  placeholder="Shown after answering â€” explain the correct answer (up to 200 chars)"
+                  placeholder={"Shown after answering - explain the correct answer (up to 200 chars)"}
                   value={explanation}
                   onChange={(e) => setExplanation(e.target.value.slice(0, 200))}
                   rows={3}
@@ -525,7 +526,7 @@ export default function NewQuizPage() {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: "0.78rem", color: "var(--clr-text-secondary)" }}>
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{imageFile.name}</span>
                       <button onClick={() => { setImageFile(null); setImageBase64(""); setImagePreviewUrl(""); if (fileInputRef.current) fileInputRef.current.value = ""; }}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--clr-danger)", fontSize: "1rem", lineHeight: 1 }}>âœ•</button>
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--clr-danger)", fontSize: "1rem", lineHeight: 1 }}>{E.cross}</button>
                     </div>
                   )}
                 </div>
@@ -575,10 +576,10 @@ export default function NewQuizPage() {
             {/* Topic */}
             <div style={{ marginBottom: "var(--space-4)" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-2)" }}>
-                <label className="input-label" style={{ marginBottom: 0 }}>ðŸ“Œ Topic</label>
+                <label className="input-label" style={{ marginBottom: 0 }}>{E.topic} Topic</label>
                 <button className="btn btn-ghost btn-sm" onClick={loadTopics} disabled={loadingTopics}
                   style={{ fontSize: "0.7rem", padding: "2px 6px" }}>
-                  {loadingTopics ? "â€¦" : "â†» Refresh"}
+                  {loadingTopics ? "..." : "↻ Refresh"}
                 </button>
               </div>
               {loadingTopics ? (
@@ -590,7 +591,7 @@ export default function NewQuizPage() {
                   <option value="">General (no topic)</option>
                   {topics.map((t) => (
                     <option key={t.message_thread_id} value={t.message_thread_id}>
-                      {t.is_closed ? "ðŸ”’ " : ""}{t.name}
+                      {t.is_closed ? E.lock + " " : ""}{t.name}
                     </option>
                   ))}
                 </select>
@@ -601,7 +602,7 @@ export default function NewQuizPage() {
               )}
               <button className="btn btn-ghost btn-sm" onClick={() => setShowManualTopic(!showManualTopic)}
                 style={{ marginTop: 6, fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
-                {showManualTopic ? "â–² Hide" : "ï¼‹ Add manually"}
+                {showManualTopic ? "▲ Hide" : "＋ Add manually"}
               </button>
               {showManualTopic && (
                 <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8, padding: "var(--space-3)", background: "var(--clr-bg-elevated)", borderRadius: 8, border: "1px solid var(--clr-border)" }}>
@@ -611,7 +612,7 @@ export default function NewQuizPage() {
                     onChange={e => setManualTopicName(e.target.value)} style={{ fontSize: "0.82rem" }} />
                   <button className="btn btn-primary btn-sm" onClick={handleAddManualTopic}
                     disabled={addingTopic || !manualTopicId || !manualTopicName.trim()} style={{ justifyContent: "center" }}>
-                    {addingTopic ? "Savingâ€¦" : "Save Topic"}
+                    {addingTopic ? "Saving..." : "Save Topic"}
                   </button>
                 </div>
               )}
@@ -723,26 +724,26 @@ export default function NewQuizPage() {
               <div className="preview-message">
                 {type === "quiz" && (
                   <div style={{ fontSize: "0.65rem", color: "var(--clr-brand)", fontWeight: 700, marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                    ðŸŽ¯ Quiz
+                    {E.quiz} Quiz
                   </div>
                 )}
                 <div className="preview-question">
-                  {question || "Your question will appear hereâ€¦"}
+                  {question || "Your question will appear here..."}
                 </div>
                 {options.slice(0, optionCount).map((opt, idx) => (
                   <div key={idx} className={`preview-option ${type === "quiz" && correctOptionId === idx ? "correct" : ""}`}>
                     {opt || `Option ${String.fromCharCode(65 + idx)}`}
-                    {type === "quiz" && correctOptionId === idx && <span style={{ float: "right" }}>âœ“</span>}
+                    {type === "quiz" && correctOptionId === idx && <span style={{ float: "right" }}>{E.check}</span>}
                   </div>
                 ))}
                 {explanation && (
                   <div style={{ marginTop: 7, fontSize: "0.75rem", color: "#8090b0", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 7 }}>
-                    ðŸ’¡ {explanation}
+                    {E.bulb} {explanation}
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 10, marginTop: 7, flexWrap: "wrap" }}>
-                  {!isAnonymous && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>ðŸ‘¤ Visible votes</span>}
-                  {shuffleOptions && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>ðŸ”€ Shuffled</span>}
+                  {!isAnonymous && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>{E.user} Visible votes</span>}
+                  {shuffleOptions && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>{E.shuffle} Shuffled</span>}
                   {showDuration && openPeriod > 0 && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>â± {OPEN_PERIOD_OPTIONS.find(o => o.value === openPeriod)?.label}</span>}
                   {scheduledAt && <span style={{ fontSize: "0.65rem", color: "#fbbf24" }}>â° Scheduled</span>}
                 </div>
