@@ -19,6 +19,7 @@ interface Quiz {
   _count: { answers: number };
   correctRate: number | null;
   sentBy: { firstName: string; username: string | null; photoUrl: string | null };
+  tags?: string[];
 }
 
 interface Pagination {
@@ -41,6 +42,8 @@ export default function HistoryPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [tagsFilter, setTagsFilter] = useState("");
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -56,6 +59,7 @@ export default function HistoryPage() {
     if (typeFilter) qs.set("type", typeFilter);
     if (statusFilter) qs.set("status", statusFilter);
     if (search) qs.set("q", search);
+    if (tagsFilter) qs.set("tags", tagsFilter);
     fetch(`/api/groups/${groupId}/history?${qs}`)
       .then((r) => r.json())
       .then((d) => {
@@ -64,7 +68,25 @@ export default function HistoryPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [groupId, page, typeFilter, statusFilter, search]);
+  }, [groupId, page, typeFilter, statusFilter, search, tagsFilter]);
+
+  useEffect(() => {
+    fetch(`/api/groups/${groupId}/tags`)
+      .then(res => res.json())
+      .then(data => setAvailableTags(data.tags || []))
+      .catch(console.error);
+  }, [groupId]);
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (search !== searchInput) {
+        setSearch(searchInput);
+        setPage(1);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchInput, search]);
 
   // Keyboard shortcut: press "/" to focus search
   useEffect(() => {
@@ -189,6 +211,18 @@ export default function HistoryPage() {
               <option value="quiz">🎯 Quiz</option>
               <option value="poll">📊 Poll</option>
             </select>
+            <select
+              className="select"
+              style={{ width: "auto", minWidth: 130 }}
+              value={tagsFilter}
+              onChange={(e) => { setTagsFilter(e.target.value); setPage(1); }}
+              disabled={availableTags.length === 0}
+            >
+              <option value="">All tags</option>
+              {availableTags.map(tag => (
+                <option key={tag} value={tag}>#{tag}</option>
+              ))}
+            </select>
             <button className="btn btn-primary btn-sm" onClick={() => { setSearch(searchInput); setPage(1); }}>Search</button>
           </div>
 
@@ -220,11 +254,11 @@ export default function HistoryPage() {
                 {s.label}
               </button>
             ))}
-            {(search || typeFilter || statusFilter) && (
+            {(search || typeFilter || statusFilter || tagsFilter) && (
               <button
                 className="btn btn-ghost btn-sm"
                 style={{ marginLeft: "auto" }}
-                onClick={() => { setSearch(""); setSearchInput(""); setTypeFilter(""); setStatusFilter(""); setPage(1); }}
+                onClick={() => { setSearch(""); setSearchInput(""); setTypeFilter(""); setStatusFilter(""); setTagsFilter(""); setPage(1); }}
               >
                 Clear All ✕
               </button>
@@ -293,7 +327,14 @@ export default function HistoryPage() {
                         </div>
                       </td>
                       <td data-label="Topic" style={{ color: "var(--clr-text-muted)", fontSize: "0.85rem" }}>
-                        {quiz.topicName || "General"}
+                        <div style={{ marginBottom: 4 }}>{quiz.topicName || "General"}</div>
+                        {quiz.tags && quiz.tags.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {quiz.tags.map(tag => (
+                              <span key={tag} className="badge badge-muted" style={{ fontSize: "0.7rem", padding: "2px 6px" }}>#{tag}</span>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td data-label="Sent By">
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -442,6 +483,7 @@ export default function HistoryPage() {
                                   ["Total Responses", String(quiz._count.answers)],
                                   ["Correct Rate", quiz.correctRate !== null ? `${quiz.correctRate}%` : "N/A"],
                                   ["Topic", quiz.topicName || "General"],
+                                  ["Tags", quiz.tags && quiz.tags.length > 0 ? quiz.tags.map(t => `#${t}`).join(", ") : "None"],
                                   ["Date Sent", formatDate(quiz.sentAt)],
                                 ] as [string,string][]).map(([k, v]) => (
                                   <>

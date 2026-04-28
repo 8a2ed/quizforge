@@ -37,13 +37,25 @@ export async function GET(
     const topicId  = searchParams.get("topicId");
     const sentById = searchParams.get("sentById");
     const q        = searchParams.get("q");
+    const tags     = searchParams.get("tags");
 
     // Build where clause
     const where: Record<string, unknown> = { groupId, sentAt: { not: null } };
     if (type)     where.type    = type.toUpperCase();
     if (topicId)  where.topicId = parseInt(topicId);
     if (sentById) where.sentById = sentById;
-    if (q)        where.question = { contains: q, mode: "insensitive" };
+    if (q) {
+      where.OR = [
+        { question: { contains: q, mode: "insensitive" } },
+        { explanation: { contains: q, mode: "insensitive" } },
+      ];
+    }
+    if (tags) {
+      const tagsArray = tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      if (tagsArray.length > 0) {
+        where.tags = { hasSome: tagsArray };
+      }
+    }
     if (status === "deleted")      where.deletedAt = { not: null };
     else if (status === "closed")  { where.deletedAt = null; where.pollClosed = true; }
     else if (status === "active")  { where.deletedAt = null; where.pollClosed = false; }

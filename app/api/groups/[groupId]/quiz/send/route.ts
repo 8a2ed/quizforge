@@ -47,6 +47,7 @@ export async function POST(
     mediaBase64,     // base64 image from file picker
     mediaMimeType,   // e.g. "image/jpeg"
     recurrence,
+    tags,            // Array of tags
   } = body;
 
   // Validations
@@ -60,6 +61,15 @@ export async function POST(
   const chatId = auth.membership.group.chatId;
   const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
   const isFuture = scheduledDate && scheduledDate > new Date();
+
+  // Sanitize tags
+  let sanitizedTags: string[] = [];
+  if (Array.isArray(tags)) {
+    sanitizedTags = tags
+      .map(t => String(t).trim().toLowerCase())
+      .filter(t => t.length > 0)
+      .slice(0, 5); // max 5 tags
+  }
 
   // Shared DB payload
   const quizData = {
@@ -75,6 +85,7 @@ export async function POST(
     topicName: topicName || null,
     mediaUrl: mediaUrl?.trim() || null,
     recurrence: recurrence || null,
+    tags: sanitizedTags,
     groupId,
     sentById: auth.userId,
   };

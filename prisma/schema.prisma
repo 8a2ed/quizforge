@@ -108,6 +108,7 @@ model Quiz {
   pollClosed       Boolean   @default(false) // set when Telegram poll is stopped
   messageId        Int?
   pollId           String?
+  tags             String[]  @default([])
   createdAt        DateTime  @default(now())
 
   groupId   String

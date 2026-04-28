@@ -57,6 +57,9 @@ export default function NewQuizPage() {
   const [manualTopicId, setManualTopicId] = useState("");
   const [manualTopicName, setManualTopicName] = useState("");
   const [addingTopic, setAddingTopic] = useState(false);
+  // Tags
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   // UI
   const [sending, setSending] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -81,6 +84,7 @@ export default function NewQuizPage() {
         if (draft.isAnonymous !== undefined) setIsAnonymous(draft.isAnonymous);
         if (draft.allowsMultiple !== undefined) setAllowsMultiple(draft.allowsMultiple);
         if (draft.openPeriod) setOpenPeriod(draft.openPeriod);
+        if (draft.tags && Array.isArray(draft.tags)) setTags(draft.tags);
       } catch {
         console.error("Failed to load draft from URL");
       }
@@ -168,6 +172,8 @@ export default function NewQuizPage() {
     setImageFile(null);
     setImageBase64("");
     setImagePreviewUrl("");
+    setTags([]);
+    setTagInput("");
     if (fileInputRef.current) fileInputRef.current.value = "";
     // Preserve: type, isAnonymous, allowsMultiple, openPeriod, selectedTopic, shuffleOptions
   };
@@ -237,6 +243,7 @@ export default function NewQuizPage() {
           mediaBase64: imageMode === "file" && imageBase64 ? imageBase64 : undefined,
           mediaMimeType: imageMode === "file" && imageBase64 ? imageMimeType : undefined,
           recurrence: scheduledAt && recurrence ? recurrence : undefined,
+          tags: tags.length > 0 ? tags : undefined,
         }),
       });
       const data = await res.json();
@@ -550,6 +557,44 @@ export default function NewQuizPage() {
                   />
                 </div>
               )}
+            </div>
+
+            {/* Tags */}
+            <div style={{ marginBottom: "var(--space-4)" }}>
+              <label className="input-label" style={{ marginBottom: "var(--space-2)" }}>{E.pin} Tags (Max 5)</label>
+              <div style={{
+                display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 8px",
+                border: "1px solid var(--clr-border)", borderRadius: "var(--radius-md)",
+                background: "var(--clr-bg-base)", minHeight: 40, alignItems: "center"
+              }}>
+                {tags.map(tag => (
+                  <span key={tag} className="badge badge-accent" style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 8px", fontSize: "0.75rem" }}>
+                    #{tag}
+                    <button type="button" onClick={() => setTags(ts => ts.filter(t => t !== tag))} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", marginLeft: 2, padding: 0, fontSize: "0.8rem", lineHeight: 1 }}>{E.cross}</button>
+                  </span>
+                ))}
+                {tags.length < 5 && (
+                  <input
+                    type="text"
+                    style={{ border: "none", background: "transparent", outline: "none", flex: 1, minWidth: 80, fontSize: "0.85rem", color: "var(--clr-text-primary)" }}
+                    placeholder={tags.length === 0 ? "Add tag (press Enter or ,)" : "Add more..."}
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 15))}
+                    onKeyDown={(e) => {
+                      if ((e.key === "Enter" || e.key === ",") && tagInput.trim()) {
+                        e.preventDefault();
+                        const newTag = tagInput.trim().toLowerCase();
+                        if (newTag && !tags.includes(newTag)) {
+                          setTags(ts => [...ts, newTag]);
+                        }
+                        setTagInput("");
+                      } else if (e.key === "Backspace" && !tagInput && tags.length > 0) {
+                        setTags(ts => ts.slice(0, -1));
+                      }
+                    }}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Schedule */}
