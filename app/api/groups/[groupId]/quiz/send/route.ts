@@ -48,6 +48,8 @@ export async function POST(
     mediaMimeType,   // e.g. "image/jpeg"
     recurrence,
     tags,            // Array of tags
+    allowAddingOptions = false,
+    allowRevoting = false,
   } = body;
 
   // Validations
@@ -86,6 +88,8 @@ export async function POST(
     mediaUrl: mediaUrl?.trim() || null,
     recurrence: recurrence || null,
     tags: sanitizedTags,
+    allowAddingOptions: type === "poll" ? allowAddingOptions : false,
+    allowRevoting: type === "poll" ? allowRevoting : false,
     groupId,
     sentById: auth.userId,
   };
@@ -144,9 +148,11 @@ export async function POST(
       is_anonymous: isAnonymous,
       correct_option_id: type === "quiz" ? correctOptionId : undefined,
       explanation: explanation?.trim() || undefined,
-      explanation_parse_mode: "HTML",
-      allows_multiple_answers: type === "poll" ? allowsMultiple : undefined,
-      open_period: openPeriod && openPeriod > 0 ? openPeriod : undefined,
+      explanation_parse_mode: explanation?.trim() ? "HTML" : undefined,
+      allows_multiple_answers: type === "poll" ? allowsMultiple : false,
+      allows_adding_options: type === "poll" ? allowAddingOptions : false,
+      allows_revoting: type === "poll" ? allowRevoting : false,
+      open_period: openPeriod || undefined,
       reply_to_message_id: replyToMessageId,
     });
   } catch (err) {

@@ -66,6 +66,8 @@ export interface SendPollParams {
   explanation?: string;
   explanation_parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
   allows_multiple_answers?: boolean;
+  allows_adding_options?: boolean;
+  allows_revoting?: boolean;
   open_period?: number;
   is_closed?: boolean;
   reply_to_message_id?: number;

@@ -49,6 +49,8 @@ export default function NewQuizPage() {
   // Poll behaviour
   const [shuffleOptions, setShuffleOptions] = useState(false);
   const [showDuration, setShowDuration] = useState(false);
+  const [allowAddingOptions, setAllowAddingOptions] = useState(false);
+  const [allowRevoting, setAllowRevoting] = useState(false);
   // Topics
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loadingTopics, setLoadingTopics] = useState(false);
@@ -85,6 +87,8 @@ export default function NewQuizPage() {
         if (draft.allowsMultiple !== undefined) setAllowsMultiple(draft.allowsMultiple);
         if (draft.openPeriod) setOpenPeriod(draft.openPeriod);
         if (draft.tags && Array.isArray(draft.tags)) setTags(draft.tags);
+        if (draft.allowAddingOptions !== undefined) setAllowAddingOptions(draft.allowAddingOptions);
+        if (draft.allowRevoting !== undefined) setAllowRevoting(draft.allowRevoting);
       } catch {
         console.error("Failed to load draft from URL");
       }
@@ -244,6 +248,8 @@ export default function NewQuizPage() {
           mediaMimeType: imageMode === "file" && imageBase64 ? imageMimeType : undefined,
           recurrence: scheduledAt && recurrence ? recurrence : undefined,
           tags: tags.length > 0 ? tags : undefined,
+          allowAddingOptions: type === "poll" ? allowAddingOptions : undefined,
+          allowRevoting: type === "poll" ? allowRevoting : undefined,
         }),
       });
       const data = await res.json();
@@ -683,16 +689,40 @@ export default function NewQuizPage() {
 
               {/* Multiple Answers â€” poll only */}
               {type === "poll" && (
-                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <div>
-                    <div style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--clr-text-primary)" }}>Multiple Answers</div>
-                    <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>Select more than one option</div>
-                  </div>
-                  <div className="toggle-switch">
-                    <input type="checkbox" checked={allowsMultiple} onChange={(e) => setAllowsMultiple(e.target.checked)} />
-                    <span className="toggle-slider" />
-                  </div>
-                </label>
+                <>
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <div>
+                      <div style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--clr-text-primary)" }}>Multiple Answers</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>Select more than one option</div>
+                    </div>
+                    <div className="toggle-switch">
+                      <input type="checkbox" checked={allowsMultiple} onChange={(e) => setAllowsMultiple(e.target.checked)} />
+                      <span className="toggle-slider" />
+                    </div>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <div>
+                      <div style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--clr-text-primary)" }}>Allow Adding Options</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>Voters can suggest new options</div>
+                    </div>
+                    <div className="toggle-switch">
+                      <input type="checkbox" checked={allowAddingOptions} onChange={(e) => setAllowAddingOptions(e.target.checked)} />
+                      <span className="toggle-slider" />
+                    </div>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <div>
+                      <div style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--clr-text-primary)" }}>Allow Revoting</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>Voters can change their vote</div>
+                    </div>
+                    <div className="toggle-switch">
+                      <input type="checkbox" checked={allowRevoting} onChange={(e) => setAllowRevoting(e.target.checked)} />
+                      <span className="toggle-slider" />
+                    </div>
+                  </label>
+                </>
               )}
 
               {/* Shuffle Options */}

@@ -109,6 +109,8 @@ model Quiz {
   messageId        Int?
   pollId           String?
   tags             String[]  @default([])
+  allowAddingOptions Boolean @default(false)
+  allowRevoting      Boolean @default(false)
   createdAt        DateTime  @default(now())
 
   groupId   String
