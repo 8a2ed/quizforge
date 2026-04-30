@@ -5,6 +5,7 @@ import { prisma, withRetry } from "@/lib/db";
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
 export async function GET(req: NextRequest) {
+  console.log("HIT /api/auth/me");
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return NextResponse.json({ user: null });
 

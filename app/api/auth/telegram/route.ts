@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyTelegramHash } from "@/lib/crypto";
-import { prisma } from "@/lib/db";
+import { prisma, withRetry } from "@/lib/db";
 import { SignJWT } from "jose";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   }
 
   // 2. Upsert user in DB
-  const user = await prisma.user.upsert({
+  const user = await withRetry(() => prisma.user.upsert({
     where: { telegramId: params.id },
     update: {
       firstName: params.first_name,
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       username: params.username || null,
       photoUrl: params.photo_url || null,
     },
-  });
+  }));
 
   // 3. Create JWT
   const token = await new SignJWT({

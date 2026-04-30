@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { SignJWT } from "jose";
-import { prisma } from "@/lib/db";
+import { prisma, withRetry } from "@/lib/db";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -12,13 +12,13 @@ export async function GET(req: NextRequest) {
   try {
     // Try to find the FIRST real user in the database (the actual admin who set up this app)
     // This ensures dev login shows real groups instead of a dummy empty sandbox
-    let user = await prisma.user.findFirst({
+    let user = await withRetry(() => prisma.user.findFirst({
       orderBy: { createdAt: "asc" },
-    });
+    }));
 
     // If no real user exists yet, fall back to creating a sandbox user with a sandbox group
     if (!user) {
-      user = await prisma.user.upsert({
+      user = await withRetry(() => prisma.user.upsert({
         where: { telegramId: "123456789" },
         update: {},
         create: {
@@ -27,9 +27,9 @@ export async function GET(req: NextRequest) {
           username: "localadmin",
           photoUrl: "https://ui-avatars.com/api/?name=Local+Admin&background=4f7fff&color=fff",
         },
-      });
+      }));
 
-      const group = await prisma.group.upsert({
+      const group = await withRetry(() => prisma.group.upsert({
         where: { chatId: "-1001234567890" },
         update: {},
         create: {
@@ -37,18 +37,18 @@ export async function GET(req: NextRequest) {
           title: "Dev Sandbox Group",
           isForum: false,
         },
-      });
+      }));
 
-      await prisma.groupMember.upsert({
-        where: { userId_groupId: { userId: user.id, groupId: group.id } },
+      await withRetry(() => prisma.groupMember.upsert({
+        where: { userId_groupId: { userId: user!.id, groupId: group.id } },
         update: { role: "OWNER", approved: true },
         create: {
-          userId: user.id,
+          userId: user!.id,
           groupId: group.id,
           role: "OWNER",
           approved: true,
         },
-      });
+      }));
     }
 
     const token = await new SignJWT({
