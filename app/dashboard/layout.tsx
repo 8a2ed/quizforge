@@ -24,6 +24,7 @@ const ICONS = {
   settings:    "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z",
   groups:      "M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z",
   logout:      "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
+  library:     "M4 19.5A2.5 2.5 0 016.5 17H20M4 19.5A2.5 2.5 0 014 17V5a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6.5",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -65,7 +66,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     ? [
         { href: `/dashboard/${groupId}`,           icon: ICONS.home,      label: "Overview"    },
         { href: `/dashboard/${groupId}/quiz/new`,  icon: ICONS.quiz,      label: "Create Quiz" },
-        { href: `/dashboard/${groupId}/bulk`,      icon: ICONS.bulk,      label: "Bulk Loader" },
+        { href: `/dashboard/${groupId}/bulk`,      icon: ICONS.bulk,      label: "Bulk Import"  },
+        { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: "Library"     },
         { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
         { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"   },
         { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: "Topics"      },
@@ -77,11 +79,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Bottom tab items — show group tabs when inside a group, else show My Groups
   const bottomTabs = groupId
     ? [
-        { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: "Overview"  },
-        { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: "Create"    },
-        { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,    label: "Bulk"      },
-        { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: "History"   },
-        { href: `/dashboard/${groupId}/settings`, icon: ICONS.settings,label: "Settings"  },
+        { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: "Overview" },
+        { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: "Create"   },
+        { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,    label: "Import"   },
+        { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: "Library"  },
+        { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: "History"  },
       ]
     : [
         { href: "/dashboard",             icon: ICONS.groups,      label: "My Groups"   },
