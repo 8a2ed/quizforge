@@ -52,9 +52,10 @@ export async function PATCH(
   const updated = await prisma.botConfig.update({
     where: { groupId },
     data: {
-      defaultAnonymous: body.defaultAnonymous,
-      allowMultiple: body.allowMultiple,
-      defaultType: body.defaultType,
+      defaultAnonymous:  body.defaultAnonymous  ?? undefined,
+      allowMultiple:     body.allowMultiple      ?? undefined,
+      defaultType:       body.defaultType        ?? undefined,
+      defaultOpenPeriod: body.defaultOpenPeriod  ?? undefined,
     },
   });
 

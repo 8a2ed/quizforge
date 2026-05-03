@@ -20,6 +20,8 @@ interface Quiz {
   correctRate: number | null;
   sentBy: { firstName: string; username: string | null; photoUrl: string | null };
   tags?: string[];
+  messageId?: number | null;
+  topicId?: number | null;
 }
 
 interface Pagination {
@@ -122,6 +124,18 @@ export default function HistoryPage() {
       load(); // refresh list
     } else {
       showToast("error", data.error || "Failed to delete");
+    }
+  };
+
+  const handleClose = async (quiz: Quiz) => {
+    if (!confirm(`Stop the poll for "${quiz.question.slice(0, 60)}"?\n\nThis will close voting in Telegram.`)) return;
+    const res = await fetch(`/api/groups/${groupId}/quiz/${quiz.id}/close`, { method: "POST" });
+    const data = await res.json();
+    if (data.ok) {
+      showToast("success", "Poll closed in Telegram");
+      load();
+    } else {
+      showToast("error", data.error || "Failed to close poll");
     }
   };
 
@@ -418,98 +432,76 @@ export default function HistoryPage() {
                       </td>
                     </tr>
 
-                    {/* Expanded row */}
-                    {expanded === quiz.id && (
-                      <tr key={`${quiz.id}-detail`}>
-                        <td colSpan={8} style={{ background: "var(--clr-bg-elevated)", padding: "var(--space-5)" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-6)" }}>
-                            {/* Options */}
-                            <div>
-                              <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Full Question</h4>
-                              <p style={{ color: "var(--clr-text-primary)", fontWeight: 500, marginBottom: "var(--space-4)", lineHeight: 1.5 }}>
-                                {quiz.question}
-                              </p>
-                              <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Answer Options</h4>
-                              {quiz.options.map((opt, idx) => (
-                                <div key={idx} style={{
-                                  padding: "var(--space-2) var(--space-3)",
-                                  marginBottom: 6,
-                                  borderRadius: "var(--radius-md)",
-                                  background: quiz.type === "QUIZ" && quiz.correctOptionId === idx
-                                    ? "var(--clr-success-muted)"
-                                    : "var(--clr-bg-hover)",
-                                  border: `1px solid ${quiz.type === "QUIZ" && quiz.correctOptionId === idx
-                                    ? "rgba(52,211,153,0.3)"
-                                    : "var(--clr-border)"}`,
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  alignItems: "center",
-                                  fontSize: "0.875rem",
-                                }}>
-                                  <span>
-                                    <span style={{ color: "var(--clr-text-muted)", marginRight: 8, fontWeight: 600 }}>
-                                      {String.fromCharCode(65 + idx)}.
-                                    </span>
-                                    {quiz.type === "QUIZ" && quiz.correctOptionId === idx && (
-                                      <span style={{ color: "var(--clr-success)", marginRight: 6 }}>✓</span>
-                                    )}
+                      {/* Expanded detail panel */}
+                      {expanded === quiz.id && (
+                        <tr key={`${quiz.id}-detail`}>
+                          <td colSpan={8} style={{ background: "var(--clr-bg-elevated)", padding: "var(--space-4)" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--space-5)" }}>
+                              {/* Question + Options */}
+                              <div>
+                                <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Full Question</h4>
+                                <p style={{ color: "var(--clr-text-primary)", fontWeight: 500, marginBottom: "var(--space-4)", lineHeight: 1.5 }}>
+                                  {quiz.question}
+                                </p>
+                                <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Answer Options</h4>
+                                {quiz.options.map((opt, idx) => (
+                                  <div key={idx} style={{
+                                    padding: "var(--space-2) var(--space-3)",
+                                    marginBottom: 6,
+                                    borderRadius: "var(--radius-md)",
+                                    background: quiz.type === "QUIZ" && quiz.correctOptionId === idx ? "var(--clr-success-muted)" : "var(--clr-bg-hover)",
+                                    border: `1px solid ${quiz.type === "QUIZ" && quiz.correctOptionId === idx ? "rgba(52,211,153,0.3)" : "var(--clr-border)"}`,
+                                    display: "flex", alignItems: "center", fontSize: "0.875rem",
+                                  }}>
+                                    <span style={{ color: "var(--clr-text-muted)", marginRight: 8, fontWeight: 600, minWidth: 20 }}>{String.fromCharCode(65 + idx)}.</span>
+                                    {quiz.type === "QUIZ" && quiz.correctOptionId === idx && <span style={{ color: "var(--clr-success)", marginRight: 6 }}>✓</span>}
                                     {opt}
-                                  </span>
-                                </div>
-                              ))}
-                              {quiz.explanation && (
-                                <div style={{
-                                  marginTop: "var(--space-3)",
-                                  fontSize: "0.85rem",
-                                  color: "var(--clr-text-muted)",
-                                  background: "var(--clr-bg-hover)",
-                                  padding: "var(--space-3)",
-                                  borderRadius: "var(--radius-md)",
-                                  borderLeft: "3px solid var(--clr-brand)",
-                                }}>
-                                  💡 <strong>Explanation:</strong> {quiz.explanation}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Meta */}
-                            <div>
-                              <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Details</h4>
-                              <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "var(--space-2) var(--space-4)" }}>
-                                {([
-                                  ["Type", quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"],
-                                  ["Sent By", `${quiz.sentBy.firstName}${quiz.sentBy.username ? ` (@${quiz.sentBy.username})` : ""}`],
-                                  ["Anonymous", quiz.isAnonymous ? "Yes" : "No"],
-                                  ["Total Responses", String(quiz._count.answers)],
-                                  ["Correct Rate", quiz.correctRate !== null ? `${quiz.correctRate}%` : "N/A"],
-                                  ["Topic", quiz.topicName || "General"],
-                                  ["Tags", quiz.tags && quiz.tags.length > 0 ? quiz.tags.map(t => `#${t}`).join(", ") : "None"],
-                                  ["Date Sent", formatDate(quiz.sentAt)],
-                                ] as [string,string][]).map(([k, v]) => (
-                                  <>
-                                    <dt key={`k-${k}`} style={{ color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>{k}</dt>
-                                    <dd key={`v-${k}`} style={{ color: "var(--clr-text-primary)", fontSize: "0.875rem" }}>{v}</dd>
-                                  </>
+                                  </div>
                                 ))}
-                              </dl>
-
-                              <div style={{ marginTop: "var(--space-5)", display: "flex", gap: "var(--space-3)" }}>
-                                <button
-                                  className="btn btn-secondary btn-sm"
-                                  onClick={() => handleDuplicate(quiz)}
-                                >
-                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <rect x="9" y="9" width="13" height="13" rx="2"/>
-                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                                  </svg>
-                                  Duplicate & Edit
-                                </button>
+                                {quiz.explanation && (
+                                  <div style={{ marginTop: "var(--space-3)", fontSize: "0.85rem", color: "var(--clr-text-muted)", background: "var(--clr-bg-hover)", padding: "var(--space-3)", borderRadius: "var(--radius-md)", borderLeft: "3px solid var(--clr-brand)" }}>
+                                    💡 <strong>Explanation:</strong> {quiz.explanation}
+                                  </div>
+                                )}
+                              </div>
+                              {/* Meta */}
+                              <div>
+                                <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Details</h4>
+                                <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "var(--space-2) var(--space-4)", marginBottom: "var(--space-4)" }}>
+                                  {([
+                                    ["Type", quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"],
+                                    ["Sent By", `${quiz.sentBy.firstName}${quiz.sentBy.username ? ` (@${quiz.sentBy.username})` : ""}`],
+                                    ["Anonymous", quiz.isAnonymous ? "Yes" : "No"],
+                                    ["Responses", String(quiz._count.answers)],
+                                    ["Correct Rate", quiz.correctRate !== null ? `${quiz.correctRate}%` : "N/A"],
+                                    ["Topic", quiz.topicName || "General"],
+                                    ["Tags", quiz.tags && quiz.tags.length > 0 ? quiz.tags.map(t => `#${t}`).join(", ") : "None"],
+                                    ["Date Sent", formatDate(quiz.sentAt)],
+                                    ["Status", quiz.deletedAt ? "🗑 Deleted" : quiz.pollClosed ? "⏹ Closed" : "🟢 Active"],
+                                  ] as [string,string][]).map(([k, v]) => (
+                                    <>
+                                      <dt key={`k-${k}`} style={{ color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>{k}</dt>
+                                      <dd key={`v-${k}`} style={{ color: "var(--clr-text-primary)", fontSize: "0.875rem" }}>{v}</dd>
+                                    </>
+                                  ))}
+                                </dl>
+                                <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                                  <button className="btn btn-secondary btn-sm" onClick={() => handleDuplicate(quiz)}>
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                    Duplicate & Edit
+                                  </button>
+                                  {!quiz.pollClosed && !quiz.deletedAt && (
+                                    <button className="btn btn-sm" style={{ background: "rgba(251,191,36,0.1)", color: "var(--clr-warning)", border: "1px solid rgba(251,191,36,0.3)" }}
+                                      onClick={() => handleClose(quiz)}>
+                                      ⏹ Close Poll
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
+                          </td>
+                        </tr>
+                      )}
                   </>
                 ))}
               </tbody>

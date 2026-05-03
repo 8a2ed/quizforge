@@ -10,15 +10,29 @@ interface ForumTopicsResult {
   via: string;
 }
 
-// Try getForumTopics with numeric ID, then @username fallback
+// Try getForumTopics with multiple chatId formats
 async function tryGetForumTopics(chatId: string): Promise<ForumTopicsResult | null> {
-  // Attempt 1: numeric chatId
-  try {
-    const r = await telegram.getForumTopics(chatId);
-    return { topics: r.topics || [], via: chatId };
-  } catch { /* fall through to username */ }
+  // Build list of chatId variants to try
+  const variants: string[] = [chatId];
 
-  // Attempt 2: @username
+  // If it's a numeric ID without -100 prefix, add the -100 supergroup variant
+  if (/^-?\d+$/.test(chatId)) {
+    const num = chatId.replace(/^-/, "");
+    if (!chatId.startsWith("-100")) variants.push(`-100${num}`);
+    // Also try without negative prefix
+    if (chatId.startsWith("-")) variants.push(num);
+  }
+
+  for (const id of variants) {
+    try {
+      const r = await telegram.getForumTopics(id);
+      if (r.topics && r.topics.length > 0) return { topics: r.topics, via: id };
+      // Zero topics is still success — return empty
+      return { topics: [], via: id };
+    } catch { /* try next */ }
+  }
+
+  // Attempt @username fallback
   try {
     const chat = await telegram.getChat(chatId);
     if (chat.username) {
@@ -29,6 +43,7 @@ async function tryGetForumTopics(chatId: string): Promise<ForumTopicsResult | nu
 
   return null;
 }
+
 
 async function getAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
