@@ -85,8 +85,11 @@ export default function SettingsPage() {
     );
   }
 
+  const webhookUrl = webhookStatus?.url as string | undefined;
+  const isWebhookSet = webhookUrl && webhookUrl.length > 0;
+
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: "min(720px, 100%)" }}>
       {toast && (
         <div className="toast-container">
           <div className={`toast toast-${toast.type}`}>{toast.msg}</div>
@@ -94,7 +97,10 @@ export default function SettingsPage() {
       )}
 
       <div className="section-header animate-fade-up">
-        <h1>Settings</h1>
+        <div>
+          <h1>Settings</h1>
+          <p>Configure your bot and default quiz behaviour</p>
+        </div>
         <button className="btn btn-primary" onClick={handleSave} disabled={saving || !config}>
           {saving ? "Saving…" : "Save Changes"}
         </button>
@@ -104,23 +110,23 @@ export default function SettingsPage() {
       {botInfo && (
         <div className="card animate-fade-up animate-delay-1" style={{ marginBottom: "var(--space-5)" }}>
           <h3 style={{ marginBottom: "var(--space-4)" }}>Bot Information</h3>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
-            <div className="avatar xl" style={{ background: "var(--grad-brand)", fontSize: "1.4rem" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)", flexWrap: "wrap" }}>
+            <div className="avatar xl" style={{ background: "var(--grad-brand)", fontSize: "1.4rem", flexShrink: 0 }}>
               🤖
             </div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.1rem" }}>
                 {botInfo.first_name}
               </div>
-              <div style={{ color: "var(--clr-brand)", marginBottom: 8 }}>@{botInfo.username}</div>
+              <div style={{ color: "var(--clr-brand)", marginBottom: 4 }}>@{botInfo.username}</div>
               <div style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>ID: {botInfo.id}</div>
             </div>
-            <div style={{ marginLeft: "auto" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
               <button className="btn btn-secondary btn-sm" onClick={handleTestConnection}>
                 Test Connection
               </button>
               {testResult && (
-                <div style={{ marginTop: 8, fontSize: "0.875rem", color: testResult.startsWith("✅") ? "var(--clr-success)" : "var(--clr-danger)" }}>
+                <div style={{ fontSize: "0.875rem", color: testResult.startsWith("✅") ? "var(--clr-success)" : "var(--clr-danger)", textAlign: "right" }}>
                   {testResult}
                 </div>
               )}
@@ -132,15 +138,22 @@ export default function SettingsPage() {
       {/* Webhook Status */}
       {webhookStatus && (
         <div className="card animate-fade-up animate-delay-2" style={{ marginBottom: "var(--space-5)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "var(--space-4)" }}>
-            <h3>Webhook Status</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
+            <div>
+              <h3>Webhook Status</h3>
+              <p style={{ fontSize: "0.8rem", marginTop: 4 }}>
+                {isWebhookSet
+                  ? <span style={{ color: "var(--clr-success)" }}>✓ Active</span>
+                  : <span style={{ color: "var(--clr-warning)" }}>⚠ Not registered</span>}
+              </p>
+            </div>
             <button className="btn btn-secondary btn-sm" onClick={handleSetWebhook}>
-              Register Webhook
+              {isWebhookSet ? "Re-register Webhook" : "Register Webhook"}
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)" }}>
             {[
-              ["URL", (webhookStatus.url as string) || "Not set"],
+              ["URL", webhookUrl || "Not set"],
               ["Pending updates", String(webhookStatus.pending_update_count || 0)],
               ["Last error", (webhookStatus.last_error_message as string) || "None"],
               ["Max connections", String(webhookStatus.max_connections || 40)],
@@ -195,16 +208,30 @@ export default function SettingsPage() {
               </div>
             </label>
 
-            <div className="input-wrapper" style={{ marginTop: "var(--space-2)" }}>
-              <label className="input-label">Default Type</label>
-              <select
-                className="select"
-                value={config.defaultType}
-                onChange={(e) => setConfig({ ...config, defaultType: e.target.value })}
-              >
-                <option value="QUIZ">Quiz (with correct answer)</option>
-                <option value="POLL">Poll (no correct answer)</option>
-              </select>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)", marginTop: "var(--space-2)" }}>
+              <div className="input-wrapper">
+                <label className="input-label">Default Type</label>
+                <select
+                  className="select"
+                  value={config.defaultType}
+                  onChange={(e) => setConfig({ ...config, defaultType: e.target.value })}
+                >
+                  <option value="QUIZ">Quiz (with correct answer)</option>
+                  <option value="POLL">Poll (no correct answer)</option>
+                </select>
+              </div>
+
+              <div className="input-wrapper">
+                <label className="input-label">Default Duration (seconds, 0 = infinite)</label>
+                <input
+                  type="number"
+                  className="input"
+                  min={0}
+                  max={600}
+                  value={config.defaultOpenPeriod || 0}
+                  onChange={(e) => setConfig({ ...config, defaultOpenPeriod: Number(e.target.value) })}
+                />
+              </div>
             </div>
           </div>
         </div>

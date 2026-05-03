@@ -177,7 +177,7 @@ export default function HistoryPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
           {/* Search row */}
           <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
-            <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <div style={{ position: "relative", flex: "1 1 200px", minWidth: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
                 style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -203,7 +203,7 @@ export default function HistoryPage() {
             </div>
             <select
               className="select"
-              style={{ width: "auto", minWidth: 130 }}
+              style={{ flex: "0 1 140px", minWidth: 0 }}
               value={typeFilter}
               onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
             >
@@ -213,7 +213,7 @@ export default function HistoryPage() {
             </select>
             <select
               className="select"
-              style={{ width: "auto", minWidth: 130 }}
+              style={{ flex: "0 1 140px", minWidth: 0 }}
               value={tagsFilter}
               onChange={(e) => { setTagsFilter(e.target.value); setPage(1); }}
               disabled={availableTags.length === 0}
@@ -308,7 +308,7 @@ export default function HistoryPage() {
                       style={{ cursor: "pointer" }}
                       onClick={() => setExpanded(expanded === quiz.id ? null : quiz.id)}
                     >
-                      <td data-label="Question" style={{ maxWidth: 280 }}>
+                      <td data-label="Question" style={{ maxWidth: 0, overflow: "hidden" }}>
                         <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {truncate(quiz.question, 55)}
                         </div>

@@ -545,8 +545,11 @@ textarea.input {
 ═══════════════════════════════════════════════════════════ */
 .table-wrapper {
   overflow-x: auto;
+  overflow-y: visible;
   border-radius: var(--radius-lg);
   border: 1px solid var(--clr-border);
+  width: 100%;
+  max-width: 100%;
 }
 
 table {
@@ -638,6 +641,8 @@ tr:hover td { background: var(--clr-bg-elevated); }
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .page-header {
@@ -658,6 +663,8 @@ tr:hover td { background: var(--clr-bg-elevated); }
 .page-body {
   flex: 1;
   padding: var(--space-8);
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 @media (max-width: 768px) {
@@ -1255,6 +1262,8 @@ tr:hover td { background: var(--clr-bg-elevated); }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
 
