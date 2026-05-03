@@ -37,11 +37,13 @@ export async function GET(req: NextRequest) {
   }));
 
   return NextResponse.json({
-    groups: memberships.map((m) => ({
-      ...m.group,
-      role: m.role,
-      quizCount: m.group._count.quizzes,
-    })),
+    groups: memberships
+      .filter((m) => !m.group.chatId.startsWith("template:"))
+      .map((m) => ({
+        ...m.group,
+        role: m.role,
+        quizCount: m.group._count.quizzes,
+      })),
   });
 }
 

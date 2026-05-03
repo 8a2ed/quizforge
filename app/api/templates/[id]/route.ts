@@ -11,6 +11,16 @@ async function getUser(req: NextRequest) {
   return payload ? (payload as { sub: string }) : null;
 }
 
+async function getTemplateGroupId(userId: string): Promise<string | null> {
+  const group = await withRetry(() =>
+    prisma.group.findUnique({
+      where: { chatId: `template:${userId}` },
+      select: { id: true },
+    })
+  );
+  return group?.id ?? null;
+}
+
 // PATCH /api/templates/[id] — update a template
 export async function PATCH(
   req: NextRequest,
@@ -27,15 +37,19 @@ export async function PATCH(
     return NextResponse.json({ error: "Question and options required" }, { status: 400 });
   }
 
+  // Resolve real DB groupId
+  const groupId = await getTemplateGroupId(user.sub);
+  if (!groupId) return NextResponse.json({ error: "Library not found" }, { status: 404 });
+
   const updated = await withRetry(() =>
     prisma.quiz.updateMany({
-      where: { id, sentById: user.sub, groupId: { startsWith: "template:" } },
+      where: { id, sentById: user.sub, groupId },
       data: {
         question: question.trim(),
         options,
-        type: type === "poll" ? "POLL" : "QUIZ",
+        type: type === "poll" || type === "POLL" ? "POLL" : "QUIZ",
         isAnonymous: isAnonymous ?? true,
-        correctOptionId: type === "quiz" ? (correctOptionId ?? null) : null,
+        correctOptionId: (type === "quiz" || type === "QUIZ") ? (correctOptionId ?? null) : null,
         explanation: explanation?.trim() || null,
         allowsMultiple: allowsMultiple ?? false,
         openPeriod: openPeriod || null,
@@ -61,10 +75,11 @@ export async function DELETE(
 
   const { id } = await params;
 
+  const groupId = await getTemplateGroupId(user.sub);
+  if (!groupId) return NextResponse.json({ error: "Library not found" }, { status: 404 });
+
   const deleted = await withRetry(() =>
-    prisma.quiz.deleteMany({
-      where: { id, sentById: user.sub, groupId: { startsWith: "template:" } },
-    })
+    prisma.quiz.deleteMany({ where: { id, sentById: user.sub, groupId } })
   );
 
   if (deleted.count === 0) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-import { prisma } from "@/lib/db";
+import { prisma, withRetry } from "@/lib/db";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -11,28 +11,62 @@ async function getUser(req: NextRequest) {
   return payload ? (payload as { sub: string }) : null;
 }
 
+/** Resolve the real DB group.id for the user's virtual template group */
+async function getTemplateGroupId(userId: string): Promise<string | null> {
+  const templateChatId = `template:${userId}`;
+  const group = await withRetry(() =>
+    prisma.group.findUnique({ where: { chatId: templateChatId }, select: { id: true } })
+  );
+  return group?.id ?? null;
+}
+
+/** Ensure the virtual template group exists and return its DB id */
+async function ensureTemplateGroup(userId: string): Promise<string> {
+  const templateChatId = `template:${userId}`;
+  let group = await withRetry(() =>
+    prisma.group.findUnique({ where: { chatId: templateChatId }, select: { id: true } })
+  );
+  if (!group) {
+    group = await withRetry(() =>
+      prisma.group.create({
+        data: { chatId: templateChatId, title: "Templates", isForum: false, botConfig: { create: {} } },
+        select: { id: true },
+      })
+    );
+    await withRetry(() =>
+      prisma.groupMember.create({ data: { userId, groupId: group!.id, role: "OWNER" } })
+    );
+  }
+  return group.id;
+}
+
 // GET /api/templates — list user's saved templates
 export async function GET(req: NextRequest) {
   const user = await getUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Use a special group marker "template" stored in quiz with groupId = user.sub
-  const templates = await prisma.quiz.findMany({
-    where: { sentById: user.sub, groupId: `template:${user.sub}` },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      question: true,
-      options: true,
-      type: true,
-      isAnonymous: true,
-      correctOptionId: true,
-      explanation: true,
-      allowsMultiple: true,
-      openPeriod: true,
-      createdAt: true,
-    },
-  });
+  const groupId = await getTemplateGroupId(user.sub);
+  if (!groupId) return NextResponse.json({ templates: [] });
+
+  const templates = await withRetry(() =>
+    prisma.quiz.findMany({
+      where: { sentById: user.sub, groupId },  // ← real DB UUID, not chatId
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        question: true,
+        options: true,
+        type: true,
+        isAnonymous: true,
+        correctOptionId: true,
+        explanation: true,
+        allowsMultiple: true,
+        openPeriod: true,
+        tags: true,
+        createdAt: true,
+      },
+    })
+  );
 
   return NextResponse.json({ templates });
 }
@@ -43,51 +77,36 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod } = body;
+  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags } = body;
 
   if (!question?.trim() || !options?.length) {
     return NextResponse.json({ error: "Question and options are required" }, { status: 400 });
   }
 
-  // Ensure template group exists (virtual group for user templates)
-  const templateGroupId = `template:${user.sub}`;
+  const groupId = await ensureTemplateGroup(user.sub);
 
-  // We need a real group for the foreign key — use a virtual placeholder
-  let group = await prisma.group.findUnique({ where: { chatId: templateGroupId } });
-  if (!group) {
-    group = await prisma.group.create({
+  const template = await withRetry(() =>
+    prisma.quiz.create({
       data: {
-        chatId: templateGroupId,
-        title: "Templates",
-        isForum: false,
-        botConfig: { create: {} },
+        question: question.trim(),
+        options,
+        type: type === "poll" ? "POLL" : "QUIZ",
+        isAnonymous: isAnonymous ?? true,
+        correctOptionId: type === "quiz" ? (correctOptionId ?? null) : null,
+        explanation: explanation?.trim() || null,
+        allowsMultiple: allowsMultiple ?? false,
+        openPeriod: openPeriod || null,
+        tags: tags || [],
+        groupId,
+        sentById: user.sub,
       },
-    });
-    // Add user as owner of this template group
-    await prisma.groupMember.create({
-      data: { userId: user.sub, groupId: group.id, role: "OWNER" },
-    });
-  }
-
-  const template = await prisma.quiz.create({
-    data: {
-      question: question.trim(),
-      options,
-      type: type === "poll" ? "POLL" : "QUIZ",
-      isAnonymous: isAnonymous ?? true,
-      correctOptionId: type === "quiz" ? correctOptionId : null,
-      explanation: explanation?.trim() || null,
-      allowsMultiple: allowsMultiple ?? false,
-      openPeriod: openPeriod || null,
-      groupId: group.id,
-      sentById: user.sub,
-    },
-  });
+    })
+  );
 
   return NextResponse.json({ ok: true, template });
 }
 
-// DELETE /api/templates/[id]
+// DELETE /api/templates — delete by ?id=... (legacy, kept for compat)
 export async function DELETE(req: NextRequest) {
   const user = await getUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -96,9 +115,12 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-  await prisma.quiz.deleteMany({
-    where: { id, sentById: user.sub, groupId: { startsWith: "template:" } },
-  });
+  const groupId = await getTemplateGroupId(user.sub);
+  if (!groupId) return NextResponse.json({ error: "No library found" }, { status: 404 });
+
+  await withRetry(() =>
+    prisma.quiz.deleteMany({ where: { id, sentById: user.sub, groupId } })
+  );
 
   return NextResponse.json({ ok: true });
 }
