@@ -41,20 +41,40 @@ function parseSmartText(text: string): QuizPreview[] {
     if (!chunk.trim()) continue;
     const lines = chunk.split("\n").map(l => l.trim()).filter(Boolean);
     let question = "", options: string[] = [], correctAnswerStr = "", explanationStr = "";
+
     for (const line of lines) {
-      const ll = line.toLowerCase();
+      // Answer / Explanation keywords
       if (/^(answer|correct answer|correct|الجواب|الإجابة)\s*:/i.test(line)) {
         correctAnswerStr = line.split(":").slice(1).join(":").trim();
-      } else if (/^(explanation|note|شرح|ملاحظة)\s*:/i.test(line)) {
+        continue;
+      }
+      if (/^(explanation|note|شرح|ملاحظة)\s*:/i.test(line)) {
         explanationStr = line.split(":").slice(1).join(":").trim();
-      } else if (/^([a-dA-Dأبجد][\.\)]\s*|[-•]\s+|\d+[\.\)]\s*)/.test(line)) {
-        options.push(line.replace(/^([a-dA-Dأبجد][\.\)]\s*|[-•]\s+|\d+[\.\)]\s*)/, "").trim());
+        continue;
+      }
+
+      const isLetterOption  = /^[a-dA-Dأبجد][\.\)]\s+\S/.test(line); // A. text  or  أ. text
+      const isBulletOption  = /^[-•*]\s+\S/.test(line);                // - text  or  • text
+      const isNumberedLine  = /^\d+[\.\)]\s+\S/.test(line);            // 1. text
+
+      if (isLetterOption || isBulletOption) {
+        // Always an answer option
+        options.push(line.replace(/^[a-dA-Dأبجد][\.\)]\s+|^[-•*]\s+/, "").trim());
+      } else if (isNumberedLine && question) {
+        // Numbered line AND question is already set → it's a numbered option (1. text)
+        options.push(line.replace(/^\d+[\.\)]\s+/, "").trim());
       } else {
-        if (options.length === 0) question += (question ? "\n" : "") + line;
-        else if (!correctAnswerStr) explanationStr += (explanationStr ? " " : "") + line;
+        // Everything else → question text (or trailing explanation)
+        if (options.length === 0) {
+          question += (question ? "\n" : "") + line;
+        } else {
+          explanationStr += (explanationStr ? " " : "") + line;
+        }
       }
     }
-    question = question.replace(/^q\s*\d*:\s*/i, "").replace(/^\d+[\.\)]\s*/, "").trim();
+
+    // Strip leading "Q1:" or "1." prefix from question
+    question = question.replace(/^q\s*\d*\s*:\s*/i, "").replace(/^\d+[\.\)]\s+/, "").trim();
     let correctOptionId: number | null = null;
     if (correctAnswerStr && options.length > 0) {
       const arabicMap: Record<string, number> = { "أ": 0, "ب": 1, "ج": 2, "د": 3 };
