@@ -25,6 +25,8 @@ const ICONS = {
   groups:      "M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z",
   logout:      "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
   library:     "M4 19.5A2.5 2.5 0 016.5 17H20M4 19.5A2.5 2.5 0 014 17V5a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6.5",
+  scheduled:   "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  exams:       "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -64,15 +66,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Sidebar nav items (group-specific)
   const groupNavItems = groupId
     ? [
-        { href: `/dashboard/${groupId}`,           icon: ICONS.home,      label: "Overview"    },
-        { href: `/dashboard/${groupId}/quiz/new`,  icon: ICONS.quiz,      label: "Create Quiz" },
-        { href: `/dashboard/${groupId}/bulk`,      icon: ICONS.bulk,      label: "Bulk Import"  },
-        { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: "Library"     },
-        { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
-        { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"   },
-        { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: "Topics"      },
-        { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: "Admins"      },
-        { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: "Settings"    },
+        { href: `/dashboard/${groupId}`,            icon: ICONS.home,      label: "Overview"    },
+        { href: `/dashboard/${groupId}/quiz/new`,   icon: ICONS.quiz,      label: "Create Quiz" },
+        { href: `/dashboard/${groupId}/bulk`,       icon: ICONS.bulk,      label: "Bulk Import"  },
+        { href: `/dashboard/${groupId}/library`,    icon: ICONS.library,   label: "Library"     },
+        { href: `/dashboard/${groupId}/history`,    icon: ICONS.history,   label: "History"     },
+        { href: `/dashboard/${groupId}/scheduled`,  icon: ICONS.scheduled, label: "Scheduled"   },
+        { href: `/dashboard/${groupId}/exams`,      icon: ICONS.exams,     label: "Exams"       },
+        { href: `/dashboard/${groupId}/analytics`,  icon: ICONS.analytics, label: "Analytics"   },
+        { href: `/dashboard/${groupId}/topics`,     icon: ICONS.topics,    label: "Topics"      },
+        { href: `/dashboard/${groupId}/admins`,     icon: ICONS.admins,    label: "Admins"      },
+        { href: `/dashboard/${groupId}/settings`,   icon: ICONS.settings,  label: "Settings"    },
       ]
     : [];
 

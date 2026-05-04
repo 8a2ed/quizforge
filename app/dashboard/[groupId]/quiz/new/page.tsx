@@ -89,11 +89,16 @@ export default function NewQuizPage() {
         if (draft.tags && Array.isArray(draft.tags)) setTags(draft.tags);
         if (draft.allowAddingOptions !== undefined) setAllowAddingOptions(draft.allowAddingOptions);
         if (draft.allowRevoting !== undefined) setAllowRevoting(draft.allowRevoting);
+        // Restore topic from duplicate — applied after topics are loaded
+        if (draft.topicId && draft.topicName) {
+          setSelectedTopic({ message_thread_id: draft.topicId, name: draft.topicName, icon_color: 0 });
+        }
       } catch {
         console.error("Failed to load draft from URL");
       }
     }
   }, [searchParams]);
+
 
   // Load topics
   const loadTopics = useCallback(() => {

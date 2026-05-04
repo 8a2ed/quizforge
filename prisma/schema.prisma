@@ -36,6 +36,7 @@ model User {
   memberships  GroupMember[]
   sentQuizzes  Quiz[]
   credential   InstructorCredential?
+  createdExams Exam[]
 
   @@map("users")
 }
@@ -68,6 +69,7 @@ model Group {
   quizzes     Quiz[]
   topics      Topic[]
   botConfig   BotConfig?
+  exams       Exam[]
 
   @@map("groups")
 }
@@ -170,4 +172,42 @@ model BotConfig {
   group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@map("bot_configs")
+}
+
+model Exam {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?
+  questions    Json     // Array<{ question, options, correctOptionId, explanation }>
+  timeLimit    Int?     // seconds; null = no limit
+  passingScore Int      @default(60) // percentage
+  isPublished  Boolean  @default(false)
+  launchMsgId  Int?     // Telegram message_id of the launch announcement
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  groupId     String
+  createdById String
+
+  group     Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdBy User         @relation(fields: [createdById], references: [id])
+  results   ExamResult[]
+
+  @@map("exams")
+}
+
+model ExamResult {
+  id          String   @id @default(cuid())
+  name        String
+  telegramId  String?
+  answers     Json     // { [questionIndex]: selectedOptionId }
+  score       Int      // percentage 0-100
+  passed      Boolean
+  duration    Int?     // seconds taken
+  completedAt DateTime @default(now())
+
+  examId String
+  exam   Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@map("exam_results")
 }
