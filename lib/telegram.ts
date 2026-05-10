@@ -1,18 +1,47 @@
 const BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
-async function call<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${BASE}/${method}`, {
-    method: body ? "POST" : "GET",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-  });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.description || `Telegram API error (${method})`);
-  return json.result as T;
+// ── Default timeouts ──────────────────────────────────────────────────────────
+const DEFAULT_TIMEOUT_MS = 15_000; // 15s for regular calls
+const SEND_TIMEOUT_MS    = 25_000; // 25s for send operations (polls, photos)
+
+async function call<T>(
+  method: string,
+  body?: Record<string, unknown>,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${BASE}/${method}`, {
+      method: body ? "POST" : "GET",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      // Telegram sometimes returns HTTP errors before JSON
+      throw new Error(`Telegram HTTP ${res.status} on ${method}`);
+    }
+
+    const json = await res.json();
+    if (!json.ok) {
+      throw new Error(json.description || `Telegram API error (${method})`);
+    }
+    return json.result as T;
+  } catch (err) {
+    if ((err as { name?: string }).name === "AbortError") {
+      throw new Error(`Telegram API timeout after ${timeoutMs}ms (${method})`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface TelegramUser {
   id: number;
@@ -76,7 +105,7 @@ export interface SendPollParams {
 export interface SendPhotoParams {
   chat_id: string | number;
   message_thread_id?: number;
-  photo: string; // URL or file_id
+  photo: string;
   caption?: string;
   parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
   reply_to_message_id?: number;
@@ -86,7 +115,7 @@ export interface TelegramPhotoMessage {
   message_id: number;
 }
 
-// ─── API Methods ──────────────────────────────────────────────────────────────
+// ── API Methods ───────────────────────────────────────────────────────────────
 
 export const telegram = {
   getMe(): Promise<TelegramUser> {
@@ -114,23 +143,38 @@ export const telegram = {
   },
 
   sendPoll(params: SendPollParams): Promise<TelegramMessage> {
-    return call("sendPoll", params as unknown as Record<string, unknown>);
+    return call("sendPoll", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
   },
 
   sendPhoto(params: SendPhotoParams): Promise<TelegramPhotoMessage> {
-    return call("sendPhoto", params as unknown as Record<string, unknown>);
+    return call("sendPhoto", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
   },
 
-  /** Upload a base64-encoded image to Telegram via multipart (Node 18+ native Blob) */
+  sendMessage(params: Record<string, unknown>): Promise<TelegramMessage> {
+    return call("sendMessage", params, SEND_TIMEOUT_MS);
+  },
+
+  stopPoll(chat_id: string | number, message_id: number): Promise<Record<string, unknown>> {
+    return call("stopPoll", { chat_id, message_id }, SEND_TIMEOUT_MS);
+  },
+
+  answerCallbackQuery(callback_query_id: string, text?: string, show_alert?: boolean): Promise<boolean> {
+    return call("answerCallbackQuery", {
+      callback_query_id,
+      ...(text ? { text } : {}),
+      ...(show_alert ? { show_alert } : {}),
+    });
+  },
+
+  /** Upload a base64-encoded image to Telegram via multipart */
   async sendPhotoBase64(params: {
     chat_id: string | number;
     message_thread_id?: number;
-    photoBase64: string;  // raw base64, no data-URL prefix
+    photoBase64: string;
     mimeType?: string;
     caption?: string;
   }): Promise<TelegramPhotoMessage> {
     const mimeType = params.mimeType || "image/jpeg";
-    // Convert base64 → Blob via data-URL fetch (works in Node 18+, no Buffer needed)
     const dataUrl = `data:${mimeType};base64,${params.photoBase64}`;
     const blobRes = await fetch(dataUrl);
     const blob = await blobRes.blob();
@@ -141,10 +185,18 @@ export const telegram = {
     if (params.caption) fd.append("caption", params.caption);
     fd.append("photo", blob, "photo.jpg");
 
-    const res = await fetch(`${BASE}/sendPhoto`, { method: "POST", body: fd, cache: "no-store" });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.description || "Telegram sendPhoto error");
-    return json.result as TelegramPhotoMessage;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${BASE}/sendPhoto`, {
+        method: "POST", body: fd, cache: "no-store", signal: controller.signal,
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.description || "Telegram sendPhoto error");
+      return json.result as TelegramPhotoMessage;
+    } finally {
+      clearTimeout(timer);
+    }
   },
 
   deleteMessage(chat_id: string | number, message_id: number): Promise<boolean> {
@@ -155,7 +207,8 @@ export const telegram = {
     return call("setWebhook", {
       url,
       ...(secret_token ? { secret_token } : {}),
-      allowed_updates: ["poll_answer", "poll", "message"],
+      // Include callback_query for the Exam system inline buttons
+      allowed_updates: ["poll_answer", "poll", "message", "callback_query"],
       drop_pending_updates: false,
     });
   },
