@@ -86,24 +86,27 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
     },
   }));
 
-  // If publishing, send launch message to Telegram group
+  // If publishing (or re-publishing), send/re-send launch message to Telegram group
   if (isPublished === true && updated.count > 0) {
-    const exam = await prisma.exam.findFirst({ where: { id, groupId }, include: { group: true } });
-    if (exam && exam.group) {
-      const questions = exam.questions as Array<Record<string, unknown>>;
+    const exam = await withRetry(() => prisma.exam.findFirst({ where: { id, groupId }, include: { group: true } }));
+    if (exam?.group) {
+      const qs = exam.questions as Array<Record<string, unknown>>;
       const msg = [
-        `📋 *${exam.title}*`,
+        `📋 *${exam.title.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&")}*`,
         exam.description ? `\n${exam.description}` : "",
-        `\n\n📊 *${questions.length} questions*`,
+        `\n\n📊 *${qs.length} question${qs.length !== 1 ? "s" : ""}*`,
         exam.timeLimit ? `\n⏱ ${Math.floor(exam.timeLimit / 60)} minute time limit` : "",
         `\n✅ Passing score: ${exam.passingScore}%`,
-        "\n\n*Press the button below to start the exam in your DMs.*",
+        "\n\n*Press the button below to start the exam in your DMs\\.*",
       ].filter(Boolean).join("");
 
       try {
+        const ac = new AbortController();
+        const t = setTimeout(() => ac.abort(), 15_000);
         const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: ac.signal,
           body: JSON.stringify({
             chat_id: exam.group.chatId,
             text: msg,
@@ -113,11 +116,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
             },
           }),
         });
+        clearTimeout(t);
         const data = await res.json();
         if (data.ok) {
-          await prisma.exam.update({ where: { id }, data: { launchMsgId: data.result.message_id } });
+          await withRetry(() => prisma.exam.update({ where: { id }, data: { launchMsgId: data.result.message_id } }));
+        } else {
+          console.error("[exam launch] Telegram error:", data);
         }
-      } catch (e) { console.error("[exam launch]", e); }
+      } catch (e) { console.error("[exam launch] fetch error:", e); }
     }
   }
 
