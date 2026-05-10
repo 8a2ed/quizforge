@@ -14,7 +14,19 @@ interface Template {
   allowsMultiple: boolean;
   openPeriod: number | null;
   tags?: string[];
+  topicId?: number | null;
+  topicName?: string | null;
   createdAt: string;
+}
+
+type SortKey = "newest" | "oldest" | "az" | "type";
+
+function timeAgo(iso: string): string {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 interface Topic { message_thread_id: number; name: string; }
@@ -43,6 +55,9 @@ export default function LibraryPage() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sendTopicId, setSendTopicId] = useState<number | "">("");
   const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [tagFilter, setTagFilter] = useState("");
+  const [perQuizTopic, setPerQuizTopic] = useState<Record<string, number | "">>({});
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [progress, setProgress] = useState<SendProgress | null>(null);
   const cancelRef = useRef(false);
@@ -66,14 +81,22 @@ export default function LibraryPage() {
   }, [groupId]);
 
   // ── Derived state ─────────────────────────────────────────────────
-  const topicName = topics.find(t => t.message_thread_id === sendTopicId)?.name;
+  const allTags = [...new Set(templates.flatMap(t => t.tags || []))].sort();
 
-  const filtered = templates.filter(t => {
-    if (!showSent && sentIds.has(t.id)) return false;
-    if (!search) return true;
-    return t.question.toLowerCase().includes(search.toLowerCase()) ||
-      t.tags?.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
-  });
+  const filtered = templates
+    .filter(t => {
+      if (!showSent && sentIds.has(t.id)) return false;
+      if (tagFilter && !t.tags?.includes(tagFilter)) return false;
+      if (!search) return true;
+      return t.question.toLowerCase().includes(search.toLowerCase()) ||
+        t.tags?.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
+    })
+    .sort((a, b) => {
+      if (sortKey === "oldest") return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (sortKey === "az") return a.question.localeCompare(b.question);
+      if (sortKey === "type") return a.type.localeCompare(b.type);
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
 
   const visibleSelected = [...selected].filter(id => filtered.some(t => t.id === id));
 
@@ -95,6 +118,8 @@ export default function LibraryPage() {
 
       const t = toSend[i];
       try {
+        const qTopicId = perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : sendTopicId;
+        const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name;
         const res = await fetch(`/api/groups/${groupId}/quiz/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -108,8 +133,8 @@ export default function LibraryPage() {
             allowsMultiple: t.allowsMultiple,
             openPeriod: t.openPeriod,
             tags: t.tags,
-            topicId: sendTopicId || undefined,
-            topicName: topicName || undefined,
+            topicId: qTopicId || undefined,
+            topicName: qTopicName || undefined,
           }),
         });
 
@@ -149,6 +174,17 @@ export default function LibraryPage() {
 
   const handleSendOne = (t: Template) => {
     sendSequentially([t]);
+  };
+
+  // ── Duplicate ──────────────────────────────────────────────────────
+  const duplicateOne = async (t: Template) => {
+    const res = await fetch("/api/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: `${t.question} (copy)`, options: t.options, type: t.type, isAnonymous: t.isAnonymous, correctOptionId: t.correctOptionId, explanation: t.explanation, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags }),
+    });
+    if (res.ok) { showToast("success", "Duplicated ✓"); load(); }
+    else showToast("error", "Failed to duplicate");
   };
 
   // ── Delete ─────────────────────────────────────────────────────────
@@ -307,31 +343,29 @@ export default function LibraryPage() {
       {/* Controls */}
       <div className="card animate-fade-up animate-delay-1" style={{ marginBottom: "var(--space-5)", padding: "var(--space-4)" }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {/* Search */}
-          <div style={{ position: "relative", flex: "1 1 180px", minWidth: 0 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
-              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-            </svg>
-            <input className="input" style={{ paddingLeft: 32 }} placeholder="Search…"
-              value={search} onChange={e => setSearch(e.target.value)} />
+          <div style={{ position: "relative", flex: "1 1 160px", minWidth: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input className="input" style={{ paddingLeft: 32 }} placeholder="Search questions…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-
-          {/* Topic */}
-          <select className="select" style={{ flex: "0 1 180px", minWidth: 0 }}
-            value={sendTopicId} onChange={e => setSendTopicId(e.target.value ? Number(e.target.value) : "")}>
-            <option value="">📌 General</option>
-            {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>{t.name}</option>)}
+          <select className="select" style={{ flex: "0 1 170px", minWidth: 0 }} value={sendTopicId} onChange={e => setSendTopicId(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">📌 Default: General</option>
+            {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>📂 {t.name}</option>)}
           </select>
-
-          {/* Selection */}
-          <div style={{ display: "flex", gap: 6 }}>
-            <button className="btn btn-ghost btn-sm" onClick={filtered.length === selected.size ? selectNone : selectAll}>
-              {filtered.length > 0 && [...selected].filter(id => filtered.some(t => t.id === id)).length === filtered.length ? "Deselect All" : "Select All"}
-            </button>
-          </div>
-
-          {/* Show sent toggle */}
+          {allTags.length > 0 && (
+            <select className="select" style={{ flex: "0 1 140px", minWidth: 0 }} value={tagFilter} onChange={e => setTagFilter(e.target.value)}>
+              <option value="">🏷 All tags</option>
+              {allTags.map(tag => <option key={tag} value={tag}>#{tag}</option>)}
+            </select>
+          )}
+          <select className="select" style={{ flex: "0 1 130px", minWidth: 0 }} value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}>
+            <option value="newest">🕐 Newest</option>
+            <option value="oldest">🕐 Oldest</option>
+            <option value="az">🔤 A→Z</option>
+            <option value="type">📊 By Type</option>
+          </select>
+          <button className="btn btn-ghost btn-sm" onClick={visibleSelected.length === filtered.length && filtered.length > 0 ? selectNone : selectAll}>
+            {visibleSelected.length === filtered.length && filtered.length > 0 ? "Deselect All" : `Select All (${filtered.length})`}
+          </button>
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.84rem", cursor: "pointer", whiteSpace: "nowrap" }}>
             <div className="toggle-switch" style={{ transform: "scale(0.85)" }}>
               <input type="checkbox" checked={showSent} onChange={e => setShowSent(e.target.checked)} />
@@ -340,6 +374,13 @@ export default function LibraryPage() {
             Show sent ({sentIds.size})
           </label>
         </div>
+        {(tagFilter || search) && (
+          <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>{filtered.length} of {templates.length} shown</span>
+            {tagFilter && <button className="badge badge-muted" style={{ cursor: "pointer", border: "none" }} onClick={() => setTagFilter("")}>#{tagFilter} ✕</button>}
+            {search && <button className="badge badge-muted" style={{ cursor: "pointer", border: "none" }} onClick={() => setSearch("")}>"{search}" ✕</button>}
+          </div>
+        )}
       </div>
 
       {/* List */}
@@ -385,19 +426,23 @@ export default function LibraryPage() {
                     <span className={`badge ${t.type === "QUIZ" ? "badge-brand" : "badge-accent"}`} style={{ fontSize: "0.7rem" }}>{t.type}</span>
                     <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>#{idx + 1}</span>
                     {isSent && <span className="badge" style={{ background: "var(--clr-success-muted)", color: "var(--clr-success)", fontSize: "0.7rem" }}>✓ Sent</span>}
-                    {t.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.68rem" }}>#{tag}</span>)}
+                    {t.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.68rem", cursor: "pointer" }} onClick={e => { e.stopPropagation(); setTagFilter(tag); }}>#{tag}</span>)}
                   </div>
                   <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
                     {!isEditing && !isSent && (
                       <>
-                        <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem" }} onClick={() => startEdit(t)}>✏️</button>
-                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-success)", fontSize: "0.78rem" }}
+                        <button className="btn btn-ghost btn-sm" title="Edit" style={{ fontSize: "0.78rem" }} onClick={() => startEdit(t)}>✏️</button>
+                        <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
+                        <button className="btn btn-ghost btn-sm" title="Send now" style={{ color: "var(--clr-success)", fontSize: "0.78rem" }}
                           onClick={() => handleSendOne(t)} disabled={!!progress?.active}>🚀</button>
-                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
+                        <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
                       </>
                     )}
                     {!isEditing && isSent && (
-                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
+                      <>
+                        <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
+                        <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
+                      </>
                     )}
                     {isEditing && (
                       <>
@@ -464,11 +509,23 @@ export default function LibraryPage() {
                         💡 {t.explanation}
                       </div>
                     )}
-                    <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
-                      {t.isAnonymous && <span>🔒 Anonymous</span>}
+                    <div style={{ marginTop: 8 }} onClick={e => e.stopPropagation()}>
+                      <select
+                        className="select"
+                        style={{ fontSize: "0.75rem", padding: "3px 8px", height: 28, width: "100%", maxWidth: 240 }}
+                        value={perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : sendTopicId}
+                        onChange={e => setPerQuizTopic(prev => ({ ...prev, [t.id]: e.target.value ? Number(e.target.value) : "" }))}
+                      >
+                        <option value="">📌 General (default)</option>
+                        {topics.map(tp => <option key={tp.message_thread_id} value={tp.message_thread_id}>📂 {tp.name}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", fontSize: "0.72rem", color: "var(--clr-text-muted)", alignItems: "center" }}>
+                      {t.isAnonymous && <span>🔒 Anon</span>}
                       {t.openPeriod ? <span>⏱ {t.openPeriod}s</span> : null}
                       {t.allowsMultiple && <span>☑ Multi</span>}
-                      <span style={{ marginLeft: "auto" }}>{new Date(t.createdAt).toLocaleDateString()}</span>
+                      {t.topicName && <span>📂 {t.topicName}</span>}
+                      <span style={{ marginLeft: "auto" }} title={new Date(t.createdAt).toLocaleString()}>🕐 {timeAgo(t.createdAt)}</span>
                     </div>
                   </>
                 )}
