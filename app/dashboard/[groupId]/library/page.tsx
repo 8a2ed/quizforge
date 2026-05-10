@@ -70,10 +70,13 @@ export default function LibraryPage() {
   const load = useCallback(() => {
     setLoading(true);
     fetch("/api/templates")
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(d => { setTemplates(d.templates || []); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
+      .catch(e => { setLoading(false); showToast("error", `Failed to load library: ${e.message}`); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {

@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
   const templates = await withRetry(() =>
     prisma.quiz.findMany({
-      where: { sentById: user.sub, groupId },
+      where: { groupId },          // groupId is already user-specific (template:userId)
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
