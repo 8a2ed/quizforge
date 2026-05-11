@@ -292,7 +292,7 @@ export default function NewQuizPage() {
           correctOptionId: type === "quiz" ? correctOptionId : null,
           explanation: explanation.trim() || null,
           allowsMultiple,
-          openPeriod,
+          openPeriod: showDuration && openPeriod > 0 ? openPeriod : null,
         }),
       });
       if (res.ok) addToast("success", `Template saved! ${E.ok}`);

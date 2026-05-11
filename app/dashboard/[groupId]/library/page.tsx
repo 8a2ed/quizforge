@@ -459,16 +459,31 @@ export default function LibraryPage() {
                 {/* Edit mode */}
                 {isEditing ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }} onClick={e => e.stopPropagation()}>
-                    <textarea className="input" rows={2} value={editDraft.question || ""} onChange={e => setEditDraft(d => ({ ...d, question: e.target.value }))} />
+                    {/* Question */}
+                    <textarea className="input" rows={2} placeholder="Question text…"
+                      value={editDraft.question || ""}
+                      onChange={e => setEditDraft(d => ({ ...d, question: e.target.value }))} />
+
+                    {/* Options */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                       {(editDraft.options || []).map((opt, i) => (
                         <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <input type="radio" name={`e-${t.id}`} checked={editDraft.correctOptionId === i}
-                            onChange={() => setEditDraft(d => ({ ...d, correctOptionId: i, type: "QUIZ" }))} />
+                          {editDraft.type === "QUIZ" && (
+                            <input type="radio" name={`e-${t.id}`}
+                              checked={editDraft.correctOptionId === i}
+                              onChange={() => setEditDraft(d => ({ ...d, correctOptionId: i }))}
+                              title="Mark as correct answer" />
+                          )}
+                          <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)", width: 18 }}>{String.fromCharCode(65+i)}.</span>
                           <input className="input" value={opt} style={{ flex: 1 }} onChange={e => updateOpt(i, e.target.value)} />
                           {(editDraft.options || []).length > 2 && (
                             <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 6px" }}
-                              onClick={() => setEditDraft(d => ({ ...d, options: (d.options || []).filter((_, j) => j !== i) }))}>✕</button>
+                              onClick={() => {
+                                const newOpts = (editDraft.options || []).filter((_, j) => j !== i);
+                                const cur = editDraft.correctOptionId ?? 0;
+                                const newCorrect = cur >= newOpts.length ? newOpts.length - 1 : cur;
+                                setEditDraft(d => ({ ...d, options: newOpts, correctOptionId: newCorrect }));
+                              }}>✕</button>
                           )}
                         </div>
                       ))}
@@ -477,19 +492,57 @@ export default function LibraryPage() {
                           onClick={() => setEditDraft(d => ({ ...d, options: [...(d.options || []), ""] }))}>+ Option</button>
                       )}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 8 }}>
-                      <div><label className="input-label">Type</label>
-                        <select className="select" value={editDraft.type} onChange={e => setEditDraft(d => ({ ...d, type: e.target.value as "QUIZ"|"POLL" }))}>
-                          <option value="QUIZ">Quiz</option><option value="POLL">Poll</option>
+
+                    {/* Explanation */}
+                    <input className="input" placeholder="💡 Explanation (optional)" value={editDraft.explanation || ""}
+                      onChange={e => setEditDraft(d => ({ ...d, explanation: e.target.value }))} />
+
+                    {/* Tags */}
+                    <input className="input" placeholder="Tags: math, easy (comma-separated)"
+                      value={(editDraft.tags || []).join(", ")}
+                      onChange={e => setEditDraft(d => ({ ...d, tags: e.target.value.split(",").map(x => x.trim()).filter(Boolean) }))} />
+
+                    {/* Grid: Type + openPeriod */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="input-label">Type</label>
+                        <select className="select" value={editDraft.type}
+                          onChange={e => setEditDraft(d => ({ ...d, type: e.target.value as "QUIZ" | "POLL", correctOptionId: e.target.value === "POLL" ? null : d.correctOptionId }))}>
+                          <option value="QUIZ">Quiz (has correct answer)</option>
+                          <option value="POLL">Poll (open vote)</option>
                         </select>
                       </div>
-                      <div><label className="input-label">Tags</label>
-                        <input className="input" placeholder="math, easy" value={(editDraft.tags || []).join(", ")}
-                          onChange={e => setEditDraft(d => ({ ...d, tags: e.target.value.split(",").map(t => t.trim()).filter(Boolean) }))} />
+                      <div>
+                        <label className="input-label">⏱ Auto-close</label>
+                        <select className="select" value={editDraft.openPeriod ?? 0}
+                          onChange={e => setEditDraft(d => ({ ...d, openPeriod: Number(e.target.value) || null }))}>
+                          <option value={0}>No limit</option>
+                          <option value={30}>30 seconds</option>
+                          <option value={60}>1 minute</option>
+                          <option value={300}>5 minutes</option>
+                          <option value={600}>10 minutes</option>
+                          <option value={1800}>30 minutes</option>
+                          <option value={3600}>1 hour</option>
+                        </select>
                       </div>
                     </div>
-                    <input className="input" placeholder="Explanation (optional)" value={editDraft.explanation || ""}
-                      onChange={e => setEditDraft(d => ({ ...d, explanation: e.target.value }))} />
+
+                    {/* Toggle row */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {[
+                        { label: "🔒 Anonymous",  key: "isAnonymous",        desc: "Hide voter names" },
+                        { label: "☑ Multi-answer", key: "allowsMultiple",    desc: "Allow multiple selections (poll only)" },
+                        { label: "✍ Add options",  key: "allowAddingOptions", desc: "Voters can suggest options" },
+                        { label: "↩ Revoting",    key: "allowRevoting",      desc: "Voters can change answer" },
+                      ].map(({ label, key, desc }) => (
+                        <button key={key} title={desc}
+                          onClick={() => setEditDraft(d => ({ ...d, [key]: !d[key as keyof typeof d] }))}
+                          className="btn btn-ghost btn-sm"
+                          style={{ border: `1px solid ${editDraft[key as keyof typeof editDraft] ? "var(--clr-brand)" : "var(--clr-border)"}`, color: editDraft[key as keyof typeof editDraft] ? "var(--clr-brand)" : "var(--clr-text-muted)", fontSize: "0.75rem" }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   /* View mode */
