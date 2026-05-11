@@ -70,6 +70,10 @@ export default function NewQuizPage() {
   const [showImport, setShowImport] = useState(false);
   const [importTemplates, setImportTemplates] = useState<Array<{id:string;question:string;options:string[];type:string;correctOptionId:number|null;explanation:string|null;isAnonymous:boolean;allowsMultiple:boolean;allowAddingOptions:boolean;allowRevoting:boolean;openPeriod:number|null;tags:string[]}>>([]);
   const [importLoading, setImportLoading] = useState(false);
+  // Save-to-collection modal
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveCollId, setSaveCollId] = useState<string>("");
+  const [saveCollections, setSaveCollections] = useState<{id:string;name:string;emoji:string;color:string}[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load draft from URL (for duplication)
@@ -278,11 +282,24 @@ export default function NewQuizPage() {
     }
   };
 
-  const handleSaveTemplate = async () => {
+  const openSaveModal = async () => {
     if (!question.trim() || options.some((o) => !o.trim())) {
       return addToast("error", "Fill in the question and all options first.");
     }
+    // Lazy-load collections for the picker
+    if (saveCollections.length === 0) {
+      try {
+        const r = await fetch("/api/collections");
+        const d = await r.json();
+        setSaveCollections(d.collections || []);
+      } catch { /* ignore */ }
+    }
+    setShowSaveModal(true);
+  };
+
+  const doSaveTemplate = async () => {
     setSavingTemplate(true);
+    setShowSaveModal(false);
     try {
       const res = await fetch("/api/templates", {
         method: "POST",
@@ -301,8 +318,21 @@ export default function NewQuizPage() {
           tags: tags.length > 0 ? tags : [],
         }),
       });
-      if (res.ok) addToast("success", `Template saved! ${E.ok}`);
-      else addToast("error", "Failed to save template");
+      if (!res.ok) { addToast("error", "Failed to save template"); return; }
+      const data = await res.json();
+      // Optionally add to selected collection
+      if (saveCollId && data.template?.id) {
+        await fetch(`/api/collections/${saveCollId}/quizzes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quizIds: [data.template.id] }),
+        });
+        const col = saveCollections.find(c => c.id === saveCollId);
+        addToast("success", `Saved to library${col ? ` & added to "${col.name}"` : ""} ${E.ok}`);
+      } else {
+        addToast("success", `Saved to library ${E.ok}`);
+      }
+      setSaveCollId("");
     } catch {
       addToast("error", "Network error");
     } finally {
@@ -405,6 +435,56 @@ export default function NewQuizPage() {
         </div>
       )}
 
+      {/* ── Save to Library modal ── */}
+      {showSaveModal && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowSaveModal(false)}>
+          <div style={{ background: "var(--clr-bg-card)", borderRadius: 16, padding: 28, width: "100%", maxWidth: 440, boxShadow: "0 24px 64px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 20 }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--clr-brand-muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem", flexShrink: 0 }}>💾</div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "1.05rem" }}>Save to Library</h3>
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--clr-text-muted)", marginTop: 2 }}>{question.slice(0, 60)}{question.length > 60 ? "…" : ""}</p>
+              </div>
+            </div>
+            <div>
+              <label className="input-label" style={{ marginBottom: 8, display: "block" }}>
+                📁 Add to a Collection <span style={{ color: "var(--clr-text-muted)", fontWeight: 400 }}>(optional)</span>
+              </label>
+              {saveCollections.length === 0 ? (
+                <div style={{ padding: "10px 14px", background: "var(--clr-bg-elevated)", borderRadius: 8, fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
+                  No collections yet — create one in the Library first.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+                  <button onClick={() => setSaveCollId("")}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: saveCollId === "" ? "var(--clr-brand-muted)" : "var(--clr-bg-elevated)", border: `1px solid ${saveCollId === "" ? "var(--clr-brand)" : "var(--clr-border)"}`, borderRadius: 8, cursor: "pointer", textAlign: "left" }}>
+                    <span style={{ width: 28, height: 28, borderRadius: 6, background: "var(--clr-bg-card)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.9rem" }}>🚫</span>
+                    <span style={{ fontSize: "0.85rem", color: saveCollId === "" ? "var(--clr-brand)" : "var(--clr-text-secondary)", fontWeight: saveCollId === "" ? 600 : 400 }}>No collection</span>
+                    {saveCollId === "" && <span style={{ marginLeft: "auto", color: "var(--clr-brand)" }}>✓</span>}
+                  </button>
+                  {saveCollections.map(c => (
+                    <button key={c.id} onClick={() => setSaveCollId(c.id)}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: saveCollId === c.id ? c.color + "18" : "var(--clr-bg-elevated)", border: `1px solid ${saveCollId === c.id ? c.color : "var(--clr-border)"}`, borderRadius: 8, cursor: "pointer", textAlign: "left" }}>
+                      <span style={{ width: 28, height: 28, borderRadius: 6, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.95rem" }}>{c.emoji}</span>
+                      <span style={{ fontSize: "0.85rem", color: saveCollId === c.id ? c.color : "var(--clr-text-secondary)", fontWeight: saveCollId === c.id ? 600 : 400 }}>{c.name}</span>
+                      {saveCollId === c.id && <span style={{ marginLeft: "auto", color: c.color }}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost" onClick={() => { setShowSaveModal(false); setSaveCollId(""); }}>Cancel</button>
+              <button className="btn btn-primary" onClick={doSaveTemplate} disabled={savingTemplate}>
+                {savingTemplate ? "Saving…" : saveCollId ? "💾 Save & Add to Collection" : "💾 Save to Library"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       <div className="toast-container">
         {toasts.map((t) => (
@@ -451,7 +531,7 @@ export default function NewQuizPage() {
           </button>
           <button
             className="btn btn-secondary"
-            onClick={handleSaveTemplate}
+            onClick={openSaveModal}
             disabled={savingTemplate}
           >
             {savingTemplate ? "Saving..." : E.save + " Save to Library"}
