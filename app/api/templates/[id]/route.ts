@@ -31,7 +31,7 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await req.json();
-  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags } = body;
+  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags, allowAddingOptions, allowRevoting } = body;
 
   if (!question?.trim() || !options?.length) {
     return NextResponse.json({ error: "Question and options required" }, { status: 400 });
@@ -52,6 +52,8 @@ export async function PATCH(
         correctOptionId: (type === "quiz" || type === "QUIZ") ? (correctOptionId ?? null) : null,
         explanation: explanation?.trim() || null,
         allowsMultiple: allowsMultiple ?? false,
+        allowAddingOptions: allowAddingOptions ?? false,
+        allowRevoting: allowRevoting ?? false,
         openPeriod: openPeriod || null,
         tags: tags || [],
       },

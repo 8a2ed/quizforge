@@ -12,6 +12,8 @@ interface Template {
   correctOptionId: number | null;
   explanation: string | null;
   allowsMultiple: boolean;
+  allowAddingOptions: boolean;
+  allowRevoting: boolean;
   openPeriod: number | null;
   tags?: string[];
   topicId?: number | null;
@@ -58,6 +60,7 @@ export default function LibraryPage() {
   const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [tagFilter, setTagFilter] = useState("");
   const [perQuizTopic, setPerQuizTopic] = useState<Record<string, number | "">>({});
+  const [typeFilter, setTypeFilter] = useState<"" | "QUIZ" | "POLL">("");
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [progress, setProgress] = useState<SendProgress | null>(null);
   const cancelRef = useRef(false);
@@ -90,6 +93,7 @@ export default function LibraryPage() {
     .filter(t => {
       if (!showSent && sentIds.has(t.id)) return false;
       if (tagFilter && !t.tags?.includes(tagFilter)) return false;
+      if (typeFilter && t.type !== typeFilter) return false;
       if (!search) return true;
       return t.question.toLowerCase().includes(search.toLowerCase()) ||
         t.tags?.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
@@ -134,6 +138,8 @@ export default function LibraryPage() {
             explanation: t.explanation,
             isAnonymous: t.isAnonymous,
             allowsMultiple: t.allowsMultiple,
+            allowAddingOptions: t.allowAddingOptions,
+            allowRevoting: t.allowRevoting,
             openPeriod: t.openPeriod,
             tags: t.tags,
             topicId: qTopicId || undefined,
@@ -184,7 +190,18 @@ export default function LibraryPage() {
     const res = await fetch("/api/templates", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: `${t.question} (copy)`, options: t.options, type: t.type, isAnonymous: t.isAnonymous, correctOptionId: t.correctOptionId, explanation: t.explanation, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags }),
+      body: JSON.stringify({
+        question: `${t.question} (copy)`,
+        options: t.options, type: t.type,
+        isAnonymous: t.isAnonymous,
+        correctOptionId: t.correctOptionId,
+        explanation: t.explanation,
+        allowsMultiple: t.allowsMultiple,
+        allowAddingOptions: t.allowAddingOptions,
+        allowRevoting: t.allowRevoting,
+        openPeriod: t.openPeriod,
+        tags: t.tags,
+      }),
     });
     if (res.ok) { showToast("success", "Duplicated ✓"); load(); }
     else showToast("error", "Failed to duplicate");
@@ -377,13 +394,24 @@ export default function LibraryPage() {
             Show sent ({sentIds.size})
           </label>
         </div>
-        {(tagFilter || search) && (
+        {(tagFilter || search || typeFilter) && (
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>{filtered.length} of {templates.length} shown</span>
             {tagFilter && <button className="badge badge-muted" style={{ cursor: "pointer", border: "none" }} onClick={() => setTagFilter("")}>#{tagFilter} ✕</button>}
             {search && <button className="badge badge-muted" style={{ cursor: "pointer", border: "none" }} onClick={() => setSearch("")}>"{search}" ✕</button>}
+            {typeFilter && <button className="badge badge-muted" style={{ cursor: "pointer", border: "none" }} onClick={() => setTypeFilter("")}>Type: {typeFilter} ✕</button>}
           </div>
         )}
+        {/* Type filter pills */}
+        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          {(["", "QUIZ", "POLL"] as const).map(val => (
+            <button key={val} onClick={() => setTypeFilter(val)}
+              className="btn btn-ghost btn-sm"
+              style={{ border: `1px solid ${typeFilter === val ? "var(--clr-brand)" : "var(--clr-border)"}`, color: typeFilter === val ? "var(--clr-brand)" : "var(--clr-text-muted)", fontSize: "0.75rem" }}>
+              {val === "" ? "🗂 All" : val === "QUIZ" ? "✅ Quiz only" : "📊 Poll only"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* List */}
@@ -436,6 +464,9 @@ export default function LibraryPage() {
                       <>
                         <button className="btn btn-ghost btn-sm" title="Edit" style={{ fontSize: "0.78rem" }} onClick={() => startEdit(t)}>✏️</button>
                         <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
+                        <a className="btn btn-ghost btn-sm" title="Open in Quiz Creator"
+                          href={`/dashboard/${groupId}/quiz/new?draft=${encodeURIComponent(JSON.stringify({ question: t.question, options: t.options, type: t.type === "QUIZ" ? "quiz" : "poll", correctOptionId: t.correctOptionId, explanation: t.explanation, isAnonymous: t.isAnonymous, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags }))}`}
+                          style={{ fontSize: "0.78rem", textDecoration: "none" }}>🔗</a>
                         <button className="btn btn-ghost btn-sm" title="Send now" style={{ color: "var(--clr-success)", fontSize: "0.78rem" }}
                           onClick={() => handleSendOne(t)} disabled={!!progress?.active}>🚀</button>
                         <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>

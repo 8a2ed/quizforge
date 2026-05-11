@@ -61,6 +61,8 @@ export async function GET(req: NextRequest) {
         correctOptionId: true,
         explanation: true,
         allowsMultiple: true,
+        allowAddingOptions: true,
+        allowRevoting: true,
         openPeriod: true,
         tags: true,
         topicId: true,
@@ -79,7 +81,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags } = body;
+  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags, allowAddingOptions, allowRevoting } = body;
 
   if (!question?.trim() || !options?.length) {
     return NextResponse.json({ error: "Question and options are required" }, { status: 400 });
@@ -97,6 +99,8 @@ export async function POST(req: NextRequest) {
         correctOptionId: type === "quiz" ? (correctOptionId ?? null) : null,
         explanation: explanation?.trim() || null,
         allowsMultiple: allowsMultiple ?? false,
+        allowAddingOptions: allowAddingOptions ?? false,
+        allowRevoting: allowRevoting ?? false,
         openPeriod: openPeriod || null,
         tags: tags || [],
         groupId,

@@ -67,6 +67,9 @@ export default function NewQuizPage() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [sentCount, setSentCount] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showImport, setShowImport] = useState(false);
+  const [importTemplates, setImportTemplates] = useState<Array<{id:string;question:string;options:string[];type:string;correctOptionId:number|null;explanation:string|null;isAnonymous:boolean;allowsMultiple:boolean;allowAddingOptions:boolean;allowRevoting:boolean;openPeriod:number|null;tags:string[]}>>([]);
+  const [importLoading, setImportLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load draft from URL (for duplication)
@@ -292,7 +295,10 @@ export default function NewQuizPage() {
           correctOptionId: type === "quiz" ? correctOptionId : null,
           explanation: explanation.trim() || null,
           allowsMultiple,
+          allowAddingOptions,
+          allowRevoting,
           openPeriod: showDuration && openPeriod > 0 ? openPeriod : null,
+          tags: tags.length > 0 ? tags : [],
         }),
       });
       if (res.ok) addToast("success", `Template saved! ${E.ok}`);
@@ -317,8 +323,88 @@ export default function NewQuizPage() {
 
   const topicColor = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
 
+  // Import from Library
+  const handleImportOpen = async () => {
+    setShowImport(true);
+    if (importTemplates.length > 0) return;
+    setImportLoading(true);
+    try {
+      const r = await fetch("/api/templates");
+      const d = await r.json();
+      setImportTemplates(d.templates || []);
+    } catch { /* ignore */ }
+    finally { setImportLoading(false); }
+  };
+
+  const handleImportPick = (tmpl: typeof importTemplates[0]) => {
+    setQuestion(tmpl.question);
+    const opts = tmpl.options.length >= 2 ? tmpl.options : [...tmpl.options, "", ""];
+    setOptions(opts);
+    setOptionCount(opts.length);
+    setType(tmpl.type === "POLL" ? "poll" : "quiz");
+    setCorrectOptionId(tmpl.correctOptionId);
+    setExplanation(tmpl.explanation || "");
+    setIsAnonymous(tmpl.isAnonymous);
+    setAllowsMultiple(tmpl.allowsMultiple);
+    setAllowAddingOptions(tmpl.allowAddingOptions ?? false);
+    setAllowRevoting(tmpl.allowRevoting ?? false);
+    if (tmpl.openPeriod) { setShowDuration(true); setOpenPeriod(tmpl.openPeriod); }
+    else { setShowDuration(false); setOpenPeriod(60); }
+    setTags(tmpl.tags || []);
+    setShowImport(false);
+    addToast("success", "Template loaded into form ✓");
+  };
+
   return (
     <div>
+      {/* Import Modal */}
+      {showImport && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowImport(false)}>
+          <div
+            style={{ background: "var(--clr-bg-card)", borderRadius: 16, padding: 24, width: "100%", maxWidth: 560, maxHeight: "70vh", display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0 }}>📚 Import from Library</h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowImport(false)}>✕</button>
+            </div>
+            {importLoading ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 60, borderRadius: 8 }} />)}
+              </div>
+            ) : importTemplates.length === 0 ? (
+              <div style={{ textAlign: "center", color: "var(--clr-text-muted)", padding: "32px 0" }}>
+                <div style={{ fontSize: "2rem", marginBottom: 8 }}>📭</div>
+                <div>Your library is empty. Save some quizzes first.</div>
+              </div>
+            ) : (
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+                {importTemplates.map(tmpl => (
+                  <button key={tmpl.id} onClick={() => handleImportPick(tmpl)}
+                    style={{ background: "var(--clr-bg-elevated)", border: "1px solid var(--clr-border)", borderRadius: 10, padding: "10px 14px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--clr-brand)")}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--clr-border)")}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span className={`badge ${tmpl.type === "QUIZ" ? "badge-brand" : "badge-accent"}`} style={{ fontSize: "0.65rem" }}>{tmpl.type}</span>
+                      {tmpl.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.62rem" }}>#{tag}</span>)}
+                    </div>
+                    <div style={{ fontSize: "0.85rem", fontWeight: 500, lineHeight: 1.4, color: "var(--clr-text-primary)" }}>
+                      {tmpl.question.slice(0, 120)}{tmpl.question.length > 120 ? "…" : ""}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
+                      {tmpl.options.length} options
+                      {tmpl.openPeriod ? ` · ⏱${tmpl.openPeriod}s` : ""}
+                      {tmpl.explanation ? " · 💡" : ""}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       <div className="toast-container">
         {toasts.map((t) => (
@@ -357,11 +443,18 @@ export default function NewQuizPage() {
             </Link>
           )}
           <button
+            className="btn btn-ghost btn-sm"
+            onClick={handleImportOpen}
+            style={{ border: "1px solid var(--clr-border)" }}
+          >
+            📚 Import
+          </button>
+          <button
             className="btn btn-secondary"
             onClick={handleSaveTemplate}
             disabled={savingTemplate}
           >
-            {savingTemplate ? "Saving..." : E.save + " Save as Template"}
+            {savingTemplate ? "Saving..." : E.save + " Save to Library"}
           </button>
           <button
             className="btn btn-primary btn-lg"
