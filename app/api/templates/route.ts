@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
   const templates = await withRetry(() =>
     prisma.quiz.findMany({
-      where: { groupId },          // groupId is already user-specific (template:userId)
+      where: { groupId },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -68,11 +68,18 @@ export async function GET(req: NextRequest) {
         topicId: true,
         topicName: true,
         createdAt: true,
+        collections: { select: { collectionId: true } },
       },
     })
   );
 
-  return NextResponse.json({ templates });
+  return NextResponse.json({
+    templates: templates.map(t => ({
+      ...t,
+      collectionIds: t.collections.map(c => c.collectionId),
+      collections: undefined,
+    })),
+  });
 }
 
 // POST /api/templates — save a template

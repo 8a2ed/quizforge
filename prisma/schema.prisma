@@ -123,6 +123,7 @@ model Quiz {
   group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
   sentBy   User   @relation(fields: [sentById], references: [id])
   answers  PollAnswer[]
+  collections CollectionQuiz[]
 
   @@map("quizzes")
 }
@@ -142,6 +143,32 @@ model PollAnswer {
 
   @@unique([quizId, telegramUserId])
   @@map("poll_answers")
+}
+
+model Collection {
+  id        String   @id @default(cuid())
+  name      String
+  emoji     String   @default("📁")
+  color     String   @default("#6366f1")
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quizzes CollectionQuiz[]
+
+  @@map("collections")
+}
+
+model CollectionQuiz {
+  collectionId String
+  quizId       String
+  addedAt      DateTime @default(now())
+
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  quiz       Quiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, quizId])
+  @@map("collection_quizzes")
 }
 
 model Topic {

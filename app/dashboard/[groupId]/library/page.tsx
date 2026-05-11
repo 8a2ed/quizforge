@@ -4,21 +4,18 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 
 interface Template {
-  id: string;
-  question: string;
-  options: string[];
-  type: "QUIZ" | "POLL";
-  isAnonymous: boolean;
-  correctOptionId: number | null;
-  explanation: string | null;
-  allowsMultiple: boolean;
-  allowAddingOptions: boolean;
-  allowRevoting: boolean;
-  openPeriod: number | null;
-  tags?: string[];
-  topicId?: number | null;
-  topicName?: string | null;
+  id: string; question: string; options: string[];
+  type: "QUIZ" | "POLL"; isAnonymous: boolean;
+  correctOptionId: number | null; explanation: string | null;
+  allowsMultiple: boolean; allowAddingOptions: boolean; allowRevoting: boolean;
+  openPeriod: number | null; tags?: string[];
+  topicId?: number | null; topicName?: string | null;
   createdAt: string;
+  collectionIds?: string[];
+}
+
+interface Collection {
+  id: string; name: string; emoji: string; color: string; quizCount: number; createdAt: string;
 }
 
 type SortKey = "newest" | "oldest" | "az" | "type";
@@ -65,6 +62,15 @@ export default function LibraryPage() {
   const [progress, setProgress] = useState<SendProgress | null>(null);
   const cancelRef = useRef(false);
 
+  // Collections state
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [activeCollection, setActiveCollection] = useState<string | null>(null);
+  const [showNewColl, setShowNewColl] = useState(false);
+  const [editColl, setEditColl] = useState<Collection | null>(null);
+  const [collForm, setCollForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
+  const [showAddToColl, setShowAddToColl] = useState(false);
+  const [collLoading, setCollLoading] = useState(false);
+
   const showToast = (type: "success" | "error", msg: string) => {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 4500);
@@ -86,12 +92,21 @@ export default function LibraryPage() {
     fetch(`/api/groups/${groupId}/topics`).then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
   }, [groupId]);
 
+  const loadCollections = useCallback(() => {
+    fetch("/api/collections")
+      .then(r => r.json())
+      .then(d => setCollections(d.collections || []))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadCollections(); }, [loadCollections]);
+
   // ── Derived state ─────────────────────────────────────────────────
   const allTags = [...new Set(templates.flatMap(t => t.tags || []))].sort();
 
   const filtered = templates
     .filter(t => {
       if (!showSent && sentIds.has(t.id)) return false;
+      if (activeCollection && !t.collectionIds?.includes(activeCollection)) return false;
       if (tagFilter && !t.tags?.includes(tagFilter)) return false;
       if (typeFilter && t.type !== typeFilter) return false;
       if (!search) return true;
@@ -247,6 +262,59 @@ export default function LibraryPage() {
     setEditDraft(d => ({ ...d, options: o }));
   };
 
+  // ── Collection handlers ────────────────────────────────────────────
+  const createCollection = async () => {
+    if (!collForm.name.trim()) return;
+    setCollLoading(true);
+    const res = await fetch("/api/collections", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collForm),
+    });
+    setCollLoading(false);
+    if (res.ok) { showToast("success", `Collection "${collForm.name}" created!`); setShowNewColl(false); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
+    else showToast("error", "Failed to create collection");
+  };
+
+  const saveCollEdit = async () => {
+    if (!editColl) return;
+    setCollLoading(true);
+    const res = await fetch(`/api/collections/${editColl.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collForm),
+    });
+    setCollLoading(false);
+    if (res.ok) { showToast("success", "Collection updated!"); setEditColl(null); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
+    else showToast("error", "Failed to update");
+  };
+
+  const deleteCollection = async (c: Collection) => {
+    if (!confirm(`Delete collection "${c.name}"? Quizzes will NOT be deleted.`)) return;
+    await fetch(`/api/collections/${c.id}`, { method: "DELETE" });
+    if (activeCollection === c.id) setActiveCollection(null);
+    showToast("success", `"${c.name}" deleted`);
+    loadCollections();
+    load(); // refresh collectionIds
+  };
+
+  const addSelectedToCollection = async (collId: string) => {
+    if (visibleSelected.length === 0) return;
+    const res = await fetch(`/api/collections/${collId}/quizzes`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quizIds: visibleSelected }),
+    });
+    if (res.ok) { showToast("success", `Added ${visibleSelected.length} quiz(zes) to collection!`); setShowAddToColl(false); load(); loadCollections(); }
+    else showToast("error", "Failed to add to collection");
+  };
+
+  const removeFromCollection = async (quizId: string, collId: string) => {
+    await fetch(`/api/collections/${collId}/quizzes`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quizIds: [quizId] }),
+    });
+    showToast("success", "Removed from collection");
+    load(); loadCollections();
+  };
+
   // ── Progress helpers ───────────────────────────────────────────────
   const pct = progress ? Math.round(((progress.sent + progress.failed) / progress.total) * 100) : 0;
   const elapsed = progress ? Math.floor((Date.now() - progress.startTime) / 1000) : 0;
@@ -264,6 +332,72 @@ export default function LibraryPage() {
         </div>
       )}
 
+      {/* ── Collection form modal (create / edit) ── */}
+      {(showNewColl || editColl) && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => { setShowNewColl(false); setEditColl(null); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); }}>
+          <div style={{ background: "var(--clr-bg-card)", borderRadius: 16, padding: 28, width: "100%", maxWidth: 420, boxShadow: "0 24px 64px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 16 }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: 0 }}>{editColl ? "✏️ Edit Collection" : "📁 New Collection"}</h3>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input className="input" placeholder="Emoji" value={collForm.emoji} maxLength={2}
+                onChange={e => setCollForm(f => ({ ...f, emoji: e.target.value }))}
+                style={{ width: 60, textAlign: "center", fontSize: "1.4rem", padding: "4px 0" }} />
+              <input className="input" placeholder="Collection name…" value={collForm.name} style={{ flex: 1 }}
+                onChange={e => setCollForm(f => ({ ...f, name: e.target.value }))}
+                onKeyDown={e => e.key === "Enter" && (editColl ? saveCollEdit() : createCollection())} autoFocus />
+            </div>
+            <div>
+              <label className="input-label">Color</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {["#6366f1","#0ea5e9","#10b981","#f59e0b","#ef4444","#a855f7","#ec4899","#64748b"].map(c => (
+                  <button key={c} onClick={() => setCollForm(f => ({ ...f, color: c }))}
+                    style={{ width: 28, height: 28, borderRadius: "50%", background: c, border: `3px solid ${collForm.color === c ? "white" : "transparent"}`, cursor: "pointer", outline: collForm.color === c ? `2px solid ${c}` : "none", outlineOffset: 2 }} />
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost" onClick={() => { setShowNewColl(false); setEditColl(null); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); }}>Cancel</button>
+              <button className="btn btn-primary" onClick={editColl ? saveCollEdit : createCollection} disabled={collLoading || !collForm.name.trim()}>
+                {collLoading ? "Saving…" : editColl ? "Save Changes" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Add to Collection modal ── */}
+      {showAddToColl && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowAddToColl(false)}>
+          <div style={{ background: "var(--clr-bg-card)", borderRadius: 16, padding: 24, width: "100%", maxWidth: 380, boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: "0 0 16px" }}>📁 Add {visibleSelected.length} quiz{visibleSelected.length !== 1 ? "zes" : ""} to…</h3>
+            {collections.length === 0 ? (
+              <div style={{ textAlign: "center", color: "var(--clr-text-muted)", padding: "20px 0" }}>
+                No collections yet. Create one first.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {collections.map(c => (
+                  <button key={c.id} onClick={() => addSelectedToCollection(c.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--clr-bg-elevated)", border: "1px solid var(--clr-border)", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = c.color)}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--clr-border)")}>
+                    <span style={{ width: 32, height: 32, borderRadius: 8, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.1rem", flexShrink: 0 }}>{c.emoji}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{c.name}</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>{c.quizCount} quizzes</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowAddToColl(false)} style={{ marginTop: 12, width: "100%", justifyContent: "center" }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="section-header animate-fade-up">
         <div>
@@ -275,6 +409,9 @@ export default function LibraryPage() {
         </div>
         {visibleSelected.length > 0 && !progress?.active && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={() => setShowAddToColl(true)}>
+              📁 Add to Collection
+            </button>
             <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={deleteSelected}>
               🗑 Delete {visibleSelected.length}
             </button>
@@ -283,6 +420,37 @@ export default function LibraryPage() {
             </button>
           </div>
         )}
+      </div>
+
+      {/* ── Collections tab bar ── */}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 16, scrollbarWidth: "none" }}>
+        <button onClick={() => setActiveCollection(null)}
+          className="btn btn-ghost btn-sm"
+          style={{ flexShrink: 0, border: `1px solid ${!activeCollection ? "var(--clr-brand)" : "var(--clr-border)"}`, color: !activeCollection ? "var(--clr-brand)" : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+          🗂 All ({templates.length})
+        </button>
+        {collections.map(c => (
+          <div key={c.id} style={{ display: "flex", flexShrink: 0, position: "relative" }}>
+            <button onClick={() => setActiveCollection(c.id)}
+              className="btn btn-ghost btn-sm"
+              style={{ border: `1px solid ${activeCollection === c.id ? c.color : "var(--clr-border)"}`, color: activeCollection === c.id ? c.color : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap", paddingRight: 28 }}>
+              {c.emoji} {c.name} ({c.quizCount})
+            </button>
+            {activeCollection === c.id && (
+              <div style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
+                <button onClick={e => { e.stopPropagation(); setEditColl(c); setCollForm({ name: c.name, emoji: c.emoji, color: c.color }); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.65rem", padding: "2px 3px", color: "var(--clr-text-muted)", lineHeight: 1 }} title="Rename">✏️</button>
+                <button onClick={e => { e.stopPropagation(); deleteCollection(c); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.65rem", padding: "2px 3px", color: "var(--clr-danger)", lineHeight: 1 }} title="Delete">🗑</button>
+              </div>
+            )}
+          </div>
+        ))}
+        <button onClick={() => { setShowNewColl(true); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); }}
+          className="btn btn-ghost btn-sm"
+          style={{ flexShrink: 0, border: "1px dashed var(--clr-border)", color: "var(--clr-text-muted)", fontSize: "0.8rem" }}>
+          + New Collection
+        </button>
       </div>
 
       {/* Progress Panel */}
@@ -612,6 +780,20 @@ export default function LibraryPage() {
                       {t.openPeriod ? <span>⏱ {t.openPeriod}s</span> : null}
                       {t.allowsMultiple && <span>☑ Multi</span>}
                       {t.topicName && <span>📂 {t.topicName}</span>}
+                      {/* Collection badges */}
+                      {t.collectionIds && t.collectionIds.length > 0 && t.collectionIds.map(cid => {
+                        const col = collections.find(c => c.id === cid);
+                        if (!col) return null;
+                        return (
+                          <span key={cid} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", borderRadius: 10, background: col.color + "22", color: col.color, border: `1px solid ${col.color}44`, fontSize: "0.68rem", fontWeight: 500 }}>
+                            {col.emoji} {col.name}
+                            {activeCollection === cid && (
+                              <button onClick={e => { e.stopPropagation(); removeFromCollection(t.id, cid); }}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: col.color, padding: "0 0 0 2px", lineHeight: 1, fontSize: "0.65rem" }} title="Remove from collection">✕</button>
+                            )}
+                          </span>
+                        );
+                      })}
                       <span style={{ marginLeft: "auto" }} title={new Date(t.createdAt).toLocaleString()}>🕐 {timeAgo(t.createdAt)}</span>
                     </div>
                   </>
