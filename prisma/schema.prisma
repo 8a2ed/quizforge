@@ -185,6 +185,8 @@ model Exam {
   passingScore Int      @default(60) // percentage
   isPublished  Boolean  @default(false)
   launchMsgId  Int?     // Telegram message_id of the launch announcement
+  topicId      Int?     // Forum thread to post the launch message in
+  topicName    String?  // Display name of that thread
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

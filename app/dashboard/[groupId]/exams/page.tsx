@@ -3,10 +3,12 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 
 interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; }
+interface Topic { message_thread_id: number; name: string; }
 interface Exam {
   id: string; title: string; description?: string;
   questions: Question[]; timeLimit: number | null; passingScore: number;
   isPublished: boolean; launchMsgId?: number | null; createdAt: string;
+  topicId?: number | null; topicName?: string | null;
   _count: { results: number };
   createdBy?: { firstName: string; username?: string | null };
 }
@@ -40,6 +42,9 @@ export default function ExamsPage() {
   const [desc, setDesc] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
   const [passingScore, setPassingScore] = useState("60");
+  const [topicId, setTopicId] = useState<number | "">("");
+  const [topicName, setTopicName] = useState("");
+  const [topics, setTopics] = useState<Topic[]>([]);
   const [questions, setQuestions] = useState<Question[]>([emptyQ()]);
   const [saving, setSaving] = useState(false);
 
@@ -57,9 +62,18 @@ export default function ExamsPage() {
   }, [groupId]);
 
   useEffect(() => { load(); }, [load]);
+  // Load topics once
+  useEffect(() => {
+    fetch(`/api/groups/${groupId}/topics`)
+      .then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
+  }, [groupId]);
 
   // Reset form
-  const resetForm = () => { setTitle(""); setDesc(""); setTimeLimit(""); setPassingScore("60"); setQuestions([emptyQ()]); setEditingExam(null); };
+  const resetForm = () => {
+    setTitle(""); setDesc(""); setTimeLimit(""); setPassingScore("60");
+    setTopicId(""); setTopicName("");
+    setQuestions([emptyQ()]); setEditingExam(null);
+  };
 
   const openCreate = () => { resetForm(); setMode("create"); };
 
@@ -69,6 +83,8 @@ export default function ExamsPage() {
     setDesc(exam.description || "");
     setTimeLimit(exam.timeLimit ? String(Math.floor(exam.timeLimit / 60)) : "");
     setPassingScore(String(exam.passingScore));
+    setTopicId(exam.topicId ?? "");
+    setTopicName(exam.topicName || "");
     setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options] })));
     setMode("edit");
   };
@@ -88,7 +104,13 @@ export default function ExamsPage() {
     setSaving(true);
     const res = await fetch(`/api/groups/${groupId}/exams`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description: desc, questions: validQ, timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null, passingScore: parseInt(passingScore) }),
+      body: JSON.stringify({
+        title, description: desc, questions: validQ,
+        timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null,
+        passingScore: parseInt(passingScore),
+        topicId: topicId || null,
+        topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
+      }),
     });
     const data = await res.json();
     setSaving(false);
@@ -104,7 +126,13 @@ export default function ExamsPage() {
     setSaving(true);
     const res = await fetch(`/api/groups/${groupId}/exams`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: editingExam.id, title, description: desc, questions: validQ, timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null, passingScore: parseInt(passingScore) }),
+      body: JSON.stringify({
+        id: editingExam.id, title, description: desc, questions: validQ,
+        timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null,
+        passingScore: parseInt(passingScore),
+        topicId: topicId || null,
+        topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
+      }),
     });
     setSaving(false);
     if (res.ok) { showToast("success", "Saved!"); resetForm(); setMode("list"); load(); }
@@ -209,6 +237,17 @@ export default function ExamsPage() {
           <div className="input-wrapper" style={{ marginBottom: 0 }}>
             <label className="input-label">Passing Score (%)</label>
             <input className="input" type="number" min="1" max="100" value={passingScore} onChange={e => setPassingScore(e.target.value)} />
+          </div>
+          <div className="input-wrapper" style={{ marginBottom: 0, gridColumn: topics.length > 0 ? undefined : "1/-1" }}>
+            <label className="input-label">📂 Send announcement to topic (optional)</label>
+            <select className="select" value={topicId} onChange={e => {
+              const val = e.target.value ? Number(e.target.value) : "";
+              setTopicId(val);
+              setTopicName(val ? (topics.find(t => t.message_thread_id === val)?.name || "") : "");
+            }}>
+              <option value="">📌 General (no topic)</option>
+              {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>📂 {t.name}</option>)}
+            </select>
           </div>
         </div>
 

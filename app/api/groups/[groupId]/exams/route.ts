@@ -42,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { title, description, questions, timeLimit, passingScore } = body;
+  const { title, description, questions, timeLimit, passingScore, topicId, topicName } = body;
 
   if (!title?.trim()) return NextResponse.json({ error: "Title required" }, { status: 400 });
   if (!Array.isArray(questions) || questions.length < 1)
@@ -55,6 +55,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
       questions,
       timeLimit: timeLimit ? Number(timeLimit) : null,
       passingScore: passingScore ? Number(passingScore) : 60,
+      topicId: topicId ? Number(topicId) : null,
+      topicName: topicName?.trim() || null,
       isPublished: false,
       groupId,
       createdById: auth.userId,
@@ -71,7 +73,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { id, title, description, questions, timeLimit, passingScore, isPublished } = body;
+  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName } = body;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   const updated = await withRetry(() => prisma.exam.updateMany({
@@ -83,6 +85,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
       ...(timeLimit !== undefined ? { timeLimit: timeLimit ? Number(timeLimit) : null } : {}),
       ...(passingScore !== undefined ? { passingScore: Number(passingScore) } : {}),
       ...(isPublished !== undefined ? { isPublished } : {}),
+      ...(topicId !== undefined ? { topicId: topicId ? Number(topicId) : null } : {}),
+      ...(topicName !== undefined ? { topicName: topicName?.trim() || null } : {}),
     },
   }));
 
@@ -97,8 +101,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
         `\n\n📊 *${qs.length} question${qs.length !== 1 ? "s" : ""}*`,
         exam.timeLimit ? `\n⏱ ${Math.floor(exam.timeLimit / 60)} minute time limit` : "",
         `\n✅ Passing score: ${exam.passingScore}%`,
-        "\n\n*Press the button below to start the exam in your DMs\\.*",
+        `\n\n*Tap the button below to start the exam in your DMs.*`,
       ].filter(Boolean).join("");
+
+      // Use the stored topicId (or fall back to body topicId for re-launches)
+      const launchTopicId = exam.topicId ?? (topicId ? Number(topicId) : null);
 
       try {
         const ac = new AbortController();
@@ -109,6 +116,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
           signal: ac.signal,
           body: JSON.stringify({
             chat_id: exam.group.chatId,
+            ...(launchTopicId ? { message_thread_id: launchTopicId } : {}),
             text: msg,
             parse_mode: "Markdown",
             reply_markup: {
