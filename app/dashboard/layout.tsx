@@ -27,6 +27,7 @@ const ICONS = {
   library:     "M4 19.5A2.5 2.5 0 016.5 17H20M4 19.5A2.5 2.5 0 014 17V5a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6.5",
   scheduled:   "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   exams:       "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+  messages:    "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -73,6 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         { href: `/dashboard/${groupId}/history`,    icon: ICONS.history,   label: "History"     },
         { href: `/dashboard/${groupId}/scheduled`,  icon: ICONS.scheduled, label: "Scheduled"   },
         { href: `/dashboard/${groupId}/exams`,      icon: ICONS.exams,     label: "Exams"       },
+        { href: `/dashboard/${groupId}/messages`,   icon: ICONS.messages,  label: "Messages"    },
         { href: `/dashboard/${groupId}/analytics`,  icon: ICONS.analytics, label: "Analytics"   },
         { href: `/dashboard/${groupId}/topics`,     icon: ICONS.topics,    label: "Topics"      },
         { href: `/dashboard/${groupId}/admins`,     icon: ICONS.admins,    label: "Admins"      },

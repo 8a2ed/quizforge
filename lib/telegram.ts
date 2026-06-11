@@ -220,4 +220,68 @@ export const telegram = {
   getWebhookInfo(): Promise<Record<string, unknown>> {
     return call("getWebhookInfo");
   },
+
+  /** Send document, audio, or video by URL */
+  sendFile(params: {
+    chat_id: string | number;
+    message_thread_id?: number;
+    fileType: "document" | "audio" | "video" | "animation" | "voice";
+    fileUrl: string;
+    caption?: string;
+    parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+    reply_markup?: Record<string, unknown>;
+    duration?: number;
+    title?: string;
+  }): Promise<TelegramMessage> {
+    const { fileType, fileUrl, ...rest } = params;
+    const method = `send${fileType.charAt(0).toUpperCase()}${fileType.slice(1)}`;
+    return call(method, { ...rest, [fileType]: fileUrl } as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
+
+  /** Send multiple media items as an album */
+  sendMediaGroup(params: {
+    chat_id: string | number;
+    message_thread_id?: number;
+    media: Array<{
+      type: "photo" | "video" | "document" | "audio";
+      media: string;
+      caption?: string;
+      parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+    }>;
+  }): Promise<TelegramMessage[]> {
+    return call("sendMediaGroup", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
+
+  /** Forward a message from one chat to another */
+  forwardMessage(params: {
+    chat_id: string | number;
+    from_chat_id: string | number;
+    message_id: number;
+    message_thread_id?: number;
+    disable_notification?: boolean;
+  }): Promise<TelegramMessage> {
+    return call("forwardMessage", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
+
+  /** Pin a message in a chat */
+  pinChatMessage(chat_id: string | number, message_id: number, disable_notification = false): Promise<boolean> {
+    return call("pinChatMessage", { chat_id, message_id, disable_notification });
+  },
+
+  /** Unpin a message */
+  unpinChatMessage(chat_id: string | number, message_id: number): Promise<boolean> {
+    return call("unpinChatMessage", { chat_id, message_id });
+  },
+
+  /** Copy a message without a forward header */
+  copyMessage(params: {
+    chat_id: string | number;
+    from_chat_id: string | number;
+    message_id: number;
+    caption?: string;
+    parse_mode?: string;
+    reply_markup?: Record<string, unknown>;
+  }): Promise<{ message_id: number }> {
+    return call("copyMessage", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
 };
