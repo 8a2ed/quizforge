@@ -1,6 +1,6 @@
 # QuizForge 🎯
 
-> A production-grade, multi-tenant Telegram Quiz Dashboard built with Next.js 14, Prisma, and PostgreSQL.
+> A production-grade, multi-tenant Telegram Quiz Dashboard built with Next.js 14, Prisma, and PostgreSQL. 
 
 ## Features
 
