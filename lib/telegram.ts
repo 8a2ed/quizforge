@@ -109,6 +109,7 @@ export interface SendPhotoParams {
   caption?: string;
   parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
   reply_to_message_id?: number;
+  reply_markup?: Record<string, unknown>;
 }
 
 export interface TelegramPhotoMessage {

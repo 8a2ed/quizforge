@@ -7,14 +7,18 @@ declare global {
 }
 
 function createPrismaClient(): PrismaClient {
+  const url = process.env.DATABASE_URL;
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
-    datasources: {
-      db: {
-        // Use pgbouncer=true for the pooled URL to prevent prepared statement conflicts
-        url: process.env.DATABASE_URL,
-      },
-    },
+    ...(url
+      ? {
+          datasources: {
+            db: {
+              url,
+            },
+          },
+        }
+      : {}),
   });
 }
 

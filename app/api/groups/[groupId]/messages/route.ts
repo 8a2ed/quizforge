@@ -137,10 +137,8 @@ export async function POST(
           photo: body.mediaUrl!,
           caption: body.caption,
           parse_mode: body.parseMode || "HTML",
+          ...(reply_markup ? { reply_markup } : {}),
         });
-        if (reply_markup) {
-          await telegram.sendMessage({ chat_id: chatId, text: "​", reply_markup }); // zero-width space
-        }
       } else if (body.type === "document" || body.type === "audio" || body.type === "video") {
         await telegram.sendFile({
           chat_id: chatId,
