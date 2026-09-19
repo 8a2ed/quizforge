@@ -33,10 +33,11 @@ export async function POST(req: NextRequest) {
 
     // Issue JWT session
     const token = await new SignJWT({
-      sub: credential.user.id,
-      firstName: credential.user.firstName,
-      username: credential.user.username,
-    })
+  sub: credential.user.id,
+  firstName: credential.user.firstName,
+  username: credential.user.username,
+  telegramId: credential.user.telegramId ?? "",
+})
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setExpirationTime("30d")
