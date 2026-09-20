@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 
 interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; }
 interface Topic { message_thread_id: number; name: string; }
+
 interface Exam {
   id: string; title: string; description?: string;
   questions: Question[]; timeLimit: number | null; passingScore: number;
@@ -12,10 +13,77 @@ interface Exam {
   _count: { results: number };
   createdBy?: { firstName: string; username?: string | null };
 }
+
+interface QuestionDetail {
+  questionIndex: number;
+  question: string;
+  options: string[];
+  chosenOptionId: number | null;
+  chosenOptionText: string;
+  correctOptionId: number;
+  correctOptionText: string;
+  isCorrect: boolean;
+  isAnswered: boolean;
+  explanation: string | null;
+}
+
 interface Result {
-  id: string; name: string; telegramId?: string; score: number;
-  passed: boolean; duration?: number; completedAt: string;
-  answers?: Record<number, number>;
+  id: string;
+  name: string;
+  telegramId?: string;
+  score: number;
+  passed: boolean;
+  duration?: number;
+  completedAt: string;
+  answers?: Record<string, any>;
+  correctCount: number;
+  totalQuestions: number;
+  details: QuestionDetail[];
+}
+
+interface QuestionAnalytic {
+  index: number;
+  question: string;
+  options: string[];
+  correctOptionId: number;
+  explanation: string | null;
+  totalAnswered: number;
+  correctCount: number;
+  successRate: number;
+  difficulty: "EASY" | "MEDIUM" | "HARD";
+  optionCounts: number[];
+  mostCommonMistake: {
+    optionIndex: number;
+    optionText: string;
+    count: number;
+    percentage: number;
+  } | null;
+}
+
+interface ExamStats {
+  id: string;
+  title: string;
+  description?: string;
+  passingScore: number;
+  timeLimit: number | null;
+  isPublished: boolean;
+  createdAt: string;
+  totalResults: number;
+  inProgressCount: number;
+  passCount: number;
+  failCount: number;
+  passRate: number;
+  avgScore: number;
+  highestScore: number;
+  lowestScore: number;
+  avgDuration: number;
+  questionsCount: number;
+}
+
+interface ViewResultsState {
+  exam: Exam & ExamStats;
+  questionAnalytics: QuestionAnalytic[];
+  results: Result[];
 }
 
 const emptyQ = (): Question => ({ question: "", options: ["", "", "", ""], correctOptionId: 0 });
@@ -34,8 +102,16 @@ export default function ExamsPage() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
   const [mode, setMode] = useState<"list" | "create" | "edit" | "results">("list");
-  const [viewResults, setViewResults] = useState<{ exam: Exam; results: Result[]; stats: { passCount: number; avgScore: number; totalResults: number } } | null>(null);
+  const [viewResults, setViewResults] = useState<ViewResultsState | null>(null);
   const [editingExam, setEditingExam] = useState<Exam | null>(null);
+
+  // Results interactive filters
+  const [resultsTab, setResultsTab] = useState<"students" | "questions">("students");
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentFilter, setStudentFilter] = useState<"all" | "passed" | "failed" | "inProgress">("all");
+  const [studentSort, setStudentSort] = useState<"newest" | "highest" | "lowest" | "fastest" | "slowest">("newest");
+  const [expandedStudentIds, setExpandedStudentIds] = useState<Set<string>>(new Set());
+  const [savingQuestionIdx, setSavingQuestionIdx] = useState<number | null>(null);
 
   // Form state
   const [title, setTitle] = useState("");
@@ -194,71 +270,675 @@ export default function ExamsPage() {
   };
 
   const loadResults = async (exam: Exam) => {
-    const res = await fetch(`/api/groups/${groupId}/exams/${exam.id}/results`);
-    if (!res.ok) return showToast("error", "Failed to load results");
-    const data = await res.json();
-    if (data.exam) { setViewResults({ exam, results: data.results || [], stats: data.exam }); setMode("results"); }
+    try {
+      const res = await fetch(`/api/groups/${groupId}/exams/${exam.id}/results`);
+      if (!res.ok) throw new Error("Failed to load results");
+      const data = await res.json();
+      if (data.exam) {
+        setViewResults({
+          exam: { ...exam, ...data.exam },
+          questionAnalytics: data.questionAnalytics || [],
+          results: data.results || [],
+        });
+        setResultsTab("students");
+        setStudentSearch("");
+        setStudentFilter("all");
+        setStudentSort("newest");
+        setExpandedStudentIds(new Set());
+        setMode("results");
+      }
+    } catch (e: any) {
+      showToast("error", e.message || "Failed to load results");
+    }
+  };
+
+  const toggleExpandStudent = (id: string) => {
+    setExpandedStudentIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const saveQuestionToLibrary = async (q: QuestionAnalytic) => {
+    setSavingQuestionIdx(q.index);
+    try {
+      const res = await fetch("/api/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: q.question,
+          options: q.options,
+          type: "QUIZ",
+          correctOptionId: q.correctOptionId,
+          explanation: q.explanation || null,
+          tags: ["exam", (viewResults?.exam.title || "exam-q").slice(0, 20)],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("success", `Q${q.index + 1} saved to Question Library ✓`);
+      } else {
+        showToast("error", data.error || "Failed to save question");
+      }
+    } catch {
+      showToast("error", "Network error saving question");
+    } finally {
+      setSavingQuestionIdx(null);
+    }
+  };
+
+  const exportResultsCSV = () => {
+    if (!viewResults || viewResults.results.length === 0) {
+      showToast("error", "No results to export.");
+      return;
+    }
+    const exam = viewResults.exam;
+    const questionsCount = viewResults.questionAnalytics.length;
+
+    const headers = [
+      "Student Name",
+      "Telegram ID",
+      "Score (%)",
+      "Correct Answers",
+      "Total Questions",
+      "Status",
+      "Duration (Seconds)",
+      "Duration Formatted",
+      "Completed At",
+    ];
+
+    for (let i = 0; i < questionsCount; i++) {
+      headers.push(`Q${i + 1} Result`);
+      headers.push(`Q${i + 1} Chosen Option`);
+    }
+
+    const rows = viewResults.results.map(r => {
+      const dur = r.duration ? `${Math.floor(r.duration / 60)}m ${r.duration % 60}s` : "N/A";
+      const status = r.score < 0 ? "In Progress" : r.passed ? "Passed" : "Failed";
+      const row = [
+        `"${(r.name || "").replace(/"/g, '""')}"`,
+        `"${(r.telegramId || "").replace(/"/g, '""')}"`,
+        r.score < 0 ? "N/A" : r.score,
+        r.correctCount ?? "N/A",
+        r.totalQuestions ?? questionsCount,
+        status,
+        r.duration ?? "N/A",
+        `"${dur}"`,
+        `"${new Date(r.completedAt).toLocaleString()}"`,
+      ];
+
+      for (let i = 0; i < questionsCount; i++) {
+        const detail = r.details?.[i];
+        if (!detail || !detail.isAnswered) {
+          row.push('"Not Answered"');
+          row.push('"N/A"');
+        } else {
+          row.push(detail.isCorrect ? '"CORRECT ✅"' : '"INCORRECT ❌"');
+          row.push(`"${(detail.chosenOptionText || "").replace(/"/g, '""')}"`);
+        }
+      }
+      return row.join(",");
+    });
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `exam-${exam.title.replace(/\s+/g, "_")}-results.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("success", `Exported ${viewResults.results.length} result(s) to CSV ✓`);
   };
 
   const setQ = (i: number, field: keyof Question, val: string | string[] | number) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
   // ── Results view ──────────────────────────────────────────────────────────
-  if (mode === "results" && viewResults) return (
-    <div>
-      {toast && <div className="toast-container"><div className={`toast toast-${toast.type}`}>{toast.msg}</div></div>}
-      <div className="section-header animate-fade-up">
-        <div><h1>{viewResults.exam.title} — Results</h1><p>{viewResults.stats.totalResults} completed submission{viewResults.stats.totalResults !== 1 ? "s" : ""}</p></div>
-        <button className="btn btn-secondary" onClick={() => { setViewResults(null); setMode("list"); }}>← Back</button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px,1fr))", gap: 12, marginBottom: 20 }}>
-        {[
-          { label: "Completed", value: viewResults.stats.totalResults, color: "var(--clr-brand)" },
-          { label: "Passed", value: viewResults.stats.passCount, color: "var(--clr-success)" },
-          { label: "Failed", value: viewResults.stats.totalResults - viewResults.stats.passCount, color: "var(--clr-danger)" },
-          { label: "Avg Score", value: `${viewResults.stats.avgScore}%`, color: "var(--clr-warning)" },
-        ].map(s => (
-          <div key={s.label} className="card" style={{ padding: "var(--space-3) var(--space-4)", textAlign: "center" }}>
-            <div style={{ fontSize: "1.4rem", fontWeight: 800, color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>{s.label}</div>
+  if (mode === "results" && viewResults) {
+    const exam = viewResults.exam;
+    const completedResults = viewResults.results.filter(r => r.score >= 0);
+    const inProgressCount = viewResults.results.filter(r => r.score < 0).length;
+
+    const filteredStudents = viewResults.results
+      .filter(r => {
+        const inProgress = r.score < 0;
+        if (studentFilter === "passed" && (!r.passed || inProgress)) return false;
+        if (studentFilter === "failed" && (r.passed || inProgress)) return false;
+        if (studentFilter === "inProgress" && !inProgress) return false;
+        if (!studentSearch.trim()) return true;
+        const term = studentSearch.toLowerCase();
+        return (
+          r.name.toLowerCase().includes(term) ||
+          (r.telegramId && r.telegramId.toLowerCase().includes(term))
+        );
+      })
+      .sort((a, b) => {
+        if (studentSort === "highest") return b.score - a.score;
+        if (studentSort === "lowest") return a.score - b.score;
+        if (studentSort === "fastest") return (a.duration || 999999) - (b.duration || 999999);
+        if (studentSort === "slowest") return (b.duration || 0) - (a.duration || 0);
+        return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+      });
+
+    return (
+      <div>
+        {toast && (
+          <div className="toast-container">
+            <div className={`toast toast-${toast.type}`}>{toast.msg}</div>
           </div>
-        ))}
-      </div>
-      {viewResults.results.length === 0
-        ? <div className="empty-state"><div className="empty-state-icon">📋</div><h3>No results yet</h3><p>Results appear here after students complete the exam in Telegram</p></div>
-        : <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            {viewResults.results.map((r, i) => {
-              const inProgress = r.score < 0;
-              return (
-                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "var(--space-3) var(--space-4)", borderBottom: i < viewResults.results.length - 1 ? "1px solid var(--clr-border)" : "none", flexWrap: "wrap" }}>
-                  <div style={{
-                    width: 40, height: 40, borderRadius: "50%",
-                    background: inProgress ? "rgba(245,158,11,0.12)" : (r.passed ? "var(--clr-success-muted)" : "rgba(248,113,113,0.12)"),
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontWeight: 700, fontSize: "0.85rem",
-                    color: inProgress ? "var(--clr-warning)" : (r.passed ? "var(--clr-success)" : "var(--clr-danger)"),
-                    flexShrink: 0
-                  }}>
-                    {inProgress ? "⏱" : `${r.score}%`}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 100 }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{r.name}</div>
-                    <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
-                      {r.telegramId ? `@TG:${r.telegramId}` : ""}
-                      {r.duration ? ` · ${Math.floor(r.duration / 60)}m ${r.duration % 60}s` : ""}
-                      {" · "}{new Date(r.completedAt).toLocaleString()}
-                    </div>
-                  </div>
-                  <span className={`badge ${inProgress ? "badge-muted" : (r.passed ? "badge-success" : "badge-danger")}`}>
-                    {inProgress ? "⏱ In Progress" : (r.passed ? "✓ Passed" : "✗ Failed")}
-                  </span>
+        )}
+
+        {/* Top Header */}
+        <div className="section-header animate-fade-up">
+          <div>
+            <h1>{exam.title} — Results & Analytics</h1>
+            <p style={{ marginTop: 4 }}>
+              {exam.totalResults} completed submission{exam.totalResults !== 1 ? "s" : ""}
+              {inProgressCount > 0 && ` · ${inProgressCount} in progress`}
+              {` · Passing score: ${exam.passingScore}%`}
+              {exam.timeLimit ? ` · Time limit: ${Math.floor(exam.timeLimit / 60)}m` : " · No time limit"}
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ border: "1px solid var(--clr-border)" }}
+              onClick={exportResultsCSV}
+              disabled={viewResults.results.length === 0}
+              title="Export all student scores and answers to Excel-compatible CSV"
+            >
+              📥 Export CSV
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => { setViewResults(null); setMode("list"); }}>
+              ← Back to Exams
+            </button>
+          </div>
+        </div>
+
+        {/* ── KPI Metric Cards ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
+          {/* Card 1: Submissions */}
+          <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>👥 Submissions</span>
+              {inProgressCount > 0 && (
+                <span className="badge badge-accent" style={{ fontSize: "0.68rem" }}>
+                  +{inProgressCount} in progress
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-brand)", marginTop: 4 }}>
+              {exam.totalResults}
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+              {viewResults.results.length} total participants
+            </div>
+          </div>
+
+          {/* Card 2: Pass Rate */}
+          <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🏆 Pass Rate</div>
+            <div style={{ fontSize: "1.6rem", fontWeight: 800, color: exam.passRate >= 70 ? "var(--clr-success)" : exam.passRate >= 50 ? "var(--clr-warning)" : "var(--clr-danger)", marginTop: 4 }}>
+              {exam.passRate}%
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+              ✅ {exam.passCount} passed · ❌ {exam.failCount} failed
+            </div>
+          </div>
+
+          {/* Card 3: Average Score */}
+          <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🎯 Average Score</div>
+            <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-warning)", marginTop: 4 }}>
+              {exam.avgScore}%
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+              Min: {exam.lowestScore}% · Max: {exam.highestScore}%
+            </div>
+          </div>
+
+          {/* Card 4: Average Duration */}
+          <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>⏱ Avg Time Taken</div>
+            <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-accent)", marginTop: 4 }}>
+              {exam.avgDuration ? `${Math.floor(exam.avgDuration / 60)}m ${exam.avgDuration % 60}s` : "—"}
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+              {exam.timeLimit && exam.avgDuration
+                ? `${Math.round((exam.avgDuration / exam.timeLimit) * 100)}% of limit (${Math.floor(exam.timeLimit / 60)}m)`
+                : "No time limit set"}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Sub-Tabs Navigation ── */}
+        <div style={{ display: "flex", gap: 8, borderBottom: "1px solid var(--clr-border)", paddingBottom: 8, marginBottom: 16 }}>
+          <button
+            onClick={() => setResultsTab("students")}
+            className="btn btn-ghost btn-sm"
+            style={{
+              borderBottom: resultsTab === "students" ? "2px solid var(--clr-brand)" : "none",
+              color: resultsTab === "students" ? "var(--clr-brand)" : "var(--clr-text-muted)",
+              fontWeight: 600,
+              borderRadius: 0,
+            }}
+          >
+            👥 Student Submissions ({viewResults.results.length})
+          </button>
+          <button
+            onClick={() => setResultsTab("questions")}
+            className="btn btn-ghost btn-sm"
+            style={{
+              borderBottom: resultsTab === "questions" ? "2px solid var(--clr-brand)" : "none",
+              color: resultsTab === "questions" ? "var(--clr-brand)" : "var(--clr-text-muted)",
+              fontWeight: 600,
+              borderRadius: 0,
+            }}
+          >
+            📊 Question Performance & Item Analysis ({viewResults.questionAnalytics.length})
+          </button>
+        </div>
+
+        {/* ── TAB 1: Student Submissions ── */}
+        {resultsTab === "students" && (
+          <div>
+            {/* Filter Bar */}
+            <div className="card" style={{ padding: "var(--space-3) var(--space-4)", marginBottom: 16 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                {/* Search */}
+                <div style={{ position: "relative", flex: "1 1 200px" }}>
+                  <input
+                    className="input"
+                    placeholder="Search students by name or @username…"
+                    value={studentSearch}
+                    onChange={e => setStudentSearch(e.target.value)}
+                    style={{ width: "100%", fontSize: "0.84rem" }}
+                  />
                 </div>
-              );
-            })}
+
+                {/* Status Filter Buttons */}
+                <div style={{ display: "flex", gap: 4 }}>
+                  {(
+                    [
+                      { id: "all", label: `All (${viewResults.results.length})` },
+                      { id: "passed", label: `Passed (${exam.passCount})` },
+                      { id: "failed", label: `Failed (${exam.failCount})` },
+                      { id: "inProgress", label: `In Progress (${inProgressCount})` },
+                    ] as const
+                  ).map(pill => (
+                    <button
+                      key={pill.id}
+                      onClick={() => setStudentFilter(pill.id)}
+                      className="btn btn-ghost btn-sm"
+                      style={{
+                        fontSize: "0.75rem",
+                        padding: "4px 10px",
+                        border: `1px solid ${studentFilter === pill.id ? "var(--clr-brand)" : "var(--clr-border)"}`,
+                        color: studentFilter === pill.id ? "var(--clr-brand)" : "var(--clr-text-muted)",
+                        background: studentFilter === pill.id ? "var(--clr-brand-muted)" : "transparent",
+                      }}
+                    >
+                      {pill.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sort */}
+                <select
+                  className="select"
+                  style={{ flex: "0 1 150px", fontSize: "0.8rem", padding: "4px 8px", height: 34 }}
+                  value={studentSort}
+                  onChange={e => setStudentSort(e.target.value as any)}
+                >
+                  <option value="newest">🕐 Most Recent</option>
+                  <option value="highest">🏆 Highest Score</option>
+                  <option value="lowest">📉 Lowest Score</option>
+                  <option value="fastest">⚡ Fastest Time</option>
+                  <option value="slowest">⏳ Slowest Time</option>
+                </select>
+              </div>
+            </div>
+
+            {/* List */}
+            {filteredStudents.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">📋</div>
+                <h3>No matching submissions</h3>
+                <p>Try adjusting your search query or filters.</p>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {filteredStudents.map(r => {
+                  const inProgress = r.score < 0;
+                  const isExpanded = expandedStudentIds.has(r.id);
+                  const timeLimitSec = exam.timeLimit;
+                  const durationFormatted = r.duration ? `${Math.floor(r.duration / 60)}m ${r.duration % 60}s` : null;
+
+                  return (
+                    <div
+                      key={r.id}
+                      className="card"
+                      style={{
+                        padding: 0,
+                        overflow: "hidden",
+                        border: `1px solid ${inProgress ? "rgba(245,158,11,0.3)" : r.passed ? "rgba(52,211,153,0.3)" : "rgba(248,113,113,0.3)"}`,
+                      }}
+                    >
+                      {/* Row Header */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 12,
+                          padding: "14px 18px",
+                          flexWrap: "wrap",
+                          background: inProgress
+                            ? "rgba(245,158,11,0.03)"
+                            : r.passed
+                            ? "rgba(52,211,153,0.03)"
+                            : "rgba(248,113,113,0.03)",
+                        }}
+                      >
+                        {/* Score Circle */}
+                        <div
+                          style={{
+                            width: 44,
+                            height: 44,
+                            borderRadius: "50%",
+                            background: inProgress
+                              ? "rgba(245,158,11,0.12)"
+                              : r.passed
+                              ? "var(--clr-success-muted)"
+                              : "rgba(248,113,113,0.12)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontWeight: 800,
+                            fontSize: "0.95rem",
+                            color: inProgress
+                              ? "var(--clr-warning)"
+                              : r.passed
+                              ? "var(--clr-success)"
+                              : "var(--clr-danger)",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {inProgress ? "⏱" : `${r.score}%`}
+                        </div>
+
+                        {/* Student Info */}
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</div>
+                          <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+                            {r.telegramId ? (
+                              <span style={{ color: "var(--clr-brand)", marginRight: 6 }}>
+                                ID: {r.telegramId}
+                              </span>
+                            ) : null}
+                            <span>🕐 {new Date(r.completedAt).toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        {/* Metrics: Score + Duration */}
+                        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                          {!inProgress && (
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
+                                🎯 {r.correctCount} / {r.totalQuestions}
+                              </div>
+                              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
+                                Correct answers
+                              </div>
+                            </div>
+                          )}
+
+                          {durationFormatted && (
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
+                                ⏱ {durationFormatted}
+                              </div>
+                              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
+                                {timeLimitSec ? `${Math.round((r.duration! / timeLimitSec) * 100)}% of limit` : "Time taken"}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Status Badge */}
+                          <span className={`badge ${inProgress ? "badge-muted" : r.passed ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.75rem", padding: "4px 10px" }}>
+                            {inProgress ? "⏱ In Progress" : r.passed ? "✓ Passed" : "✗ Failed"}
+                          </span>
+
+                          {/* Accordion Toggle */}
+                          {!inProgress && r.details && r.details.length > 0 && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: "0.76rem", border: "1px solid var(--clr-border)", padding: "4px 10px" }}
+                              onClick={() => toggleExpandStudent(r.id)}
+                            >
+                              {isExpanded ? "▲ Hide Answers" : "👁 View Answers"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Expanded Question-by-Question Breakdown */}
+                      {isExpanded && !inProgress && r.details && (
+                        <div style={{ padding: "16px 20px", borderTop: "1px solid var(--clr-border)", background: "var(--clr-bg-elevated)" }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 12, color: "var(--clr-text-secondary)" }}>
+                            📝 Question-by-Question Detailed Review for {r.name}:
+                          </div>
+
+                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                            {r.details.map((item, qIdx) => (
+                              <div
+                                key={qIdx}
+                                style={{
+                                  padding: "10px 14px",
+                                  borderRadius: "var(--radius-md)",
+                                  background: "var(--clr-bg-card)",
+                                  border: `1px solid ${!item.isAnswered ? "var(--clr-border)" : item.isCorrect ? "rgba(52,211,153,0.3)" : "rgba(248,113,113,0.3)"}`,
+                                }}
+                              >
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
+                                  <div style={{ fontWeight: 600, fontSize: "0.88rem", flex: 1 }}>
+                                    <span style={{ color: "var(--clr-text-muted)", marginRight: 6 }}>Q{qIdx + 1}:</span>
+                                    {item.question}
+                                  </div>
+                                  <span
+                                    className={`badge ${!item.isAnswered ? "badge-muted" : item.isCorrect ? "badge-success" : "badge-danger"}`}
+                                    style={{ fontSize: "0.72rem", flexShrink: 0 }}
+                                  >
+                                    {!item.isAnswered ? "⚠️ Not Answered" : item.isCorrect ? "✅ Correct" : "❌ Incorrect"}
+                                  </span>
+                                </div>
+
+                                <div style={{ fontSize: "0.82rem", display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <div style={{ color: item.isCorrect ? "var(--clr-success)" : "var(--clr-danger)" }}>
+                                    <b>Student's Answer:</b> {item.chosenOptionId !== null ? `Option ${String.fromCharCode(65 + item.chosenOptionId)} — ${item.chosenOptionText}` : "None"}
+                                  </div>
+
+                                  {!item.isCorrect && (
+                                    <div style={{ color: "var(--clr-success)" }}>
+                                      <b>Correct Answer:</b> Option {String.fromCharCode(65 + item.correctOptionId)} — {item.correctOptionText}
+                                    </div>
+                                  )}
+
+                                  {item.explanation && (
+                                    <div style={{ marginTop: 4, fontSize: "0.76rem", color: "var(--clr-text-muted)", background: "rgba(0,0,0,0.15)", padding: "4px 8px", borderRadius: 4 }}>
+                                      💡 {item.explanation}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-      }
-    </div>
-  );
+        )}
+
+        {/* ── TAB 2: Question Performance & Item Analysis ── */}
+        {resultsTab === "questions" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {viewResults.questionAnalytics.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">📊</div>
+                <h3>No question analytics</h3>
+                <p>Question analysis will be computed automatically once students take the exam.</p>
+              </div>
+            ) : (
+              viewResults.questionAnalytics.map((q, qIdx) => {
+                const diffColor = q.difficulty === "EASY" ? "var(--clr-success)" : q.difficulty === "MEDIUM" ? "var(--clr-warning)" : "var(--clr-danger)";
+                const isSaving = savingQuestionIdx === q.index;
+
+                return (
+                  <div key={qIdx} className="card" style={{ padding: "18px 20px" }}>
+                    {/* Header */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span className="badge badge-brand" style={{ fontSize: "0.78rem" }}>
+                          Question #{qIdx + 1}
+                        </span>
+                        <span
+                          className="badge"
+                          style={{
+                            background: `${diffColor}22`,
+                            color: diffColor,
+                            border: `1px solid ${diffColor}44`,
+                            fontSize: "0.72rem",
+                          }}
+                        >
+                          {q.difficulty === "EASY" ? "🟢 Easy (سهل)" : q.difficulty === "MEDIUM" ? "🟡 Medium (متوسط)" : "🔴 Hard (صعب)"}
+                        </span>
+                        <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)" }}>
+                          {q.correctCount} of {q.totalAnswered} answered correctly ({q.successRate}%)
+                        </span>
+                      </div>
+
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ border: "1px solid var(--clr-border)", fontSize: "0.76rem" }}
+                        onClick={() => saveQuestionToLibrary(q)}
+                        disabled={isSaving}
+                        title="Save this question to your Question Library so you can reuse or send it anytime"
+                      >
+                        {isSaving ? "Saving…" : "💾 Save to Question Library"}
+                      </button>
+                    </div>
+
+                    {/* Question Text */}
+                    <div style={{ fontWeight: 600, fontSize: "0.95rem", lineHeight: 1.45, marginBottom: 14 }}>
+                      {q.question}
+                    </div>
+
+                    {/* Options Distribution Bars */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {q.options.map((opt, optIdx) => {
+                        const count = q.optionCounts[optIdx] || 0;
+                        const pct = q.totalAnswered > 0 ? Math.round((count / q.totalAnswered) * 100) : 0;
+                        const isCorrect = optIdx === q.correctOptionId;
+
+                        return (
+                          <div key={optIdx} style={{ position: "relative" }}>
+                            {/* Background Bar */}
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: `${pct}%`,
+                                borderRadius: "var(--radius-sm)",
+                                background: isCorrect ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.04)",
+                                transition: "width 0.4s var(--ease-out)",
+                              }}
+                            />
+
+                            {/* Option Content */}
+                            <div
+                              style={{
+                                position: "relative",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                padding: "8px 12px",
+                                borderRadius: "var(--radius-sm)",
+                                border: `1px solid ${isCorrect ? "rgba(52,211,153,0.4)" : "var(--clr-border)"}`,
+                                fontSize: "0.84rem",
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontWeight: 700, color: isCorrect ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
+                                  {String.fromCharCode(65 + optIdx)}.
+                                </span>
+                                <span style={{ color: isCorrect ? "var(--clr-success)" : "var(--clr-text-primary)" }}>
+                                  {opt}
+                                </span>
+                                {isCorrect && (
+                                  <span className="badge badge-success" style={{ fontSize: "0.65rem", padding: "1px 6px" }}>
+                                    ✓ Correct Answer
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ fontWeight: 700, fontSize: "0.82rem", color: isCorrect ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
+                                {pct}% <span style={{ fontWeight: 400, fontSize: "0.72rem" }}>({count})</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Trap Detection Warning */}
+                    {q.mostCommonMistake && (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: "8px 12px",
+                          borderRadius: "var(--radius-sm)",
+                          background: "rgba(245,158,11,0.08)",
+                          border: "1px solid rgba(245,158,11,0.3)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: "0.78rem",
+                          color: "var(--clr-warning)",
+                        }}
+                      >
+                        <span>⚠️</span>
+                        <div>
+                          <b>Common Distractor / Trap:</b> {q.mostCommonMistake.percentage}% of students mistakenly selected{" "}
+                          <b>
+                            Option {String.fromCharCode(65 + q.mostCommonMistake.optionIndex)} ("{q.mostCommonMistake.optionText}")
+                          </b>.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Explanation */}
+                    {q.explanation && (
+                      <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "6px 10px", background: "rgba(0,0,0,0.15)", borderRadius: 6 }}>
+                        💡 <b>Explanation:</b> {q.explanation}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ── Exam form (create / edit) ─────────────────────────────────────────────
   const isEditing = mode === "edit";
