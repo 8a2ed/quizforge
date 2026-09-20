@@ -98,6 +98,7 @@ export interface SendPollParams {
   allows_adding_options?: boolean;
   allows_revoting?: boolean;
   open_period?: number;
+  close_date?: number;
   is_closed?: boolean;
   reply_to_message_id?: number;
 }

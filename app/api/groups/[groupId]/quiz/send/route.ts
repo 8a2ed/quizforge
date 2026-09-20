@@ -52,17 +52,49 @@ export async function POST(
     allowRevoting = false,
   } = body;
 
-  // Validations
-  if (!question?.trim())
+  // Validations & Human-Error Prevention
+  const cleanQuestion = question?.trim();
+  if (!cleanQuestion)
     return NextResponse.json({ error: "Question is required" }, { status: 400 });
-  if (!options || options.length < 2)
-    return NextResponse.json({ error: "At least 2 options required" }, { status: 400 });
-  if (type === "quiz" && (correctOptionId === undefined || correctOptionId === null))
-    return NextResponse.json({ error: "Correct option required for quiz type" }, { status: 400 });
+  if (cleanQuestion.length > 300)
+    return NextResponse.json({ error: "Question cannot exceed 300 characters." }, { status: 400 });
+
+  if (!Array.isArray(options) || options.length < 2)
+    return NextResponse.json({ error: "At least 2 options are required." }, { status: 400 });
+  if (options.length > 10)
+    return NextResponse.json({ error: "Telegram polls support a maximum of 10 options." }, { status: 400 });
+
+  const cleanOptions: string[] = options.map((o: string) => String(o || "").trim());
+  if (cleanOptions.some((o) => !o))
+    return NextResponse.json({ error: "Options cannot be empty." }, { status: 400 });
+  if (cleanOptions.some((o) => o.length > 100))
+    return NextResponse.json({ error: "Each option must be 100 characters or less." }, { status: 400 });
+
+  // Prevent duplicate options (causes POLL_ANSWERS_DUPLICATE in Telegram)
+  const lowerOptions = cleanOptions.map((o) => o.toLowerCase());
+  if (new Set(lowerOptions).size !== lowerOptions.length) {
+    return NextResponse.json({ error: "Options must be unique. Duplicate answers are not allowed by Telegram." }, { status: 400 });
+  }
+
+  if (type === "quiz") {
+    if (correctOptionId === undefined || correctOptionId === null || correctOptionId < 0 || correctOptionId >= cleanOptions.length) {
+      return NextResponse.json({ error: "A valid correct option must be selected for quiz mode." }, { status: 400 });
+    }
+  }
+
+  // Explanation only allowed for quiz and max 200 chars
+  const cleanExplanation = type === "quiz" && explanation?.trim() ? explanation.trim() : null;
+  if (cleanExplanation && cleanExplanation.length > 200) {
+    return NextResponse.json({ error: "Explanation cannot exceed 200 characters." }, { status: 400 });
+  }
 
   const chatId = auth.membership.group.chatId;
   const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
   const isFuture = scheduledDate && scheduledDate > new Date();
+
+  if (scheduledAt && scheduledDate && scheduledDate.getTime() < Date.now() + 30_000) {
+    return NextResponse.json({ error: "Scheduled time must be at least 1 minute in the future." }, { status: 400 });
+  }
 
   // Sanitize tags
   let sanitizedTags: string[] = [];
@@ -75,10 +107,10 @@ export async function POST(
 
   // Shared DB payload
   const quizData = {
-    question: question.trim(),
-    options,
+    question: cleanQuestion,
+    options: cleanOptions,
     correctOptionId: type === "quiz" ? correctOptionId : null,
-    explanation: explanation?.trim() || null,
+    explanation: cleanExplanation,
     type: type === "quiz" ? "QUIZ" as const : "POLL" as const,
     isAnonymous,
     allowsMultiple: type === "poll" ? allowsMultiple : false,
@@ -117,7 +149,7 @@ export async function POST(
           message_thread_id: topicId || undefined,
           photoBase64: mediaBase64,
           mimeType: mediaMimeType || "image/jpeg",
-          caption: question.trim(),
+          caption: cleanQuestion,
         });
         replyToMessageId = photoMsg.message_id;
       } else if (mediaUrl?.trim()) {
@@ -125,7 +157,7 @@ export async function POST(
           chat_id: chatId,
           message_thread_id: topicId || undefined,
           photo: mediaUrl.trim(),
-          caption: question.trim(),
+          caption: cleanQuestion,
           parse_mode: "HTML",
         });
         replyToMessageId = photoMsg.message_id;
@@ -136,23 +168,35 @@ export async function POST(
     }
   }
 
-  // Step 2: Send the poll
+  // Step 2: Configure open_period (<= 600s) vs close_date (> 600s)
+  let telegramOpenPeriod: number | undefined = undefined;
+  let telegramCloseDate: number | undefined = undefined;
+  if (openPeriod && openPeriod > 0) {
+    if (openPeriod <= 600) {
+      telegramOpenPeriod = Math.max(5, openPeriod);
+    } else {
+      telegramCloseDate = Math.floor(Date.now() / 1000) + openPeriod;
+    }
+  }
+
+  // Step 3: Send the poll
   let message;
   try {
     message = await telegram.sendPoll({
       chat_id: chatId,
       message_thread_id: topicId || undefined,
-      question: question.trim(),
-      options: options.map((o: string) => ({ text: o.trim() })),
+      question: cleanQuestion,
+      options: cleanOptions.map((o: string) => ({ text: o })),
       type: type === "quiz" ? "quiz" : "regular",
       is_anonymous: isAnonymous,
       correct_option_id: type === "quiz" ? correctOptionId : undefined,
-      explanation: explanation?.trim() || undefined,
-      explanation_parse_mode: explanation?.trim() ? "HTML" : undefined,
+      explanation: cleanExplanation || undefined,
+      explanation_parse_mode: cleanExplanation ? "HTML" : undefined,
       allows_multiple_answers: type === "poll" ? allowsMultiple : false,
       allows_adding_options: type === "poll" ? allowAddingOptions : false,
       allows_revoting: type === "poll" ? allowRevoting : false,
-      open_period: openPeriod || undefined,
+      open_period: telegramOpenPeriod,
+      close_date: telegramCloseDate,
       reply_to_message_id: replyToMessageId,
     });
   } catch (err) {

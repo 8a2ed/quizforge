@@ -66,6 +66,16 @@ export async function GET(req: Request) {
           } catch (e) { console.warn(`[Cron] Photo failed for ${quiz.id}:`, e); }
         }
 
+        let cronOpenPeriod: number | undefined = undefined;
+        let cronCloseDate: number | undefined = undefined;
+        if (quiz.openPeriod && quiz.openPeriod > 0) {
+          if (quiz.openPeriod <= 600) {
+            cronOpenPeriod = Math.max(5, quiz.openPeriod);
+          } else {
+            cronCloseDate = Math.floor(Date.now() / 1000) + quiz.openPeriod;
+          }
+        }
+
         const tgMessage = await telegram.sendPoll({
           chat_id: quiz.group.chatId,
           message_thread_id: quiz.topicId || undefined,
@@ -75,11 +85,12 @@ export async function GET(req: Request) {
           is_anonymous: quiz.isAnonymous,
           allows_multiple_answers: quiz.allowsMultiple,
           correct_option_id: quiz.type === "QUIZ" && quiz.correctOptionId !== null ? quiz.correctOptionId : undefined,
-          explanation: quiz.explanation || undefined,
+          explanation: quiz.type === "QUIZ" && quiz.explanation ? quiz.explanation : undefined,
           explanation_parse_mode: quiz.explanation ? "HTML" : undefined,
           allows_adding_options: quiz.allowAddingOptions,
           allows_revoting: quiz.allowRevoting,
-          open_period: quiz.openPeriod || undefined,
+          open_period: cronOpenPeriod,
+          close_date: cronCloseDate,
           reply_to_message_id: replyToMessageId,
         });
 

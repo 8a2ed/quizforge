@@ -154,6 +154,30 @@ export default function NewQuizPage() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
 
+  // Unsaved changes protection
+  useEffect(() => {
+    const isDirty = question.trim() !== "" || options.some((o) => o.trim() !== "");
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty && !sending) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [question, options, sending]);
+
+  // Real-time duplicate options check
+  const duplicateIndices = new Set<number>();
+  const trimmedOptionsLower = options.map((o) => o.trim().toLowerCase());
+  trimmedOptionsLower.forEach((val, idx) => {
+    if (val && trimmedOptionsLower.indexOf(val) !== idx) {
+      duplicateIndices.add(idx);
+      duplicateIndices.add(trimmedOptionsLower.indexOf(val));
+    }
+  });
+  const hasDuplicateOptions = duplicateIndices.size > 0;
+
   // Adjust option count
   const setOptionCountSafe = (n: number) => {
     const count = Math.min(10, Math.max(2, n));
@@ -219,9 +243,17 @@ export default function NewQuizPage() {
   }, [addToast]);
 
   const handleSend = async () => {
-    if (!question.trim()) return addToast("error", "Please enter a question.");
+    const cleanQ = question.trim();
+    if (!cleanQ) return addToast("error", "Please enter a question.");
+    if (cleanQ.length > 300) return addToast("error", "Question cannot exceed 300 characters.");
     if (options.some((o) => !o.trim())) return addToast("error", "All option fields must be filled.");
+    if (options.some((o) => o.trim().length > 100)) return addToast("error", "Each option must be 100 characters or less.");
+    if (hasDuplicateOptions) return addToast("error", "Options must be unique. Duplicate answers are not allowed.");
     if (type === "quiz" && correctOptionId === null) return addToast("error", "Select the correct answer.");
+    if (type === "quiz" && explanation.trim().length > 200) return addToast("error", "Explanation cannot exceed 200 characters.");
+    if (scheduledAt && new Date(scheduledAt).getTime() < Date.now() + 30_000) {
+      return addToast("error", "Scheduled time must be at least 1 minute in the future.");
+    }
 
     // Client-side option shuffle (remaps correctOptionId accordingly)
     let finalOptions = options.map((o) => o.trim());
@@ -244,12 +276,12 @@ export default function NewQuizPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          question,
+          question: cleanQ,
           options: finalOptions,
           type,
           isAnonymous,
           correctOptionId: type === "quiz" ? finalCorrectId : undefined,
-          explanation: explanation.trim() || undefined,
+          explanation: type === "quiz" && explanation.trim() ? explanation.trim() : undefined,
           allowsMultiple: type === "poll" ? allowsMultiple : false,
           openPeriod: showDuration && openPeriod > 0 ? openPeriod : undefined,
           topicId: selectedTopic?.message_thread_id,
@@ -271,7 +303,7 @@ export default function NewQuizPage() {
       setSentCount(newCount);
       addToast("success",
         scheduledAt
-          ? `â° Quiz #${newCount} scheduled!`
+          ? `⏰ Quiz #${newCount} scheduled!`
           : `${E.ok} Quiz #${newCount} sent to Telegram!`
       );
       resetForm();
@@ -285,6 +317,9 @@ export default function NewQuizPage() {
   const openSaveModal = async () => {
     if (!question.trim() || options.some((o) => !o.trim())) {
       return addToast("error", "Fill in the question and all options first.");
+    }
+    if (hasDuplicateOptions) {
+      return addToast("error", "Options must be unique before saving to library.");
     }
     // Lazy-load collections for the picker
     if (saveCollections.length === 0) {
@@ -641,13 +676,23 @@ export default function NewQuizPage() {
                     <div className="option-number">{String.fromCharCode(65 + idx)}</div>
                   )}
 
-                  <input
-                    className="input"
-                    placeholder={`Option ${String.fromCharCode(65 + idx)}${type === "quiz" ? (correctOptionId === idx ? " â† Correct" : "") : ""}`}
-                    value={opt}
-                    onChange={(e) => handleOptionChange(idx, e.target.value.slice(0, 100))}
-                    style={type === "quiz" && correctOptionId === idx ? { borderColor: "var(--clr-success)", background: "rgba(52,211,153,0.05)" } : {}}
-                  />
+                  <div style={{ flex: 1, position: "relative" }}>
+                    <input
+                      className="input"
+                      placeholder={`Option ${String.fromCharCode(65 + idx)}${type === "quiz" ? (correctOptionId === idx ? " ← Correct" : "") : ""}`}
+                      value={opt}
+                      onChange={(e) => handleOptionChange(idx, e.target.value.slice(0, 100))}
+                      style={{
+                        ...(type === "quiz" && correctOptionId === idx ? { borderColor: "var(--clr-success)", background: "rgba(52,211,153,0.05)" } : {}),
+                        ...(duplicateIndices.has(idx) ? { borderColor: "var(--clr-danger)", background: "rgba(239,68,68,0.08)" } : {}),
+                      }}
+                    />
+                    {duplicateIndices.has(idx) && opt.trim() && (
+                      <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: "0.7rem", color: "var(--clr-danger)", fontWeight: 600 }}>
+                        ⚠️ Duplicate
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -783,7 +828,7 @@ export default function NewQuizPage() {
 
             {/* Schedule */}
             <div style={{ marginBottom: "var(--space-3)" }}>
-              <label className="input-label">â° Schedule</label>
+              <label className="input-label">⏰ Schedule</label>
               <input type="datetime-local" className="input" value={scheduledAt}
                 onChange={(e) => { setScheduledAt(e.target.value); if (!e.target.value) setRecurrence(""); }}
                 min={new Date().toISOString().slice(0, 16)} style={{ fontSize: "0.85rem" }} />
@@ -791,7 +836,7 @@ export default function NewQuizPage() {
 
             {scheduledAt && (
               <div style={{ marginBottom: "var(--space-3)" }}>
-                <label className="input-label">ðŸ” Repeat</label>
+                <label className="input-label">🔁 Repeat</label>
                 <select className="select" value={recurrence} onChange={(e) => setRecurrence(e.target.value)} style={{ fontSize: "0.85rem" }}>
                   <option value="">No repeat</option>
                   <option value="daily">Daily</option>
@@ -847,7 +892,7 @@ export default function NewQuizPage() {
               )}
             </div>
 
-            {/* â”€â”€ Poll Behaviour Toggles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+            {/* ── Poll Behaviour Toggles ── */}
             <div style={{ borderTop: "1px solid var(--clr-border)", paddingTop: "var(--space-4)", display: "flex", flexDirection: "column", gap: 2 }}>
               <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--clr-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "var(--space-2)" }}>
                 Poll Options
@@ -865,7 +910,7 @@ export default function NewQuizPage() {
                 </div>
               </label>
 
-              {/* Multiple Answers â€” poll only */}
+              {/* Multiple Answers — poll only */}
               {type === "poll" && (
                 <>
                   <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
@@ -937,7 +982,7 @@ export default function NewQuizPage() {
             </div>
           </div>
 
-          {/* â”€â”€ Live Preview â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+          {/* ── Live Preview ── */}
           <div className="quiz-preview">
             <h4 style={{ marginBottom: "var(--space-3)", color: "var(--clr-text-muted)", fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
               Preview
@@ -997,8 +1042,8 @@ export default function NewQuizPage() {
                 <div style={{ display: "flex", gap: 10, marginTop: 7, flexWrap: "wrap" }}>
                   {!isAnonymous && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>{E.user} Visible votes</span>}
                   {shuffleOptions && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>{E.shuffle} Shuffled</span>}
-                  {showDuration && openPeriod > 0 && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>â± {OPEN_PERIOD_OPTIONS.find(o => o.value === openPeriod)?.label}</span>}
-                  {scheduledAt && <span style={{ fontSize: "0.65rem", color: "#fbbf24" }}>â° Scheduled</span>}
+                  {showDuration && openPeriod > 0 && <span style={{ fontSize: "0.65rem", color: "#5a6a8a" }}>⏱️ {OPEN_PERIOD_OPTIONS.find(o => o.value === openPeriod)?.label}</span>}
+                  {scheduledAt && <span style={{ fontSize: "0.65rem", color: "#fbbf24" }}>⏰ Scheduled</span>}
                 </div>
               </div>
             </div>
