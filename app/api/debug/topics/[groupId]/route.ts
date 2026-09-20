@@ -91,34 +91,18 @@ export async function GET(
     results.botMembership = { ok: false, error: String(e) };
   }
 
-  // Test 4: getForumTopics (with @username fallback)
-  try {
-    let topicsResult: { topics: TelegramForumTopic[] } | null = null;
-    let usedIdentifier = group.chatId;
-    try {
-      topicsResult = await telegram.getForumTopics(group.chatId);
-    } catch {
-      // Try @username
-      const chatForUsername = await telegram.getChat(group.chatId);
-      if (chatForUsername.username) {
-        usedIdentifier = `@${chatForUsername.username}`;
-        topicsResult = await telegram.getForumTopics(usedIdentifier);
-      } else throw new Error("No username available");
-    }
-    const list = topicsResult?.topics || [];
-    results.getForumTopics = {
-      ok: true,
-      usedIdentifier,
-      count: list.length,
-      topics: list.map((t: TelegramForumTopic) => ({ id: t.message_thread_id, name: t.name, closed: t.is_closed })),
-    };
-  } catch (e: unknown) {
-    results.getForumTopics = {
-      ok: false,
-      error: String(e),
-      fix: "Telegram returned 'Not Found' — numeric chatId and @username both failed",
-    };
-  }
+  // Test 4: Forum topic capabilities info
+  results.telegramForumCapabilities = {
+    supportedMethods: [
+      "createForumTopic",
+      "editForumTopic",
+      "closeForumTopic",
+      "reopenForumTopic",
+      "deleteForumTopic",
+      "unpinAllForumTopicMessages"
+    ],
+    getForumTopicsNativeApi: "Not provided by Telegram HTTP Bot API — QuizForge manages topics via createForumTopic & webhook events",
+  };
 
   // Test 5: DB cache
   const cached = await prisma.topic.findMany({ where: { groupId: group.id } });

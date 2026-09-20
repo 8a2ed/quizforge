@@ -535,6 +535,19 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      if (msg.forum_topic_edited && msg.message_thread_id) {
+        const group = await resolveGroup();
+        if (group) {
+          const updateData: { name?: string; iconCustomEmojiId?: string } = {};
+          if (msg.forum_topic_edited.name) updateData.name = msg.forum_topic_edited.name;
+          if (msg.forum_topic_edited.icon_custom_emoji_id) updateData.iconCustomEmojiId = msg.forum_topic_edited.icon_custom_emoji_id;
+          await prisma.topic.updateMany({
+            where: { groupId: group.id, topicId: msg.message_thread_id },
+            data: updateData,
+          }).catch(() => {});
+        }
+      }
+
       if (msg.forum_topic_closed && msg.message_thread_id) {
         const group = await resolveGroup();
         if (group) await prisma.topic.updateMany({ where: { groupId: group.id, topicId: msg.message_thread_id }, data: { isClosed: true } }).catch(() => {});

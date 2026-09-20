@@ -21,14 +21,20 @@ async function call<T>(
       signal: controller.signal,
     });
 
-    if (!res.ok) {
-      // Telegram sometimes returns HTTP errors before JSON
-      throw new Error(`Telegram HTTP ${res.status} on ${method}`);
+    let json: { ok?: boolean; result?: unknown; description?: string } | null = null;
+    try {
+      json = (await res.json()) as { ok?: boolean; result?: unknown; description?: string };
+    } catch {
+      // Non-JSON response
     }
 
-    const json = await res.json();
-    if (!json.ok) {
-      throw new Error(json.description || `Telegram API error (${method})`);
+    if (!res.ok) {
+      const desc = json?.description || `HTTP ${res.status}`;
+      throw new Error(`Telegram error on ${method}: ${desc}`);
+    }
+
+    if (!json || !json.ok) {
+      throw new Error(json?.description || `Telegram API error (${method})`);
     }
     return json.result as T;
   } catch (err) {
@@ -77,6 +83,23 @@ export interface TelegramForumTopic {
   icon_custom_emoji_id?: string;
   is_closed?: boolean;
 }
+
+export const TELEGRAM_TOPIC_COLORS = [
+  { value: 7322096,  name: "Blue",   hex: "#6FB9F0" },
+  { value: 16766590, name: "Yellow", hex: "#FFD67E" },
+  { value: 13338331, name: "Purple", hex: "#CB86DB" },
+  { value: 9367192,  name: "Green",  hex: "#8EEE98" },
+  { value: 16749490, name: "Pink",   hex: "#FF93B2" },
+  { value: 16478047, name: "Red",    hex: "#FB6F5F" },
+] as const;
+
+export const STANDARD_FORUM_TOPICS = [
+  { name: "📢 الإعلانات العامة", icon_color: 7322096 },   // Blue
+  { name: "📝 الاختبارات القصيرة", icon_color: 9367192 }, // Green
+  { name: "🏆 الامتحانات الشاملة", icon_color: 16766590 }, // Yellow
+  { name: "📚 بنك الأسئلة والملخصات", icon_color: 13338331 }, // Purple
+  { name: "💬 استفسارات ونقاشات", icon_color: 16749490 }, // Pink
+];
 
 export interface TelegramMessage {
   message_id: number;
@@ -140,6 +163,41 @@ export const telegram = {
     return call("getChatMemberCount", { chat_id });
   },
 
+  createForumTopic(params: {
+    chat_id: string | number;
+    name: string;
+    icon_color?: number;
+    icon_custom_emoji_id?: string;
+  }): Promise<TelegramForumTopic> {
+    return call("createForumTopic", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
+
+  editForumTopic(params: {
+    chat_id: string | number;
+    message_thread_id: number;
+    name?: string;
+    icon_custom_emoji_id?: string;
+  }): Promise<boolean> {
+    return call("editForumTopic", params as unknown as Record<string, unknown>);
+  },
+
+  closeForumTopic(chat_id: string | number, message_thread_id: number): Promise<boolean> {
+    return call("closeForumTopic", { chat_id, message_thread_id });
+  },
+
+  reopenForumTopic(chat_id: string | number, message_thread_id: number): Promise<boolean> {
+    return call("reopenForumTopic", { chat_id, message_thread_id });
+  },
+
+  deleteForumTopic(chat_id: string | number, message_thread_id: number): Promise<boolean> {
+    return call("deleteForumTopic", { chat_id, message_thread_id });
+  },
+
+  unpinAllForumTopicMessages(chat_id: string | number, message_thread_id: number): Promise<boolean> {
+    return call("unpinAllForumTopicMessages", { chat_id, message_thread_id });
+  },
+
+  /** Legacy helper — Telegram Bot API does not provide a native getForumTopics list method */
   getForumTopics(chat_id: string | number): Promise<{ topics: TelegramForumTopic[] }> {
     return call("getForumTopics", { chat_id });
   },
