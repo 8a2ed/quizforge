@@ -5,7 +5,7 @@ const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
 const BOT_USERNAME    = process.env.NEXT_PUBLIC_BOT_USERNAME || "";
 
-// ─── In-memory exam session store ──────────────────────────────────────────
+// ─── Exam session store & persistent fallback ──────────────────────────────
 interface ExamQuestion {
   question: string;
   options: string[];
@@ -53,57 +53,68 @@ async function ackCb(id: string, text?: string, alert = false) {
   });
 }
 
-function escapeMarkdown(s: string): string {
-  return s.replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1");
+function escapeHtml(s: string): string {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 // ─── Send exam preview into a DM ────────────────────────────────────────────
 async function sendExamPreview(chatId: number | string, examId: string, telegramId: string) {
   const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
   if (!exam || !exam.isPublished) {
-    await tgCall("sendMessage", { chat_id: chatId, text: "❌ This exam is not available." });
+    await tgCall("sendMessage", { chat_id: chatId, text: "❌ This exam is not available or has been unpublished." });
     return;
   }
 
-  const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
-  if (existing) {
+  // Check if student completed already
+  const existingCompleted = await withRetry(() => prisma.examResult.findFirst({
+    where: { examId, telegramId, score: { gte: 0 } }
+  }));
+  if (existingCompleted) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: `✅ You already completed *${escapeMarkdown(exam.title)}* with *${existing.score}%*.\n\nContact your instructor to retake.`,
-      parse_mode: "Markdown",
+      text: `✅ You already completed <b>${escapeHtml(exam.title)}</b>.\n\n📊 Your final score: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "PASSED" : "FAILED"})\n\n<i>Contact your instructor if you need to retake.</i>`,
+      parse_mode: "HTML",
     });
     return;
   }
 
+  // Check for in-progress session
+  const inProgress = await withRetry(() => prisma.examResult.findFirst({
+    where: { examId, telegramId, score: -1 }
+  }));
+
   const questions = exam.questions as unknown as ExamQuestion[];
   const text = [
-    `📋 *${escapeMarkdown(exam.title)}*`,
-    exam.description ? `\n${escapeMarkdown(exam.description)}` : "",
-    `\n\n📊 *${questions.length} question${questions.length !== 1 ? "s" : ""}*`,
-    exam.timeLimit ? `\n⏱ *Time limit: ${Math.floor(exam.timeLimit / 60)} minutes*` : "",
-    `\n✅ *Passing score: ${exam.passingScore}%*`,
-    "\n\nTap *Begin* to start — questions arrive one by one.",
+    `📋 <b>${escapeHtml(exam.title)}</b>`,
+    exam.description ? `\n${escapeHtml(exam.description)}` : "",
+    `\n\n📊 <b>${questions.length} question${questions.length !== 1 ? "s" : ""}</b>`,
+    exam.timeLimit ? `\n⏱ <b>Time limit: ${Math.floor(exam.timeLimit / 60)} minutes</b>` : "",
+    `\n✅ <b>Passing score: ${exam.passingScore}%</b>`,
+    inProgress ? "\n\n⚠️ <i>You have an exam session in progress! Tap Resume to continue.</i>" : "\n\n👉 <i>Tap Begin to start — questions arrive one by one.</i>",
   ].filter(Boolean).join("");
 
   await tgCall("sendMessage", {
     chat_id: chatId,
     text,
-    parse_mode: "Markdown",
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [[
-        { text: "🚀 Begin Exam", callback_data: `exam_begin:${examId}` },
-        { text: "❌ Cancel",     callback_data: `exam_cancel:${examId}` },
+        { text: inProgress ? "▶️ Resume Exam" : "🚀 Begin Exam", callback_data: `exam_begin:${examId}` },
+        { text: "❌ Cancel", callback_data: `exam_cancel:${examId}` },
       ]],
     },
   });
 }
 
 // ─── Send one question ────────────────────────────────────────────────────────
-async function sendQuestion(session: ExamSession, cbId: string) {
+async function sendQuestion(session: ExamSession, cbId?: string) {
   if (session.timeLimit) {
     const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
     if (elapsed >= session.timeLimit) {
-      await ackCb(cbId, "⏰ Time's up!", true);
+      if (cbId) await ackCb(cbId, "⏰ Time's up!", true);
       await finishExam(session, true);
       return;
     }
@@ -113,20 +124,63 @@ async function sendQuestion(session: ExamSession, cbId: string) {
   const total = session.questions.length;
   const qNum  = session.currentQ + 1;
 
-  const bar  = "▓".repeat(qNum) + "░".repeat(total - qNum);
-  const text = [`📋 *${escapeMarkdown(session.examTitle)}*`, `\`${bar}\` ${qNum}/${total}`, "", `*Q${qNum}. ${escapeMarkdown(q.question)}*`].join("\n");
+  // Visual progress bar normalized to 10 blocks
+  const filled = Math.min(10, Math.max(1, Math.round((qNum / total) * 10)));
+  const bar    = "▓".repeat(filled) + "░".repeat(10 - filled);
 
-  const keyboard = q.options.map((opt, i) => ([{
-    text: `${String.fromCharCode(65 + i)}. ${opt}`,
-    callback_data: `exam_answer:${session.examId}:${session.currentQ}:${i}`,
-  }]));
+  // Remaining time indicator if limited
+  let timeStr = "";
+  if (session.timeLimit) {
+    const remaining = Math.max(0, session.timeLimit - Math.floor((Date.now() - session.startedAt) / 1000));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    timeStr = ` · ⏱ ${mins}:${secs < 10 ? "0" : ""}${secs}`;
+  }
 
-  await ackCb(cbId);
+  // Format options in message text so long options are never cut off
+  const optionsList = q.options.map((opt, i) => `<b>${String.fromCharCode(65 + i)}.</b> ${escapeHtml(opt)}`).join("\n");
+
+  const text = [
+    `📋 <b>${escapeHtml(session.examTitle)}</b>`,
+    `<code>${bar}</code> Question ${qNum}/${total}${timeStr}`,
+    "",
+    `<b>Q${qNum}. ${escapeHtml(q.question)}</b>`,
+    "",
+    optionsList,
+  ].join("\n");
+
+  // Format buttons: if all options are short (<= 25 chars), show full option; else 2x2 letter grid
+  const allShort = q.options.every(o => o.length <= 25);
+  const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+
+  if (allShort) {
+    for (let i = 0; i < q.options.length; i++) {
+      keyboard.push([{
+        text: `${String.fromCharCode(65 + i)}. ${q.options[i]}`,
+        callback_data: `exam_answer:${session.examId}:${session.currentQ}:${i}`,
+      }]);
+    }
+  } else {
+    let row: Array<{ text: string; callback_data: string }> = [];
+    for (let i = 0; i < q.options.length; i++) {
+      row.push({
+        text: `${String.fromCharCode(65 + i)}`,
+        callback_data: `exam_answer:${session.examId}:${session.currentQ}:${i}`,
+      });
+      if (row.length === 2 || i === q.options.length - 1) {
+        keyboard.push([...row]);
+        row = [];
+      }
+    }
+  }
+
+  if (cbId) await ackCb(cbId);
+
   await tgCall("editMessageText", {
-    chat_id:    session.chatId,
+    chat_id: session.chatId,
     message_id: session.msgId,
     text,
-    parse_mode: "Markdown",
+    parse_mode: "HTML",
     reply_markup: { inline_keyboard: keyboard },
   });
 }
@@ -143,10 +197,12 @@ async function finishExam(session: ExamSession, timedOut = false) {
     const isCorrect = chosen === q.correctOptionId;
     if (isCorrect) correct++;
     const icon         = isCorrect ? "✅" : "❌";
-    const chosenLabel  = chosen >= 0 ? String.fromCharCode(65 + chosen) : "—";
-    const correctLabel = String.fromCharCode(65 + q.correctOptionId);
-    breakdown.push(`${icon} Q${i + 1}: You chose *${chosenLabel}* (correct: *${correctLabel}*)`);
-    if (!isCorrect && q.explanation) breakdown.push(`  💡 _${escapeMarkdown(q.explanation)}_`);
+    const chosenLabel  = chosen >= 0 ? `${String.fromCharCode(65 + chosen)}` : "None";
+    const correctLabel = `${String.fromCharCode(65 + q.correctOptionId)}`;
+    breakdown.push(`${icon} <b>Q${i + 1}:</b> Selected <b>${chosenLabel}</b> (Correct: <b>${correctLabel}</b>)`);
+    if (!isCorrect && q.explanation) {
+      breakdown.push(`   💡 <i>${escapeHtml(q.explanation)}</i>`);
+    }
   });
 
   const score    = Math.round((correct / questions.length) * 100);
@@ -154,35 +210,70 @@ async function finishExam(session: ExamSession, timedOut = false) {
   const duration = Math.floor((Date.now() - startedAt) / 1000);
 
   try {
-    await withRetry(() => prisma.examResult.create({
-      data: { examId, name, telegramId, answers, score, passed, duration },
-    }));
-  } catch (e) { console.error("[exam] save result error:", e); }
+    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
+    if (existing) {
+      await withRetry(() => prisma.examResult.update({
+        where: { id: existing.id },
+        data: { name, answers, score, passed, duration, completedAt: new Date() },
+      }));
+    } else {
+      await withRetry(() => prisma.examResult.create({
+        data: { examId, name, telegramId, answers, score, passed, duration, completedAt: new Date() },
+      }));
+    }
+  } catch (e) {
+    console.error("[exam] save result error:", e);
+  }
 
   const icon = timedOut ? "⏰" : passed ? "🏆" : "📋";
-  const text = [
-    `${icon} *Exam Complete: ${escapeMarkdown(examTitle)}*`,
+  const header = [
+    `${icon} <b>Exam Complete: ${escapeHtml(examTitle)}</b>`,
     "",
-    timedOut ? "⏰ _Time ran out!_\n" : "",
-    `*Score: ${score}% — ${passed ? "PASSED ✅" : "FAILED ❌"}*`,
-    `Correct: ${correct}/${questions.length} · Time: ${Math.floor(duration / 60)}m ${duration % 60}s`,
+    timedOut ? "⏰ <i>Time ran out! Your answered questions were scored.</i>\n" : "",
+    `<b>Score: ${score}% — ${passed ? "PASSED ✅" : "FAILED ❌"}</b>`,
+    `Correct: <b>${correct}/${questions.length}</b> · Time: <b>${Math.floor(duration / 60)}m ${duration % 60}s</b>`,
+    `Passing Requirement: <b>${passingScore}%</b>`,
     "",
     "─────────────────",
-    ...breakdown,
-  ].filter(s => s !== undefined).join("\n");
+  ].join("\n");
 
-  await tgCall("editMessageText", {
-    chat_id:    chatId,
-    message_id: msgId,
-    text,
-    parse_mode: "Markdown",
-    reply_markup: { inline_keyboard: [] },
-  });
+  const fullText = [header, ...breakdown].join("\n");
+
+  if (fullText.length <= 3800) {
+    await tgCall("editMessageText", {
+      chat_id: chatId,
+      message_id: msgId,
+      text: fullText,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+    });
+  } else {
+    await tgCall("editMessageText", {
+      chat_id: chatId,
+      message_id: msgId,
+      text: header + "\n<i>Detailed question breakdown sent below:</i>",
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+    });
+
+    let chunk = "";
+    for (const item of breakdown) {
+      if ((chunk + "\n" + item).length > 3000) {
+        await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
+        chunk = item;
+      } else {
+        chunk = chunk ? chunk + "\n" + item : item;
+      }
+    }
+    if (chunk) {
+      await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
+    }
+  }
 }
 
 // ─── Callback handlers ────────────────────────────────────────────────────────
 
-// exam_start:{examId}  — fired from the group "Start Exam" button
+// exam_start:{examId}  — fired from the group "Start Exam" button (or fallback)
 async function handleExamStart(cb: Record<string, unknown>, examId: string) {
   const user       = cb.from as Record<string, unknown>;
   const telegramId = String((user as { id: number }).id);
@@ -192,14 +283,13 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
     const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
     if (!exam || !exam.isPublished) return ackCb(cbId, "This exam is not available.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
+    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: { gte: 0 } } }));
     if (existing) return ackCb(cbId, `You already completed this exam with ${existing.score}%.`, true);
 
-    // Deep-link redirect: opens bot DM and auto-sends /start exam_{examId}
-    // This works even if the user has never messaged the bot before.
+    const cleanBotUsername = BOT_USERNAME.replace(/^@/, "");
     await tgCall("answerCallbackQuery", {
       callback_query_id: cbId,
-      url: `https://t.me/${BOT_USERNAME}?start=exam_${examId}`,
+      url: `https://t.me/${cleanBotUsername}?start=exam_${examId}`,
     });
   } catch (e) {
     console.error("[exam] handleExamStart:", e);
@@ -222,19 +312,49 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
     if (!exam || !exam.isPublished) return ackCb(cbId, "Exam not available.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
+    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: { gte: 0 } } }));
     if (existing) return ackCb(cbId, `You already completed this exam (${existing.score}%).`, true);
 
-    const session: ExamSession = {
-      examId, examTitle: exam.title,
-      chatId, msgId, name, telegramId,
-      questions:    exam.questions as unknown as ExamQuestion[],
-      answers:      {},
-      currentQ:     0,
-      startedAt:    Date.now(),
-      timeLimit:    exam.timeLimit,
-      passingScore: exam.passingScore,
-    };
+    const inProgress = await withRetry(() => prisma.examResult.findFirst({
+      where: { examId, telegramId, score: -1 }
+    }));
+
+    let session: ExamSession;
+    if (inProgress && inProgress.answers && typeof inProgress.answers === "object") {
+      const data = inProgress.answers as Record<string, unknown>;
+      session = {
+        examId, examTitle: exam.title,
+        chatId, msgId, name, telegramId,
+        questions: exam.questions as unknown as ExamQuestion[],
+        answers: (data.answers as Record<number, number>) || {},
+        currentQ: Number(data.currentQ) || 0,
+        startedAt: Number(data.startedAt) || Date.now(),
+        timeLimit: exam.timeLimit,
+        passingScore: exam.passingScore,
+      };
+    } else {
+      session = {
+        examId, examTitle: exam.title,
+        chatId, msgId, name, telegramId,
+        questions: exam.questions as unknown as ExamQuestion[],
+        answers: {},
+        currentQ: 0,
+        startedAt: Date.now(),
+        timeLimit: exam.timeLimit,
+        passingScore: exam.passingScore,
+      };
+
+      await withRetry(() => prisma.examResult.create({
+        data: {
+          examId, name, telegramId,
+          answers: { answers: {}, currentQ: 0, startedAt: session.startedAt, msgId, chatId },
+          score: -1,
+          passed: false,
+          duration: null,
+        },
+      }));
+    }
+
     examSessions.set(sessionKey(telegramId, examId), session);
     await sendQuestion(session, cbId);
   } catch (e) {
@@ -249,13 +369,72 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
   const telegramId = String((user as { id: number }).id);
   const cbId       = cb.id as string;
   const key        = sessionKey(telegramId, examId);
-  const session    = examSessions.get(key);
+  let session      = examSessions.get(key);
 
-  if (!session)           return ackCb(cbId, "Session expired. Please start the exam again.", true);
-  if (qIndex !== session.currentQ) return ackCb(cbId, "Please answer the current question.", true);
+  // Recovery from database if memory was cleared or serverless cold start
+  if (!session) {
+    try {
+      const inProgress = await withRetry(() => prisma.examResult.findFirst({
+        where: { examId, telegramId, score: -1 },
+        include: { exam: true },
+      }));
+      if (inProgress && inProgress.exam) {
+        const data = (inProgress.answers as Record<string, unknown>) || {};
+        session = {
+          examId, examTitle: inProgress.exam.title,
+          chatId: (cb.message as { chat: { id: number } }).chat.id,
+          msgId: (cb.message as { message_id: number }).message_id,
+          name: inProgress.name, telegramId,
+          questions: inProgress.exam.questions as unknown as ExamQuestion[],
+          answers: (data.answers as Record<number, number>) || {},
+          currentQ: Number(data.currentQ) || 0,
+          startedAt: Number(data.startedAt) || Date.now(),
+          timeLimit: inProgress.exam.timeLimit,
+          passingScore: inProgress.exam.passingScore,
+        };
+        examSessions.set(key, session);
+      }
+    } catch (e) {
+      console.error("[exam] session recovery error:", e);
+    }
+  }
+
+  if (!session) return ackCb(cbId, "Session expired. Please start the exam again.", true);
+
+  // Time limit check BEFORE accepting answer
+  if (session.timeLimit) {
+    const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+    if (elapsed > session.timeLimit) {
+      await ackCb(cbId, "⏰ Time's up!", true);
+      await finishExam(session, true);
+      return;
+    }
+  }
+
+  // Double-click protection: silently ignore older clicks
+  if (qIndex < session.currentQ) {
+    return ackCb(cbId);
+  }
+  if (qIndex > session.currentQ) {
+    return ackCb(cbId, "Please answer the current question.", true);
+  }
 
   session.answers[qIndex] = optionId;
   session.currentQ++;
+
+  // Save progress to database
+  withRetry(() => prisma.examResult.updateMany({
+    where: { examId, telegramId, score: -1 },
+    data: {
+      answers: {
+        answers: session!.answers,
+        currentQ: session!.currentQ,
+        startedAt: session!.startedAt,
+        msgId: session!.msgId,
+        chatId: session!.chatId,
+      },
+    },
+  })).catch(e => console.error("[exam] save progress error:", e));
 
   if (session.currentQ >= session.questions.length) {
     await finishExam(session);
@@ -270,11 +449,13 @@ async function handleExamCancel(cb: Record<string, unknown>, examId: string) {
   const telegramId = String((user as { id: number }).id);
   const cbId       = cb.id as string;
   examSessions.delete(sessionKey(telegramId, examId));
+  prisma.examResult.deleteMany({ where: { examId, telegramId, score: -1 } }).catch(() => {});
   await ackCb(cbId, "Exam cancelled.", false);
   try {
-    await tgCall("editMessageReplyMarkup", {
-      chat_id:    (cb.message as { chat: { id: number } }).chat.id,
+    await tgCall("editMessageText", {
+      chat_id: (cb.message as { chat: { id: number } }).chat.id,
       message_id: (cb.message as { message_id: number }).message_id,
+      text: "❌ Exam cancelled.",
       reply_markup: { inline_keyboard: [] },
     });
   } catch { /* ignore */ }
@@ -314,10 +495,23 @@ export async function POST(req: NextRequest) {
       const chatId = String(msg.chat?.id);
       const text   = (msg.text || "") as string;
 
-      // /start exam_{examId}  — deep-link from "Start Exam" group button
-      if (text.startsWith("/start exam_") && msg.chat?.type === "private") {
-        const examId = text.replace("/start exam_", "").trim().split(" ")[0];
+      // /start exam_{examId} or /start@BotUsername exam_{examId}
+      const examStartMatch = text.trim().match(/^\/start(?:@\w+)?\s+exam_([a-zA-Z0-9_-]+)/);
+      if (examStartMatch && msg.chat?.type === "private") {
+        const examId = examStartMatch[1];
         if (examId) await sendExamPreview(msg.chat.id, examId, String(msg.from?.id));
+      }
+
+      // /cancel or /stop in private DM
+      if ((text === "/cancel" || text === "/stop") && msg.chat?.type === "private") {
+        const telegramId = String(msg.from?.id);
+        for (const [key, session] of examSessions.entries()) {
+          if (key.startsWith(`${telegramId}:`)) {
+            examSessions.delete(key);
+            prisma.examResult.deleteMany({ where: { examId: session.examId, telegramId, score: -1 } }).catch(() => {});
+          }
+        }
+        await tgCall("sendMessage", { chat_id: msg.chat.id, text: "Active exam session cancelled." });
       }
 
       const resolveGroup = () => prisma.group.findFirst({

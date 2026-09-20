@@ -36,15 +36,21 @@ export async function GET(
   if (!exam) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const results = exam.results;
-  const passCount = results.filter(r => r.passed).length;
-  const avgScore = results.length > 0
-    ? Math.round(results.reduce((s, r) => s + r.score, 0) / results.length)
+  const completedResults = results.filter(r => r.score >= 0);
+  const inProgressResults = results.filter(r => r.score < 0);
+  const passCount = completedResults.filter(r => r.passed).length;
+  const avgScore = completedResults.length > 0
+    ? Math.round(completedResults.reduce((s, r) => s + r.score, 0) / completedResults.length)
     : 0;
 
   return NextResponse.json({
     exam: {
       id: exam.id, title: exam.title, passingScore: exam.passingScore,
-      totalResults: exam._count.results, passCount, failCount: results.length - passCount, avgScore,
+      totalResults: completedResults.length,
+      inProgressCount: inProgressResults.length,
+      passCount,
+      failCount: completedResults.length - passCount,
+      avgScore,
     },
     results,
   });

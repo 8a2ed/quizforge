@@ -89,54 +89,90 @@ export default function ExamsPage() {
     setMode("edit");
   };
 
-  const validateQuestions = () => {
-    const valid = questions.filter(q =>
-      q.question.trim() && q.options.filter(o => o.trim()).length >= 2 &&
-      q.correctOptionId >= 0 && q.correctOptionId < q.options.filter(o => o.trim()).length
-    );
-    return valid;
+  const validateQuestions = (): { valid: Question[]; error?: string } => {
+    if (questions.length === 0) return { valid: [], error: "Please add at least 1 question." };
+
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const qText = q.question.trim();
+      if (!qText) {
+        return { valid: [], error: `Question ${i + 1}: Please enter question text.` };
+      }
+      const cleanOpts = q.options.map(o => o.trim()).filter(Boolean);
+      if (cleanOpts.length < 2) {
+        return { valid: [], error: `Question ${i + 1}: Needs at least 2 non-empty options.` };
+      }
+      if (cleanOpts.length > 10) {
+        return { valid: [], error: `Question ${i + 1}: Maximum 10 options allowed.` };
+      }
+      const lower = cleanOpts.map(o => o.toLowerCase());
+      if (new Set(lower).size !== lower.length) {
+        return { valid: [], error: `Question ${i + 1}: Options must be unique (duplicate answers found).` };
+      }
+      if (q.correctOptionId < 0 || q.correctOptionId >= cleanOpts.length) {
+        return { valid: [], error: `Question ${i + 1}: Please select a valid correct answer option.` };
+      }
+    }
+
+    const cleaned = questions.map(q => ({
+      question: q.question.trim(),
+      options: q.options.map(o => o.trim()).filter(Boolean),
+      correctOptionId: q.correctOptionId,
+      explanation: q.explanation?.trim() || undefined,
+    }));
+
+    return { valid: cleaned };
   };
 
   const handleCreate = async () => {
-    if (!title.trim()) return showToast("error", "Title required");
-    const validQ = validateQuestions();
-    if (validQ.length === 0) return showToast("error", "Add at least 1 valid question");
+    if (!title.trim()) return showToast("error", "Exam title is required");
+    const { valid: validQ, error } = validateQuestions();
+    if (error) return showToast("error", error);
     setSaving(true);
+    const score = Math.min(100, Math.max(1, parseInt(passingScore) || 60));
+    const limit = timeLimit && parseInt(timeLimit) > 0 ? parseInt(timeLimit) * 60 : null;
     const res = await fetch(`/api/groups/${groupId}/exams`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title, description: desc, questions: validQ,
-        timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null,
-        passingScore: parseInt(passingScore),
+        title: title.trim(),
+        description: desc.trim() || null,
+        questions: validQ,
+        timeLimit: limit,
+        passingScore: score,
         topicId: topicId || null,
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
       }),
     });
     const data = await res.json();
     setSaving(false);
-    if (data.ok) { showToast("success", "Exam created!"); resetForm(); setMode("list"); load(); }
-    else showToast("error", data.error || "Failed");
+    if (data.ok) { showToast("success", "Exam created successfully!"); resetForm(); setMode("list"); load(); }
+    else showToast("error", data.error || "Failed to create exam");
   };
 
   const handleSaveEdit = async () => {
     if (!editingExam) return;
-    if (!title.trim()) return showToast("error", "Title required");
-    const validQ = validateQuestions();
-    if (validQ.length === 0) return showToast("error", "Add at least 1 valid question");
+    if (!title.trim()) return showToast("error", "Exam title is required");
+    const { valid: validQ, error } = validateQuestions();
+    if (error) return showToast("error", error);
     setSaving(true);
+    const score = Math.min(100, Math.max(1, parseInt(passingScore) || 60));
+    const limit = timeLimit && parseInt(timeLimit) > 0 ? parseInt(timeLimit) * 60 : null;
     const res = await fetch(`/api/groups/${groupId}/exams`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: editingExam.id, title, description: desc, questions: validQ,
-        timeLimit: timeLimit ? parseInt(timeLimit) * 60 : null,
-        passingScore: parseInt(passingScore),
+        id: editingExam.id,
+        title: title.trim(),
+        description: desc.trim() || null,
+        questions: validQ,
+        timeLimit: limit,
+        passingScore: score,
         topicId: topicId || null,
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
       }),
     });
     setSaving(false);
-    if (res.ok) { showToast("success", "Saved!"); resetForm(); setMode("list"); load(); }
-    else showToast("error", "Failed to save");
+    if (res.ok) { showToast("success", "Exam changes saved!"); resetForm(); setMode("list"); load(); }
+    else showToast("error", "Failed to save exam");
   };
 
   const handlePublish = async (exam: Exam) => {
@@ -172,12 +208,12 @@ export default function ExamsPage() {
     <div>
       {toast && <div className="toast-container"><div className={`toast toast-${toast.type}`}>{toast.msg}</div></div>}
       <div className="section-header animate-fade-up">
-        <div><h1>{viewResults.exam.title} — Results</h1><p>{viewResults.stats.totalResults} submission{viewResults.stats.totalResults !== 1 ? "s" : ""}</p></div>
+        <div><h1>{viewResults.exam.title} — Results</h1><p>{viewResults.stats.totalResults} completed submission{viewResults.stats.totalResults !== 1 ? "s" : ""}</p></div>
         <button className="btn btn-secondary" onClick={() => { setViewResults(null); setMode("list"); }}>← Back</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px,1fr))", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "Total", value: viewResults.stats.totalResults, color: "var(--clr-brand)" },
+          { label: "Completed", value: viewResults.stats.totalResults, color: "var(--clr-brand)" },
           { label: "Passed", value: viewResults.stats.passCount, color: "var(--clr-success)" },
           { label: "Failed", value: viewResults.stats.totalResults - viewResults.stats.passCount, color: "var(--clr-danger)" },
           { label: "Avg Score", value: `${viewResults.stats.avgScore}%`, color: "var(--clr-warning)" },
@@ -191,20 +227,34 @@ export default function ExamsPage() {
       {viewResults.results.length === 0
         ? <div className="empty-state"><div className="empty-state-icon">📋</div><h3>No results yet</h3><p>Results appear here after students complete the exam in Telegram</p></div>
         : <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            {viewResults.results.map((r, i) => (
-              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "var(--space-3) var(--space-4)", borderBottom: i < viewResults.results.length - 1 ? "1px solid var(--clr-border)" : "none", flexWrap: "wrap" }}>
-                <div style={{ width: 40, height: 40, borderRadius: "50%", background: r.passed ? "var(--clr-success-muted)" : "rgba(248,113,113,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "0.85rem", color: r.passed ? "var(--clr-success)" : "var(--clr-danger)", flexShrink: 0 }}>{r.score}%</div>
-                <div style={{ flex: 1, minWidth: 100 }}>
-                  <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{r.name}</div>
-                  <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
-                    {r.telegramId ? `@TG:${r.telegramId}` : ""}
-                    {r.duration ? ` · ${Math.floor(r.duration / 60)}m ${r.duration % 60}s` : ""}
-                    {" · "}{new Date(r.completedAt).toLocaleString()}
+            {viewResults.results.map((r, i) => {
+              const inProgress = r.score < 0;
+              return (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "var(--space-3) var(--space-4)", borderBottom: i < viewResults.results.length - 1 ? "1px solid var(--clr-border)" : "none", flexWrap: "wrap" }}>
+                  <div style={{
+                    width: 40, height: 40, borderRadius: "50%",
+                    background: inProgress ? "rgba(245,158,11,0.12)" : (r.passed ? "var(--clr-success-muted)" : "rgba(248,113,113,0.12)"),
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 700, fontSize: "0.85rem",
+                    color: inProgress ? "var(--clr-warning)" : (r.passed ? "var(--clr-success)" : "var(--clr-danger)"),
+                    flexShrink: 0
+                  }}>
+                    {inProgress ? "⏱" : `${r.score}%`}
                   </div>
+                  <div style={{ flex: 1, minWidth: 100 }}>
+                    <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>{r.name}</div>
+                    <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
+                      {r.telegramId ? `@TG:${r.telegramId}` : ""}
+                      {r.duration ? ` · ${Math.floor(r.duration / 60)}m ${r.duration % 60}s` : ""}
+                      {" · "}{new Date(r.completedAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <span className={`badge ${inProgress ? "badge-muted" : (r.passed ? "badge-success" : "badge-danger")}`}>
+                    {inProgress ? "⏱ In Progress" : (r.passed ? "✓ Passed" : "✗ Failed")}
+                  </span>
                 </div>
-                <span className={`badge ${r.passed ? "badge-success" : "badge-danger"}`}>{r.passed ? "✓ Passed" : "✗ Failed"}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
       }
     </div>
@@ -272,7 +322,24 @@ export default function ExamsPage() {
                   <div key={oi} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input type="radio" name={`correct-${qi}`} checked={q.correctOptionId === oi} onChange={() => setQ(qi, "correctOptionId", oi)} style={{ flexShrink: 0 }} title="Mark as correct answer" />
                     <input className="input" style={{ flex: 1, fontSize: "0.82rem" }} placeholder={`Option ${String.fromCharCode(65 + oi)}`} value={opt} onChange={e => { const opts = [...q.options]; opts[oi] = e.target.value; setQ(qi, "options", opts); }} />
-                    {q.options.length > 2 && <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 4px", flexShrink: 0 }} onClick={() => { const opts = q.options.filter((_, i) => i !== oi); const newCorrect = q.correctOptionId >= opts.length ? opts.length - 1 : q.correctOptionId; setQuestions(p => p.map((qq, idx) => idx === qi ? { ...qq, options: opts, correctOptionId: newCorrect } : qq)); }}>✕</button>}
+                    {q.options.length > 2 && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ color: "var(--clr-danger)", padding: "0 4px", flexShrink: 0 }}
+                        onClick={() => {
+                          const opts = q.options.filter((_, i) => i !== oi);
+                          let newCorrect = q.correctOptionId;
+                          if (q.correctOptionId === oi) {
+                            newCorrect = 0;
+                          } else if (q.correctOptionId > oi) {
+                            newCorrect = q.correctOptionId - 1;
+                          }
+                          setQuestions(p => p.map((qq, idx) => idx === qi ? { ...qq, options: opts, correctOptionId: newCorrect } : qq));
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 ))}
                 {q.options.length < 10 && (
