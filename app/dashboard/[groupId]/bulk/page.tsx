@@ -25,13 +25,67 @@ interface Topic { message_thread_id: number; name: string; icon_color: number; }
 
 function validate(p: Partial<QuizPreview>): string[] {
   const e: string[] = [];
-  if (!p.question?.trim()) e.push("Question is missing");
-  else if (p.question.length > 300) e.push("Question exceeds 300 chars");
-  if (!p.options || p.options.filter(o => o.trim()).length < 2) e.push("Need at least 2 options");
-  else if (p.options.length > 10) e.push("Max 10 options");
-  if (p.type === "quiz" && (p.correctOptionId === undefined || p.correctOptionId === null || p.correctOptionId < 0))
-    e.push("Quiz needs a correct answer");
+  const q = p.question?.trim() || "";
+  if (!q) e.push("Question is missing");
+  else if (q.length > 300) e.push(`Question exceeds 300 chars (${q.length}/300)`);
+
+  const cleanOpts = (p.options || []).map(o => o.trim()).filter(Boolean);
+  if (cleanOpts.length < 2) e.push("Need at least 2 options");
+  else if (cleanOpts.length > 10) e.push("Max 10 options allowed by Telegram");
+
+  if (cleanOpts.some(o => o.length > 100)) {
+    e.push("Each option must be 100 characters or less");
+  }
+
+  // Duplicate options check
+  const lower = cleanOpts.map(o => o.toLowerCase());
+  if (new Set(lower).size !== lower.length) {
+    e.push("Options must be unique (duplicate answers found)");
+  }
+
+  if (p.type === "quiz") {
+    if (p.correctOptionId === undefined || p.correctOptionId === null || p.correctOptionId < 0 || p.correctOptionId >= cleanOpts.length) {
+      e.push("Quiz needs a valid correct answer");
+    }
+  }
+
+  if (p.type === "quiz" && p.explanation && p.explanation.trim().length > 200) {
+    e.push(`Explanation exceeds 200 chars (${p.explanation.trim().length}/200)`);
+  }
+
   return e;
+}
+
+function resolveCorrectOption(raw: string | undefined | null, options: string[]): number | null {
+  if (!raw || options.length === 0) return null;
+  const str = String(raw).trim().replace(/^["']|["']$/g, "");
+  if (!str) return null;
+
+  // Arabic letters map
+  const arabicLetters = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
+  const arabicIdx = arabicLetters.indexOf(str);
+  if (arabicIdx !== -1 && arabicIdx < options.length) return arabicIdx;
+
+  if (str === "ا" && options.length > 0) return 0;
+
+  // English letters A-J
+  if (/^[a-jA-J]$/.test(str)) {
+    const idx = str.toUpperCase().charCodeAt(0) - 65;
+    if (idx < options.length) return idx;
+  }
+
+  // Exact match with option text (case-insensitive)
+  const matchIdx = options.findIndex(o => o.trim().toLowerCase() === str.toLowerCase());
+  if (matchIdx !== -1) return matchIdx;
+
+  // Numeric index check (both 0-based and 1-based)
+  const n = Number(str);
+  if (!isNaN(n) && Number.isInteger(n)) {
+    if (n >= 0 && n < options.length) return n;
+    if (n >= 1 && n <= options.length) return n - 1;
+  }
+
+  return null;
 }
 
 function parseSmartText(text: string): QuizPreview[] {
@@ -44,27 +98,24 @@ function parseSmartText(text: string): QuizPreview[] {
 
     for (const line of lines) {
       // Answer / Explanation keywords
-      if (/^(answer|correct answer|correct|الجواب|الإجابة)\s*:/i.test(line)) {
-        correctAnswerStr = line.split(":").slice(1).join(":").trim();
+      if (/^(answer|correct answer|correct|ans|حل|الجواب|الإجابة|الاجابة)\s*[:=-]/i.test(line)) {
+        correctAnswerStr = line.replace(/^(answer|correct answer|correct|ans|حل|الجواب|الإجابة|الاجابة)\s*[:=-]\s*/i, "").trim();
         continue;
       }
-      if (/^(explanation|note|شرح|ملاحظة)\s*:/i.test(line)) {
-        explanationStr = line.split(":").slice(1).join(":").trim();
+      if (/^(explanation|note|reason|شرح|تفسير|ملاحظة)\s*[:=-]/i.test(line)) {
+        explanationStr = line.replace(/^(explanation|note|reason|شرح|تفسير|ملاحظة)\s*[:=-]\s*/i, "").trim();
         continue;
       }
 
-      const isLetterOption  = /^[a-dA-Dأبجد][\.\)]\s+\S/.test(line); // A. text  or  أ. text
-      const isBulletOption  = /^[-•*]\s+\S/.test(line);                // - text  or  • text
-      const isNumberedLine  = /^\d+[\.\)]\s+\S/.test(line);            // 1. text
+      const isLetterOption  = /^[a-dA-Dأ-ي][\.\)\-]\s+\S/.test(line); // A. text or أ. text or A) text
+      const isBulletOption  = /^[-•*]\s+\S/.test(line);                // - text or • text
+      const isNumberedLine  = /^\d+[\.\)\-]\s+\S/.test(line);            // 1. text
 
       if (isLetterOption || isBulletOption) {
-        // Always an answer option
-        options.push(line.replace(/^[a-dA-Dأبجد][\.\)]\s+|^[-•*]\s+/, "").trim());
+        options.push(line.replace(/^[a-dA-Dأ-ي][\.\)\-]\s+|^[-•*]\s+/, "").trim());
       } else if (isNumberedLine && question) {
-        // Numbered line AND question is already set → it's a numbered option (1. text)
-        options.push(line.replace(/^\d+[\.\)]\s+/, "").trim());
+        options.push(line.replace(/^\d+[\.\)\-]\s+/, "").trim());
       } else {
-        // Everything else → question text (or trailing explanation)
         if (options.length === 0) {
           question += (question ? "\n" : "") + line;
         } else {
@@ -73,43 +124,137 @@ function parseSmartText(text: string): QuizPreview[] {
       }
     }
 
-    // Strip leading "Q1:" or "1." prefix from question
-    question = question.replace(/^q\s*\d*\s*:\s*/i, "").replace(/^\d+[\.\)]\s+/, "").trim();
-    let correctOptionId: number | null = null;
-    if (correctAnswerStr && options.length > 0) {
-      const arabicMap: Record<string, number> = { "أ": 0, "ب": 1, "ج": 2, "د": 3 };
-      if (arabicMap[correctAnswerStr] !== undefined) {
-        correctOptionId = arabicMap[correctAnswerStr];
-      } else {
-        const m = correctAnswerStr.toLowerCase().match(/^[a-d]/);
-        if (m) { const c = m[0].charCodeAt(0) - 97; if (c < options.length) correctOptionId = c; }
-        else {
-          const idx = options.findIndex(o => o.toLowerCase() === correctAnswerStr.toLowerCase());
-          if (idx !== -1) correctOptionId = idx;
-          else { const n = Number(correctAnswerStr); if (!isNaN(n) && n >= 0 && n < options.length) correctOptionId = n; }
-        }
-      }
-    }
-    if (question || options.length > 0) {
-      const partial = { question, options, correctOptionId, explanation: explanationStr || undefined, type: correctOptionId !== null ? "quiz" as const : "poll" as const };
+    // Strip leading "Q1:" or "1." or "س1:" prefix from question
+    question = question.replace(/^(q\s*\d*|question\s*\d*|س\s*\d*)\s*[:.]\s*/i, "").replace(/^\d+[\.\)]\s+/, "").trim();
+    const cleanOpts = options.filter(Boolean);
+    const correctOptionId = resolveCorrectOption(correctAnswerStr, cleanOpts);
+
+    if (question || cleanOpts.length > 0) {
+      const partial = {
+        question,
+        options: cleanOpts,
+        correctOptionId,
+        explanation: explanationStr || undefined,
+        type: correctOptionId !== null ? ("quiz" as const) : ("poll" as const),
+      };
       items.push({ id: uid(), ...partial, errors: validate(partial) });
     }
   }
   return items;
 }
 
+function parseFullCSV(text: string): string[][] {
+  const clean = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const firstLine = clean.split(/\r?\n/)[0] || "";
+  const delimiter = (firstLine.match(/;/g) || []).length > (firstLine.match(/,/g) || []).length ? ";"
+    : (firstLine.match(/\t/g) || []).length > (firstLine.match(/,/g) || []).length ? "\t" : ",";
+
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentCell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < clean.length; i++) {
+    const char = clean[i];
+    if (char === '"') {
+      if (inQuotes && clean[i + 1] === '"') {
+        currentCell += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === delimiter && !inQuotes) {
+      currentRow.push(currentCell.trim());
+      currentCell = "";
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && clean[i + 1] === '\n') {
+        i++;
+      }
+      currentRow.push(currentCell.trim());
+      currentCell = "";
+      if (currentRow.some(c => c.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+    } else {
+      currentCell += char;
+    }
+  }
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentCell.trim());
+    if (currentRow.some(c => c.length > 0)) {
+      rows.push(currentRow);
+    }
+  }
+  return rows;
+}
+
 function parseCSV(text: string): QuizPreview[] {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const rows = parseFullCSV(text);
+  if (rows.length < 2) return [];
+
   const items: QuizPreview[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",");
+  // Skip header row
+  for (let i = 1; i < rows.length; i++) {
+    const cols = rows[i];
     if (cols.length < 3) continue;
-    const question = cols[0]?.trim();
-    const options = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean).map(o => o.trim());
-    const cStr = cols[5]?.trim();
-    const correctOptionId = cStr && !isNaN(Number(cStr)) ? Number(cStr) : null;
-    const explanation = cols[6]?.trim() || undefined;
-    const partial = { question, options, correctOptionId, explanation, type: correctOptionId !== null ? "quiz" as const : "poll" as const };
+
+    const question = cols[0]?.replace(/^"|"$/g, "").trim();
+    if (!question) continue;
+
+    let correctOptionId: number | null = null;
+    let explanation: string | undefined = undefined;
+    let options: string[] = [];
+
+    // Standard template: [question, opt1, opt2, opt3, opt4, correctIndex, explanation]
+    if (cols.length >= 6) {
+      const possibleAns = cols[5]?.replace(/^"|"$/g, "").trim();
+      const testOpts = [cols[1], cols[2], cols[3], cols[4]].map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+
+      const resolved = resolveCorrectOption(possibleAns, testOpts);
+      if (resolved !== null) {
+        options = testOpts;
+        correctOptionId = resolved;
+        explanation = cols[6]?.replace(/^"|"$/g, "").trim() || undefined;
+      }
+    }
+
+    if (options.length === 0) {
+      // Dynamic columns: search for which column represents the answer
+      let foundCol = -1;
+      let resolvedOpt: number | null = null;
+      let candidateOptions: string[] = [];
+
+      for (let cIdx = cols.length - 1; cIdx >= 2; cIdx--) {
+        const candidateAns = cols[cIdx]?.replace(/^"|"$/g, "").trim();
+        const candOpts = cols.slice(1, cIdx).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+        if (candOpts.length >= 2) {
+          const res = resolveCorrectOption(candidateAns, candOpts);
+          if (res !== null) {
+            foundCol = cIdx;
+            resolvedOpt = res;
+            candidateOptions = candOpts;
+            break;
+          }
+        }
+      }
+
+      if (foundCol !== -1) {
+        options = candidateOptions;
+        correctOptionId = resolvedOpt;
+        explanation = cols.slice(foundCol + 1).join(" ").replace(/^"|"$/g, "").trim() || undefined;
+      } else {
+        options = cols.slice(1).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+      }
+    }
+
+    const partial = {
+      question,
+      options,
+      correctOptionId,
+      explanation: explanation || undefined,
+      type: correctOptionId !== null ? ("quiz" as const) : ("poll" as const),
+    };
     items.push({ id: uid(), ...partial, errors: validate(partial) });
   }
   return items;
@@ -125,6 +270,7 @@ export default function BulkPage() {
   const [result, setResult] = useState<{ ok: boolean; processed?: number; errors?: string[] } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "info"; msg: string } | null>(null);
+  const [showErrorsOnly, setShowErrorsOnly] = useState(false);
 
   // Global settings
   const [globalTopicId, setGlobalTopicId] = useState<number | "">("");
@@ -225,11 +371,19 @@ export default function BulkPage() {
     finally { setUploading(false); }
   };
 
+  const removeInvalid = () => {
+    setQueue(prev => prev.filter(p => !p.errors || p.errors.length === 0));
+    notify("info", "Removed invalid items from queue");
+  };
+
   const downloadTemplate = (type: "csv" | "json" | "txt") => {
     const files: Record<string, [string, string, string]> = {
-      csv: ["question,option1,option2,option3,option4,correctIndex,explanation\nWhat is 2+2?,3,4,5,6,1,Basic math", "quizforge_template.csv", "text/csv"],
-      json: [JSON.stringify([{ question: "Example?", options: ["A", "B", "C"], correctOptionId: 0, explanation: "A is correct" }], null, 2), "quizforge_template.json", "application/json"],
-      txt: ["1. What is 2+2?\nA. 3\nB. 4\nC. 5\nAnswer: B\nExplanation: Basic math", "quizforge_template.txt", "text/plain"],
+      csv: ['"question","option1","option2","option3","option4","correctIndex","explanation"\n"What is 2+2?","3","4","5","6",1,"Basic math"\n"Which is a primary color?","Green","Blue","Purple","Orange",1,"Blue is a primary color"', "quizforge_template.csv", "text/csv;charset=utf-8"],
+      json: [JSON.stringify([
+        { question: "What is 2+2?", options: ["3", "4", "5", "6"], correctOptionId: 1, explanation: "Basic math" },
+        { question: "Which is a primary color?", options: ["Green", "Blue", "Purple", "Orange"], correctOptionId: 1, explanation: "Blue is a primary color" }
+      ], null, 2), "quizforge_template.json", "application/json"],
+      txt: ["1. What is 2+2?\nA. 3\nB. 4\nC. 5\nD. 6\nAnswer: B\nExplanation: Basic math\n\n2. Which is a primary color?\nA. Green\nB. Blue\nC. Purple\nD. Orange\nAnswer: B", "quizforge_template.txt", "text/plain;charset=utf-8"],
     };
     const [content, name, mime] = files[type];
     const a = document.createElement("a");
@@ -262,7 +416,7 @@ export default function BulkPage() {
               📁 Save to Library
             </button>
             <button className="btn btn-primary" onClick={() => handleSend("send")} disabled={uploading || validCount === 0}>
-              {uploading ? `Broadcasting… (ETA ~${queue.length * 3}s)` : `🚀 Send ${validCount} Quiz${validCount !== 1 ? "zes" : ""}`}
+              {uploading ? `Broadcasting… (ETA ~${queue.length}s)` : `🚀 Send ${validCount} Quiz${validCount !== 1 ? "zes" : ""}`}
             </button>
           </div>
         )}
@@ -357,16 +511,45 @@ export default function BulkPage() {
         {/* Step 3 — Queue */}
         {queue.length > 0 && (
           <div className="card animate-fade-up animate-delay-3" style={{ border: "1px solid var(--clr-brand)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)", flexWrap: "wrap", gap: 12 }}>
               <div>
                 <h3 style={{ margin: 0 }}>Queue — {queue.length} item{queue.length !== 1 ? "s" : ""}</h3>
-                {hasErrors && <p style={{ fontSize: "0.8rem", color: "var(--clr-danger)", marginTop: 4 }}>⚠ Some items have validation errors</p>}
+                {hasErrors ? (
+                  <p style={{ fontSize: "0.8rem", color: "var(--clr-danger)", marginTop: 4 }}>
+                    ⚠ {queue.filter(p => p.errors && p.errors.length > 0).length} item(s) have validation errors
+                  </p>
+                ) : (
+                  <p style={{ fontSize: "0.8rem", color: "var(--clr-success)", marginTop: 4 }}>
+                    ✓ All {queue.length} items are valid and ready to broadcast
+                  </p>
+                )}
               </div>
-              {uploading && (
-                <span style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
-                  ⏳ ETA ~{queue.length * 3}s (rate-limited)
-                </span>
-              )}
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {hasErrors && (
+                  <>
+                    <button
+                      className={`btn btn-sm ${showErrorsOnly ? "btn-secondary" : "btn-ghost"}`}
+                      onClick={() => setShowErrorsOnly(!showErrorsOnly)}
+                      style={{ fontSize: "0.8rem" }}
+                    >
+                      {showErrorsOnly ? "👁 Show All" : "⚠ Show Errors Only"}
+                    </button>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      onClick={removeInvalid}
+                      style={{ color: "var(--clr-danger)", fontSize: "0.8rem" }}
+                    >
+                      🗑 Remove Invalid
+                    </button>
+                  </>
+                )}
+                {uploading && (
+                  <span style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
+                    ⏳ ETA ~{queue.length}s
+                  </span>
+                )}
+              </div>
             </div>
 
             {result && (
@@ -377,7 +560,7 @@ export default function BulkPage() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", maxHeight: 580, overflowY: "auto", paddingRight: 4 }}>
-              {queue.map((p, idx) => {
+              {(showErrorsOnly ? queue.filter(p => p.errors && p.errors.length > 0) : queue).map((p, idx) => {
                 const isEditing = editingId === p.id;
                 const hasErr = p.errors && p.errors.length > 0;
                 return (

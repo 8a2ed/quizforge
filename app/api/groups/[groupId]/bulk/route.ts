@@ -67,17 +67,47 @@ export async function POST(
           ? q.tags.map((t: unknown) => String(t).trim().toLowerCase()).filter((t: string) => t.length > 0).slice(0, 5)
           : [];
 
-        // Validate
+        // Validations
         if (!question) {
           errors.push(`Row ${i + 1}: Missing question.`);
+          continue;
+        }
+        if (question.length > 300) {
+          errors.push(`Row ${i + 1}: Question exceeds 300 characters.`);
           continue;
         }
         if (options.length < 2) {
           errors.push(`Row ${i + 1}: Needs at least 2 options.`);
           continue;
         }
-        if (type === "QUIZ" && correctOptionId === null) {
-          errors.push(`Row ${i + 1}: Quiz type requires a correct answer.`);
+        if (options.length > 10) {
+          errors.push(`Row ${i + 1}: Maximum 10 options allowed by Telegram.`);
+          continue;
+        }
+        if (options.some((o: string) => !o)) {
+          errors.push(`Row ${i + 1}: Options cannot be empty.`);
+          continue;
+        }
+        if (options.some((o: string) => o.length > 100)) {
+          errors.push(`Row ${i + 1}: Each option must be 100 characters or less.`);
+          continue;
+        }
+
+        // Prevent duplicate options in Telegram
+        const lowerOptions = options.map((o: string) => o.toLowerCase());
+        if (new Set(lowerOptions).size !== lowerOptions.length) {
+          errors.push(`Row ${i + 1}: Duplicate options found.`);
+          continue;
+        }
+
+        if (type === "QUIZ" && (correctOptionId === null || correctOptionId < 0 || correctOptionId >= options.length)) {
+          errors.push(`Row ${i + 1}: Quiz type requires a valid correct answer.`);
+          continue;
+        }
+
+        const cleanExplanation = type === "QUIZ" && q.explanation?.trim() ? q.explanation.trim() : null;
+        if (cleanExplanation && cleanExplanation.length > 200) {
+          errors.push(`Row ${i + 1}: Explanation exceeds 200 characters.`);
           continue;
         }
 
@@ -104,7 +134,7 @@ export async function POST(
                 question,
                 options,
                 correctOptionId,
-                explanation: q.explanation?.trim() || null,
+                explanation: cleanExplanation,
                 type,
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
@@ -129,7 +159,7 @@ export async function POST(
                 question,
                 options,
                 correctOptionId,
-                explanation: q.explanation?.trim() || null,
+                explanation: cleanExplanation,
                 type,
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
@@ -148,6 +178,18 @@ export async function POST(
           );
           createdQuizzes.push({ id: quiz.id, scheduled: true });
         } else {
+          // Compute duration parameters for Telegram: open_period (<=600s) vs close_date (>600s)
+          let telegramOpenPeriod: number | undefined = undefined;
+          let telegramCloseDate: number | undefined = undefined;
+          if (q.openPeriod && Number(q.openPeriod) > 0) {
+            const period = Number(q.openPeriod);
+            if (period <= 600) {
+              telegramOpenPeriod = Math.max(5, period);
+            } else {
+              telegramCloseDate = Math.floor(Date.now() / 1000) + period;
+            }
+          }
+
           // --- Send immediately via Telegram ---
           const message = await telegram.sendPoll({
             chat_id: auth.membership.group.chatId,
@@ -157,12 +199,13 @@ export async function POST(
             type: type === "QUIZ" ? "quiz" : "regular",
             is_anonymous: isAnonymous,
             correct_option_id: correctOptionId !== null ? correctOptionId : undefined,
-            explanation: q.explanation?.trim() || undefined,
-            explanation_parse_mode: q.explanation?.trim() ? "HTML" : undefined,
+            explanation: cleanExplanation || undefined,
+            explanation_parse_mode: cleanExplanation ? "HTML" : undefined,
             allows_multiple_answers: type === "POLL" ? Boolean(q.allowsMultiple) : false,
             allows_adding_options: type === "POLL" ? Boolean(q.allowAddingOptions) : false,
             allows_revoting: type === "POLL" ? Boolean(q.allowRevoting) : false,
-            open_period: q.openPeriod ? Number(q.openPeriod) : undefined,
+            open_period: telegramOpenPeriod,
+            close_date: telegramCloseDate,
           });
 
           // Persist to DB
@@ -172,7 +215,7 @@ export async function POST(
                 question,
                 options,
                 correctOptionId,
-                explanation: q.explanation?.trim() || null,
+                explanation: cleanExplanation,
                 type,
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
@@ -192,9 +235,9 @@ export async function POST(
           );
           createdQuizzes.push({ id: quiz.id, scheduled: false });
 
-          // 3-second delay between sends to respect Telegram rate limits
+          // 1-second delay between sends to respect Telegram limits while avoiding serverless timeouts
           if (i < quizzes.length - 1) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+            await new Promise<void>((resolve) => setTimeout(resolve, 1000));
           }
         }
       } catch (err: unknown) {
