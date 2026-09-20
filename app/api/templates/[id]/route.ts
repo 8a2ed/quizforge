@@ -33,9 +33,70 @@ export async function PATCH(
   const body = await req.json();
   const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags, allowAddingOptions, allowRevoting } = body;
 
-  if (!question?.trim() || !options?.length) {
-    return NextResponse.json({ error: "Question and options required" }, { status: 400 });
+  const cleanQuestion = String(question || "").trim();
+  if (!cleanQuestion) {
+    return NextResponse.json({ error: "Question is required." }, { status: 400 });
   }
+  if (cleanQuestion.length > 300) {
+    return NextResponse.json({ error: "Question cannot exceed 300 characters." }, { status: 400 });
+  }
+
+  if (!Array.isArray(options) || options.length < 2) {
+    return NextResponse.json({ error: "At least 2 options are required." }, { status: 400 });
+  }
+  if (options.length > 10) {
+    return NextResponse.json({ error: "Maximum 10 options allowed." }, { status: 400 });
+  }
+
+  const cleanOptions: string[] = options.map((o: any) => String(o || "").trim());
+  if (cleanOptions.some(o => !o)) {
+    return NextResponse.json({ error: "Options cannot be empty." }, { status: 400 });
+  }
+  if (cleanOptions.some(o => o.length > 100)) {
+    return NextResponse.json({ error: "Each option must be 100 characters or less." }, { status: 400 });
+  }
+
+  // Prevent duplicate options
+  const lowerOptions = cleanOptions.map(o => o.toLowerCase());
+  if (new Set(lowerOptions).size !== lowerOptions.length) {
+    return NextResponse.json({ error: "Options must be unique (duplicate options detected)." }, { status: 400 });
+  }
+
+  const normalizedType = String(type || "").toUpperCase() === "POLL" ? "POLL" : "QUIZ";
+
+  let validatedCorrectOptionId: number | null = null;
+  let validatedExplanation: string | null = null;
+
+  if (normalizedType === "QUIZ") {
+    const cid = Number(correctOptionId);
+    if (isNaN(cid) || cid < 0 || cid >= cleanOptions.length) {
+      return NextResponse.json({ error: "A valid correct option must be selected for quiz." }, { status: 400 });
+    }
+    validatedCorrectOptionId = cid;
+
+    if (explanation) {
+      const exp = String(explanation).trim();
+      if (exp.length > 200) {
+        return NextResponse.json({ error: "Explanation cannot exceed 200 characters." }, { status: 400 });
+      }
+      validatedExplanation = exp || null;
+    }
+  }
+
+  let validatedOpenPeriod: number | null = null;
+  if (openPeriod) {
+    const op = Number(openPeriod);
+    if (!isNaN(op) && op >= 5 && op <= 600) {
+      validatedOpenPeriod = op;
+    }
+  }
+
+  const sanitizedTags = Array.isArray(tags)
+    ? tags
+        .map((t: any) => String(t || "").trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
 
   // Resolve real DB groupId
   const groupId = await getTemplateGroupId(user.sub);
@@ -45,17 +106,17 @@ export async function PATCH(
     prisma.quiz.updateMany({
       where: { id, sentById: user.sub, groupId },
       data: {
-        question: question.trim(),
-        options,
-        type: type === "poll" || type === "POLL" ? "POLL" : "QUIZ",
+        question: cleanQuestion,
+        options: cleanOptions,
+        type: normalizedType,
         isAnonymous: isAnonymous ?? true,
-        correctOptionId: (type === "quiz" || type === "QUIZ") ? (correctOptionId ?? null) : null,
-        explanation: explanation?.trim() || null,
-        allowsMultiple: allowsMultiple ?? false,
-        allowAddingOptions: allowAddingOptions ?? false,
-        allowRevoting: allowRevoting ?? false,
-        openPeriod: openPeriod || null,
-        tags: tags || [],
+        correctOptionId: validatedCorrectOptionId,
+        explanation: validatedExplanation,
+        allowsMultiple: normalizedType === "POLL" ? Boolean(allowsMultiple) : false,
+        allowAddingOptions: normalizedType === "POLL" ? Boolean(allowAddingOptions) : false,
+        allowRevoting: normalizedType === "POLL" ? Boolean(allowRevoting) : false,
+        openPeriod: validatedOpenPeriod,
+        tags: sanitizedTags,
       },
     })
   );

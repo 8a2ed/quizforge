@@ -20,7 +20,15 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const { name, emoji, color } = await req.json();
+  const body = await req.json();
+  const { name, emoji, color } = body;
+
+  let cleanName: string | undefined = undefined;
+  if (name !== undefined) {
+    cleanName = String(name).trim();
+    if (!cleanName) return NextResponse.json({ error: "Name cannot be empty." }, { status: 400 });
+    if (cleanName.length > 50) return NextResponse.json({ error: "Name cannot exceed 50 characters." }, { status: 400 });
+  }
 
   const existing = await withRetry(() =>
     prisma.collection.findFirst({ where: { id, userId: user.sub } })
@@ -31,9 +39,9 @@ export async function PATCH(
     prisma.collection.update({
       where: { id },
       data: {
-        ...(name !== undefined ? { name: name.trim() } : {}),
-        ...(emoji !== undefined ? { emoji } : {}),
-        ...(color !== undefined ? { color } : {}),
+        ...(cleanName !== undefined ? { name: cleanName } : {}),
+        ...(emoji !== undefined ? { emoji: String(emoji).trim().slice(0, 4) || "📁" } : {}),
+        ...(color !== undefined ? { color: String(color).trim().slice(0, 20) || "#6366f1" } : {}),
       },
     })
   );

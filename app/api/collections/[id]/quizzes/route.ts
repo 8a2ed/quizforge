@@ -30,19 +30,33 @@ export async function POST(
   if (!(await ownsCollection(user.sub, collectionId)))
     return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const { quizIds } = await req.json() as { quizIds: string[] };
+  const body = await req.json();
+  const quizIds = body?.quizIds;
   if (!Array.isArray(quizIds) || quizIds.length === 0)
     return NextResponse.json({ error: "quizIds required" }, { status: 400 });
+
+  // Only allow adding quizzes that belong to this user
+  const userQuizzes = await withRetry(() =>
+    prisma.quiz.findMany({
+      where: { id: { in: quizIds }, sentById: user.sub },
+      select: { id: true },
+    })
+  );
+
+  const validIds = userQuizzes.map(q => q.id);
+  if (validIds.length === 0) {
+    return NextResponse.json({ error: "No matching quizzes found." }, { status: 404 });
+  }
 
   // createMany ignores duplicates with skipDuplicates
   await withRetry(() =>
     prisma.collectionQuiz.createMany({
-      data: quizIds.map(quizId => ({ collectionId, quizId })),
+      data: validIds.map(quizId => ({ collectionId, quizId })),
       skipDuplicates: true,
     })
   );
 
-  return NextResponse.json({ ok: true, added: quizIds.length });
+  return NextResponse.json({ ok: true, added: validIds.length });
 }
 
 // DELETE /api/collections/[id]/quizzes — remove quiz IDs from collection

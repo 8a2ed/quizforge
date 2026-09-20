@@ -41,15 +41,20 @@ export async function POST(req: NextRequest) {
   const user = await getUser(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { name, emoji, color } = await req.json();
-  if (!name?.trim()) return NextResponse.json({ error: "Name required" }, { status: 400 });
+  const body = await req.json();
+  const name = String(body?.name || "").trim();
+  if (!name) return NextResponse.json({ error: "Collection name is required." }, { status: 400 });
+  if (name.length > 50) return NextResponse.json({ error: "Collection name cannot exceed 50 characters." }, { status: 400 });
+
+  const emoji = String(body?.emoji || "📁").trim().slice(0, 4) || "📁";
+  const color = String(body?.color || "#6366f1").trim().slice(0, 20) || "#6366f1";
 
   const collection = await withRetry(() =>
     prisma.collection.create({
       data: {
-        name: name.trim(),
-        emoji: emoji || "📁",
-        color: color || "#6366f1",
+        name,
+        emoji,
+        color,
         userId: user.sub,
       },
     })

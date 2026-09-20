@@ -81,13 +81,18 @@ export default function NewQuizPage() {
     const draftParam = searchParams.get("draft");
     if (draftParam) {
       try {
-        const draft = JSON.parse(decodeURIComponent(draftParam));
+        let draft: any;
+        try {
+          draft = JSON.parse(draftParam);
+        } catch {
+          draft = JSON.parse(decodeURIComponent(draftParam));
+        }
         if (draft.question) setQuestion(draft.question);
         if (draft.options?.length) {
           setOptions(draft.options);
           setOptionCount(draft.options.length);
         }
-        if (draft.type) setType(draft.type);
+        if (draft.type) setType(String(draft.type).toLowerCase() === "poll" ? "poll" : "quiz");
         if (draft.correctOptionId !== undefined) setCorrectOptionId(draft.correctOptionId);
         if (draft.explanation) setExplanation(draft.explanation);
         if (draft.isAnonymous !== undefined) setIsAnonymous(draft.isAnonymous);
@@ -100,8 +105,8 @@ export default function NewQuizPage() {
         if (draft.topicId && draft.topicName) {
           setSelectedTopic({ message_thread_id: draft.topicId, name: draft.topicName, icon_color: 0 });
         }
-      } catch {
-        console.error("Failed to load draft from URL");
+      } catch (err) {
+        console.error("Failed to load draft from URL", err);
       }
     }
   }, [searchParams]);

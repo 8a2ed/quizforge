@@ -110,8 +110,12 @@ export default function LibraryPage() {
       if (tagFilter && !t.tags?.includes(tagFilter)) return false;
       if (typeFilter && t.type !== typeFilter) return false;
       if (!search) return true;
-      return t.question.toLowerCase().includes(search.toLowerCase()) ||
-        t.tags?.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
+      const term = search.toLowerCase();
+      return (
+        t.question.toLowerCase().includes(term) ||
+        t.tags?.some(tag => tag.toLowerCase().includes(term)) ||
+        t.options?.some(opt => opt.toLowerCase().includes(term))
+      );
     })
     .sort((a, b) => {
       if (sortKey === "oldest") return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
@@ -128,6 +132,25 @@ export default function LibraryPage() {
   const selectAll = () => setSelected(new Set(filtered.map(t => t.id)));
   const selectNone = () => setSelected(new Set());
 
+  // ── Export library ────────────────────────────────────────────────
+  const handleExportJSON = () => {
+    const toExport = visibleSelected.length > 0
+      ? templates.filter(t => selected.has(t.id))
+      : filtered;
+    if (toExport.length === 0) {
+      showToast("error", "No templates to export.");
+      return;
+    }
+    const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quiz-templates-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("success", `Exported ${toExport.length} template(s) to JSON ✓`);
+  };
+
   // ── Sequential sender ─────────────────────────────────────────────
   const sendSequentially = async (toSend: Template[]) => {
     if (toSend.length === 0) return;
@@ -142,36 +165,53 @@ export default function LibraryPage() {
       try {
         const qTopicId = perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : sendTopicId;
         const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name;
-        const res = await fetch(`/api/groups/${groupId}/quiz/send`, {
+        
+        const payload = {
+          question: t.question,
+          options: t.options,
+          type: t.type === "QUIZ" ? "quiz" : "poll",
+          correctOptionId: t.type === "QUIZ" ? (t.correctOptionId ?? 0) : undefined,
+          explanation: t.type === "QUIZ" ? (t.explanation || undefined) : undefined,
+          isAnonymous: t.isAnonymous,
+          allowsMultiple: t.type === "POLL" ? Boolean(t.allowsMultiple) : false,
+          allowAddingOptions: t.type === "POLL" ? Boolean(t.allowAddingOptions) : false,
+          allowRevoting: t.type === "POLL" ? Boolean(t.allowRevoting) : false,
+          openPeriod: t.openPeriod || undefined,
+          tags: t.tags || [],
+          topicId: qTopicId || undefined,
+          topicName: qTopicName || undefined,
+        };
+
+        let res = await fetch(`/api/groups/${groupId}/quiz/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question: t.question,
-            options: t.options,
-            type: t.type === "QUIZ" ? "quiz" : "poll",
-            correctOptionId: t.correctOptionId,
-            explanation: t.explanation,
-            isAnonymous: t.isAnonymous,
-            allowsMultiple: t.allowsMultiple,
-            allowAddingOptions: t.allowAddingOptions,
-            allowRevoting: t.allowRevoting,
-            openPeriod: t.openPeriod,
-            tags: t.tags,
-            topicId: qTopicId || undefined,
-            topicName: qTopicName || undefined,
-          }),
+          body: JSON.stringify(payload),
         });
+
+        // If rate-limited by Telegram (429), pause and retry once
+        if (res.status === 429 && !cancelRef.current) {
+          const errData = await res.json().catch(() => ({}));
+          const waitSec = Number(errData.retryAfter) || 5;
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+          if (!cancelRef.current) {
+            res = await fetch(`/api/groups/${groupId}/quiz/send`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+          }
+        }
 
         if (res.ok) {
           setSentIds(prev => new Set([...prev, t.id]));
           setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
           setProgress(prev => prev ? { ...prev, sent: prev.sent + 1 } : prev);
         } else {
-          const data = await res.json();
+          const data = await res.json().catch(() => ({}));
           setProgress(prev => prev ? {
             ...prev,
             failed: prev.failed + 1,
-            errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: data.error || "Unknown error" }],
+            errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: data.error || "Broadcast error" }],
           } : prev);
         }
       } catch {
@@ -202,59 +242,177 @@ export default function LibraryPage() {
 
   // ── Duplicate ──────────────────────────────────────────────────────
   const duplicateOne = async (t: Template) => {
-    const res = await fetch("/api/templates", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: `${t.question} (copy)`,
-        options: t.options, type: t.type,
-        isAnonymous: t.isAnonymous,
-        correctOptionId: t.correctOptionId,
-        explanation: t.explanation,
-        allowsMultiple: t.allowsMultiple,
-        allowAddingOptions: t.allowAddingOptions,
-        allowRevoting: t.allowRevoting,
-        openPeriod: t.openPeriod,
-        tags: t.tags,
-      }),
-    });
-    if (res.ok) { showToast("success", "Duplicated ✓"); load(); }
-    else showToast("error", "Failed to duplicate");
+    const copySuffix = " (copy)";
+    const maxQ = 300 - copySuffix.length;
+    const cleanQ = (t.question.length > maxQ ? t.question.slice(0, maxQ) : t.question) + copySuffix;
+
+    try {
+      const res = await fetch("/api/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: cleanQ,
+          options: t.options,
+          type: t.type,
+          isAnonymous: t.isAnonymous,
+          correctOptionId: t.type === "QUIZ" ? t.correctOptionId : null,
+          explanation: t.explanation,
+          allowsMultiple: t.allowsMultiple,
+          allowAddingOptions: t.allowAddingOptions,
+          allowRevoting: t.allowRevoting,
+          openPeriod: t.openPeriod,
+          tags: t.tags || [],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("success", "Duplicated ✓");
+        load();
+      } else {
+        showToast("error", data.error || "Failed to duplicate");
+      }
+    } catch {
+      showToast("error", "Network error duplicating template");
+    }
   };
 
   // ── Delete ─────────────────────────────────────────────────────────
   const deleteOne = async (id: string) => {
     if (!confirm("Delete this template?")) return;
-    await fetch(`/api/templates/${id}`, { method: "DELETE" });
-    setTemplates(prev => prev.filter(t => t.id !== id));
-    setSelected(prev => { const s = new Set(prev); s.delete(id); return s; });
-    showToast("success", "Deleted");
+    try {
+      const res = await fetch(`/api/templates/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setTemplates(prev => prev.filter(t => t.id !== id));
+        setSelected(prev => { const s = new Set(prev); s.delete(id); return s; });
+        showToast("success", "Deleted");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast("error", data.error || "Failed to delete");
+      }
+    } catch {
+      showToast("error", "Network error deleting template");
+    }
   };
 
   const deleteSelected = async () => {
+    if (visibleSelected.length === 0) return;
     if (!confirm(`Delete ${visibleSelected.length} template(s)?`)) return;
-    await Promise.all(visibleSelected.map(id => fetch(`/api/templates/${id}`, { method: "DELETE" })));
-    setTemplates(prev => prev.filter(t => !visibleSelected.includes(t.id)));
-    setSelected(new Set());
-    showToast("success", `Deleted ${visibleSelected.length} templates`);
+    const toDelete = [...visibleSelected];
+    try {
+      const res = await fetch("/api/templates", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: toDelete }),
+      });
+      if (res.ok) {
+        setTemplates(prev => prev.filter(t => !toDelete.includes(t.id)));
+        setSelected(prev => {
+          const s = new Set(prev);
+          toDelete.forEach(id => s.delete(id));
+          return s;
+        });
+        showToast("success", `Deleted ${toDelete.length} templates`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast("error", data.error || "Failed to delete templates");
+      }
+    } catch {
+      showToast("error", "Network error deleting templates");
+    }
   };
 
   // ── Edit ───────────────────────────────────────────────────────────
-  const startEdit = (t: Template) => { setEditingId(t.id); setEditDraft({ ...t }); };
+  const startEdit = (t: Template) => {
+    setEditingId(t.id);
+    setEditDraft({
+      ...t,
+      options: [...t.options],
+      tags: t.tags ? [...t.tags] : [],
+      collectionIds: t.collectionIds ? [...t.collectionIds] : [],
+    });
+  };
   const cancelEdit = () => setEditingId(null);
 
   const saveEdit = async () => {
     if (!editingId) return;
-    const res = await fetch(`/api/templates/${editingId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editDraft),
-    });
-    if (res.ok) {
-      showToast("success", "Saved");
-      setEditingId(null);
-      load();
-    } else showToast("error", "Failed to save");
+
+    const q = (editDraft.question || "").trim();
+    if (!q) {
+      showToast("error", "Question cannot be empty.");
+      return;
+    }
+    if (q.length > 300) {
+      showToast("error", `Question cannot exceed 300 characters (currently ${q.length}).`);
+      return;
+    }
+
+    const rawOpts = editDraft.options || [];
+    const cleanOpts = rawOpts.map(o => o.trim()).filter(Boolean);
+    if (cleanOpts.length < 2) {
+      showToast("error", "At least 2 non-empty options are required.");
+      return;
+    }
+    if (cleanOpts.length > 10) {
+      showToast("error", "Maximum 10 options allowed.");
+      return;
+    }
+    if (cleanOpts.some(o => o.length > 100)) {
+      showToast("error", "Each option must be 100 characters or less.");
+      return;
+    }
+
+    const lowerOpts = cleanOpts.map(o => o.toLowerCase());
+    if (new Set(lowerOpts).size !== lowerOpts.length) {
+      showToast("error", "Options must be unique (duplicate options detected).");
+      return;
+    }
+
+    if (editDraft.type === "QUIZ") {
+      if (
+        editDraft.correctOptionId === null ||
+        editDraft.correctOptionId === undefined ||
+        editDraft.correctOptionId < 0 ||
+        editDraft.correctOptionId >= cleanOpts.length
+      ) {
+        showToast("error", "Please select a valid correct answer for the quiz.");
+        return;
+      }
+    }
+
+    const exp = (editDraft.explanation || "").trim();
+    if (exp.length > 200) {
+      showToast("error", `Explanation cannot exceed 200 characters (currently ${exp.length}).`);
+      return;
+    }
+
+    const payload = {
+      ...editDraft,
+      question: q,
+      options: cleanOpts,
+      explanation: exp || null,
+      correctOptionId: editDraft.type === "QUIZ" ? editDraft.correctOptionId : null,
+      allowsMultiple: editDraft.type === "POLL" ? Boolean(editDraft.allowsMultiple) : false,
+      allowAddingOptions: editDraft.type === "POLL" ? Boolean(editDraft.allowAddingOptions) : false,
+      allowRevoting: editDraft.type === "POLL" ? Boolean(editDraft.allowRevoting) : false,
+    };
+
+    try {
+      const res = await fetch(`/api/templates/${editingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("success", "Saved ✓");
+        setEditingId(null);
+        load();
+      } else {
+        showToast("error", data.error || "Failed to save");
+      }
+    } catch {
+      showToast("error", "Network error saving template");
+    }
   };
 
   const updateOpt = (i: number, v: string) => {
@@ -407,19 +565,24 @@ export default function LibraryPage() {
             {sentIds.size > 0 && <span style={{ color: "var(--clr-success)", marginLeft: 10 }}>· {sentIds.size} sent this session</span>}
           </p>
         </div>
-        {visibleSelected.length > 0 && !progress?.active && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={() => setShowAddToColl(true)}>
-              📁 Add to Collection
-            </button>
-            <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={deleteSelected}>
-              🗑 Delete {visibleSelected.length}
-            </button>
-            <button className="btn btn-primary" onClick={handleSendSelected}>
-              🚀 Send {visibleSelected.length} Selected
-            </button>
-          </div>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {visibleSelected.length > 0 && !progress?.active && (
+            <>
+              <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={() => setShowAddToColl(true)}>
+                📁 Add to Collection
+              </button>
+              <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={deleteSelected}>
+                🗑 Delete {visibleSelected.length}
+              </button>
+              <button className="btn btn-primary" onClick={handleSendSelected}>
+                🚀 Send {visibleSelected.length} Selected
+              </button>
+            </>
+          )}
+          <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={handleExportJSON} title="Download templates as JSON">
+            📥 Export JSON
+          </button>
+        </div>
       </div>
 
       {/* ── Collections tab bar ── */}
@@ -497,17 +660,14 @@ export default function LibraryPage() {
           {/* Per-quiz progress */}
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {Array.from({ length: progress.total }, (_, i) => {
-              const sentArr = [...sentIds];
-              const errIds = progress.errors.map(e => e.id);
-              const allProcessedIds = [...sentArr, ...errIds];
-              const isErr = i < progress.failed + progress.sent && errIds.length > 0 && i >= progress.sent;
               const isDone = i < progress.sent;
-              const isFailed = progress.errors.length > 0 && i >= progress.sent && i < progress.sent + progress.failed;
+              const isFailed = i >= progress.sent && i < progress.sent + progress.failed;
+              const isCurrent = progress.active && i === progress.sent + progress.failed;
               return (
                 <div key={i} style={{
                   width: 10, height: 10, borderRadius: "var(--radius-full)",
                   background: isDone ? "var(--clr-success)" : isFailed ? "var(--clr-danger)" :
-                    progress.active && i === progress.sent + progress.failed ? "var(--clr-brand)" : "var(--clr-bg-hover)",
+                    isCurrent ? "var(--clr-brand)" : "var(--clr-bg-hover)",
                   transition: "background 0.3s",
                 }} />
               );
@@ -659,88 +819,257 @@ export default function LibraryPage() {
                 {isEditing ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }} onClick={e => e.stopPropagation()}>
                     {/* Question */}
-                    <textarea className="input" rows={2} placeholder="Question text…"
-                      value={editDraft.question || ""}
-                      onChange={e => setEditDraft(d => ({ ...d, question: e.target.value }))} />
-
-                    {/* Options */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      {(editDraft.options || []).map((opt, i) => (
-                        <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          {editDraft.type === "QUIZ" && (
-                            <input type="radio" name={`e-${t.id}`}
-                              checked={editDraft.correctOptionId === i}
-                              onChange={() => setEditDraft(d => ({ ...d, correctOptionId: i }))}
-                              title="Mark as correct answer" />
-                          )}
-                          <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)", width: 18 }}>{String.fromCharCode(65+i)}.</span>
-                          <input className="input" value={opt} style={{ flex: 1 }} onChange={e => updateOpt(i, e.target.value)} />
-                          {(editDraft.options || []).length > 2 && (
-                            <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 6px" }}
-                              onClick={() => {
-                                const newOpts = (editDraft.options || []).filter((_, j) => j !== i);
-                                const cur = editDraft.correctOptionId ?? 0;
-                                const newCorrect = cur >= newOpts.length ? newOpts.length - 1 : cur;
-                                setEditDraft(d => ({ ...d, options: newOpts, correctOptionId: newCorrect }));
-                              }}>✕</button>
-                          )}
-                        </div>
-                      ))}
-                      {(editDraft.options || []).length < 10 && (
-                        <button className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }}
-                          onClick={() => setEditDraft(d => ({ ...d, options: [...(d.options || []), ""] }))}>+ Option</button>
-                      )}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                        <label className="input-label" style={{ margin: 0 }}>Question</label>
+                        <span style={{ fontSize: "0.72rem", color: (editDraft.question || "").trim().length > 300 ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                          {(editDraft.question || "").trim().length}/300
+                        </span>
+                      </div>
+                      <textarea
+                        className="input"
+                        rows={2}
+                        placeholder="Question text…"
+                        value={editDraft.question || ""}
+                        style={{
+                          width: "100%",
+                          borderColor: (editDraft.question || "").trim().length > 300 ? "var(--clr-danger)" : undefined,
+                        }}
+                        onChange={e => setEditDraft(d => ({ ...d, question: e.target.value }))}
+                      />
                     </div>
 
-                    {/* Explanation */}
-                    <input className="input" placeholder="💡 Explanation (optional)" value={editDraft.explanation || ""}
-                      onChange={e => setEditDraft(d => ({ ...d, explanation: e.target.value }))} />
+                    {/* Options */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <label className="input-label" style={{ margin: 0 }}>
+                          Options ({editDraft.options?.length || 0}/10)
+                        </label>
+                        {(() => {
+                          const rawOpts = editDraft.options || [];
+                          const clean = rawOpts.map(o => o.trim().toLowerCase()).filter(Boolean);
+                          const hasDupes = new Set(clean).size !== clean.length;
+                          return hasDupes ? (
+                            <span style={{ fontSize: "0.72rem", color: "var(--clr-danger)", fontWeight: 600 }}>
+                              ⚠️ Duplicate options detected
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {(() => {
+                          const rawOpts = editDraft.options || [];
+                          const cleanOpts = rawOpts.map(o => o.trim().toLowerCase());
+                          const dupes = new Set(cleanOpts.filter((v, idx, arr) => v && arr.indexOf(v) !== idx));
+
+                          return rawOpts.map((opt, i) => {
+                            const isDupe = opt.trim() && dupes.has(opt.trim().toLowerCase());
+                            const isOver = opt.length > 100;
+                            return (
+                              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                {editDraft.type === "QUIZ" && (
+                                  <input
+                                    type="radio"
+                                    name={`e-${t.id}`}
+                                    checked={editDraft.correctOptionId === i}
+                                    onChange={() => setEditDraft(d => ({ ...d, correctOptionId: i }))}
+                                    title="Mark as correct answer"
+                                  />
+                                )}
+                                <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)", width: 18 }}>
+                                  {String.fromCharCode(65 + i)}.
+                                </span>
+                                <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
+                                  <input
+                                    className="input"
+                                    value={opt}
+                                    style={{
+                                      width: "100%",
+                                      borderColor: isDupe || isOver ? "var(--clr-danger)" : undefined,
+                                      paddingRight: opt.length > 70 ? 45 : undefined,
+                                    }}
+                                    onChange={e => updateOpt(i, e.target.value)}
+                                  />
+                                  {opt.length > 70 && (
+                                    <span style={{ position: "absolute", right: 8, fontSize: "0.68rem", color: isOver ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                                      {opt.length}/100
+                                    </span>
+                                  )}
+                                </div>
+                                {rawOpts.length > 2 && (
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ color: "var(--clr-danger)", padding: "0 6px" }}
+                                    title="Remove option"
+                                    onClick={() => {
+                                      const curOpts = editDraft.options || [];
+                                      const newOpts = curOpts.filter((_, j) => j !== i);
+                                      const curCorrect = editDraft.correctOptionId ?? 0;
+                                      let newCorrect = curCorrect;
+                                      if (curCorrect === i) {
+                                        newCorrect = 0;
+                                      } else if (curCorrect > i) {
+                                        newCorrect = curCorrect - 1;
+                                      }
+                                      newCorrect = Math.max(0, Math.min(newCorrect, newOpts.length - 1));
+                                      setEditDraft(d => ({
+                                        ...d,
+                                        options: newOpts,
+                                        correctOptionId: editDraft.type === "QUIZ" ? newCorrect : null,
+                                      }));
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          });
+                        })()}
+                        {(editDraft.options || []).length < 10 && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ alignSelf: "flex-start" }}
+                            onClick={() => setEditDraft(d => ({ ...d, options: [...(d.options || []), ""] }))}
+                          >
+                            + Option
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Explanation (Quiz only in Telegram) */}
+                    {editDraft.type === "QUIZ" && (
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                          <label className="input-label" style={{ margin: 0 }}>💡 Explanation (optional)</label>
+                          <span style={{ fontSize: "0.72rem", color: (editDraft.explanation || "").trim().length > 200 ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                            {(editDraft.explanation || "").trim().length}/200
+                          </span>
+                        </div>
+                        <input
+                          className="input"
+                          placeholder="Shown when answer is revealed (max 200 chars)"
+                          value={editDraft.explanation || ""}
+                          style={{ borderColor: (editDraft.explanation || "").trim().length > 200 ? "var(--clr-danger)" : undefined }}
+                          onChange={e => setEditDraft(d => ({ ...d, explanation: e.target.value }))}
+                        />
+                      </div>
+                    )}
 
                     {/* Tags */}
-                    <input className="input" placeholder="Tags: math, easy (comma-separated)"
-                      value={(editDraft.tags || []).join(", ")}
-                      onChange={e => setEditDraft(d => ({ ...d, tags: e.target.value.split(",").map(x => x.trim()).filter(Boolean) }))} />
+                    <div>
+                      <label className="input-label" style={{ marginBottom: 3 }}>Tags</label>
+                      <input
+                        className="input"
+                        placeholder="e.g. math, algebra, chapter1 (comma-separated)"
+                        value={(editDraft.tags || []).join(", ")}
+                        onChange={e =>
+                          setEditDraft(d => ({
+                            ...d,
+                            tags: e.target.value.split(",").map(x => x.trim()).filter(Boolean),
+                          }))
+                        }
+                      />
+                    </div>
 
                     {/* Grid: Type + openPeriod */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div>
                         <label className="input-label">Type</label>
-                        <select className="select" value={editDraft.type}
-                          onChange={e => setEditDraft(d => ({ ...d, type: e.target.value as "QUIZ" | "POLL", correctOptionId: e.target.value === "POLL" ? null : d.correctOptionId }))}>
+                        <select
+                          className="select"
+                          value={editDraft.type}
+                          onChange={e => {
+                            const newType = e.target.value as "QUIZ" | "POLL";
+                            setEditDraft(d => ({
+                              ...d,
+                              type: newType,
+                              correctOptionId: newType === "POLL" ? null : (d.correctOptionId ?? 0),
+                              allowsMultiple: newType === "POLL" ? d.allowsMultiple : false,
+                              allowAddingOptions: newType === "POLL" ? d.allowAddingOptions : false,
+                              allowRevoting: newType === "POLL" ? d.allowRevoting : false,
+                            }));
+                          }}
+                        >
                           <option value="QUIZ">Quiz (has correct answer)</option>
                           <option value="POLL">Poll (open vote)</option>
                         </select>
                       </div>
                       <div>
-                        <label className="input-label">⏱ Auto-close</label>
-                        <select className="select" value={editDraft.openPeriod ?? 0}
-                          onChange={e => setEditDraft(d => ({ ...d, openPeriod: Number(e.target.value) || null }))}>
+                        <label className="input-label">⏱ Auto-close (Telegram 5s–10m)</label>
+                        <select
+                          className="select"
+                          value={editDraft.openPeriod ?? 0}
+                          onChange={e => setEditDraft(d => ({ ...d, openPeriod: Number(e.target.value) || null }))}
+                        >
                           <option value={0}>No limit</option>
+                          <option value={15}>15 seconds</option>
                           <option value={30}>30 seconds</option>
+                          <option value={45}>45 seconds</option>
                           <option value={60}>1 minute</option>
+                          <option value={120}>2 minutes</option>
                           <option value={300}>5 minutes</option>
-                          <option value={600}>10 minutes</option>
-                          <option value={1800}>30 minutes</option>
-                          <option value={3600}>1 hour</option>
+                          <option value={600}>10 minutes (Telegram max)</option>
                         </select>
                       </div>
                     </div>
 
                     {/* Toggle row */}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {[
-                        { label: "🔒 Anonymous",  key: "isAnonymous",        desc: "Hide voter names" },
-                        { label: "☑ Multi-answer", key: "allowsMultiple",    desc: "Allow multiple selections (poll only)" },
-                        { label: "✍ Add options",  key: "allowAddingOptions", desc: "Voters can suggest options" },
-                        { label: "↩ Revoting",    key: "allowRevoting",      desc: "Voters can change answer" },
-                      ].map(({ label, key, desc }) => (
-                        <button key={key} title={desc}
-                          onClick={() => setEditDraft(d => ({ ...d, [key]: !d[key as keyof typeof d] }))}
-                          className="btn btn-ghost btn-sm"
-                          style={{ border: `1px solid ${editDraft[key as keyof typeof editDraft] ? "var(--clr-brand)" : "var(--clr-border)"}`, color: editDraft[key as keyof typeof editDraft] ? "var(--clr-brand)" : "var(--clr-text-muted)", fontSize: "0.75rem" }}>
-                          {label}
-                        </button>
-                      ))}
+                      <button
+                        title="Hide voter names"
+                        onClick={() => setEditDraft(d => ({ ...d, isAnonymous: !d.isAnonymous }))}
+                        className="btn btn-ghost btn-sm"
+                        style={{
+                          border: `1px solid ${editDraft.isAnonymous ? "var(--clr-brand)" : "var(--clr-border)"}`,
+                          color: editDraft.isAnonymous ? "var(--clr-brand)" : "var(--clr-text-muted)",
+                          fontSize: "0.75rem",
+                        }}
+                      >
+                        🔒 Anonymous
+                      </button>
+
+                      {editDraft.type === "POLL" && (
+                        <>
+                          <button
+                            title="Allow multiple selections"
+                            onClick={() => setEditDraft(d => ({ ...d, allowsMultiple: !d.allowsMultiple }))}
+                            className="btn btn-ghost btn-sm"
+                            style={{
+                              border: `1px solid ${editDraft.allowsMultiple ? "var(--clr-brand)" : "var(--clr-border)"}`,
+                              color: editDraft.allowsMultiple ? "var(--clr-brand)" : "var(--clr-text-muted)",
+                              fontSize: "0.75rem",
+                            }}
+                          >
+                            ☑ Multi-answer
+                          </button>
+                          <button
+                            title="Voters can suggest options"
+                            onClick={() => setEditDraft(d => ({ ...d, allowAddingOptions: !d.allowAddingOptions }))}
+                            className="btn btn-ghost btn-sm"
+                            style={{
+                              border: `1px solid ${editDraft.allowAddingOptions ? "var(--clr-brand)" : "var(--clr-border)"}`,
+                              color: editDraft.allowAddingOptions ? "var(--clr-brand)" : "var(--clr-text-muted)",
+                              fontSize: "0.75rem",
+                            }}
+                          >
+                            ✍ Add options
+                          </button>
+                          <button
+                            title="Voters can change answer"
+                            onClick={() => setEditDraft(d => ({ ...d, allowRevoting: !d.allowRevoting }))}
+                            className="btn btn-ghost btn-sm"
+                            style={{
+                              border: `1px solid ${editDraft.allowRevoting ? "var(--clr-brand)" : "var(--clr-border)"}`,
+                              color: editDraft.allowRevoting ? "var(--clr-brand)" : "var(--clr-text-muted)",
+                              fontSize: "0.75rem",
+                            }}
+                          >
+                            ↩ Revoting
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : (
