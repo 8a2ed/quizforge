@@ -64,30 +64,53 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     ? user.firstName.charAt(0).toUpperCase() + (user.firstName.split(" ")[1]?.charAt(0).toUpperCase() || "")
     : "?";
 
-  // Sidebar nav items (group-specific)
-  const groupNavItems = groupId
+  // Sidebar nav items (organized by domain)
+  const navSections = groupId
     ? [
-        { href: `/dashboard/${groupId}`,            icon: ICONS.home,      label: "Overview"    },
-        { href: `/dashboard/${groupId}/quiz/new`,   icon: ICONS.quiz,      label: "Create Quiz" },
-        { href: `/dashboard/${groupId}/bulk`,       icon: ICONS.bulk,      label: "Bulk Import"  },
-        { href: `/dashboard/${groupId}/library`,    icon: ICONS.library,   label: "Library"     },
-        { href: `/dashboard/${groupId}/history`,    icon: ICONS.history,   label: "History"     },
-        { href: `/dashboard/${groupId}/scheduled`,  icon: ICONS.scheduled, label: "Scheduled"   },
-        { href: `/dashboard/${groupId}/exams`,      icon: ICONS.exams,     label: "Exams"       },
-        { href: `/dashboard/${groupId}/messages`,   icon: ICONS.messages,  label: "Messages"    },
-        { href: `/dashboard/${groupId}/analytics`,  icon: ICONS.analytics, label: "Analytics"   },
-        { href: `/dashboard/${groupId}/topics`,     icon: ICONS.topics,    label: "Topics"      },
-        { href: `/dashboard/${groupId}/admins`,     icon: ICONS.admins,    label: "Admins"      },
-        { href: `/dashboard/${groupId}/settings`,   icon: ICONS.settings,  label: "Settings"    },
+        {
+          label: "Dashboard",
+          items: [
+            { href: `/dashboard/${groupId}`,          icon: ICONS.home,     label: "Overview"    },
+            { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,     label: "Create Quiz" },
+            { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,     label: "Bulk Import" },
+          ],
+        },
+        {
+          label: "Assessments & Content",
+          items: [
+            { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: "Exams"       },
+            { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: "Library"     },
+            { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
+            { href: `/dashboard/${groupId}/scheduled`, icon: ICONS.scheduled, label: "Scheduled"   },
+            { href: `/dashboard/${groupId}/messages`,  icon: ICONS.messages,  label: "Messages"    },
+          ],
+        },
+        {
+          label: "Management & Insights",
+          items: [
+            { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"  },
+            { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: "Topics"     },
+            { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: "Admins"     },
+            { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: "Settings"   },
+          ],
+        },
       ]
-    : [];
+    : [
+        {
+          label: "Navigation",
+          items: [
+            { href: "/dashboard",             icon: ICONS.groups,      label: "My Groups"   },
+            { href: "/dashboard/instructors", icon: ICONS.instructors, label: "Instructors" },
+          ],
+        },
+      ];
 
   // Bottom tab items — show group tabs when inside a group, else show My Groups
   const bottomTabs = groupId
     ? [
         { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: "Overview" },
         { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: "Create"   },
-        { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,    label: "Import"   },
+        { href: `/dashboard/${groupId}/exams`,    icon: ICONS.exams,   label: "Exams"    },
         { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: "Library"  },
         { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: "History"  },
       ]
@@ -101,7 +124,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 49, backdropFilter: "blur(4px)" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 49, backdropFilter: "blur(6px)" }}
           onClick={() => setMobileOpen(false)}
         />
       )}
@@ -114,33 +137,43 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
-          <span className="logo-text">QuizForge</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="logo-text">QuizForge</span>
+            <span className="badge badge-brand" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>PRO</span>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
-          <div className="nav-section-label">Navigation</div>
-          <Link
-            href="/dashboard"
-            className={`nav-item ${pathname === "/dashboard" ? "active" : ""}`}
-            onClick={() => setMobileOpen(false)}
-          >
-            <Icon path={ICONS.groups} />
-            My Groups
-          </Link>
-
-          {groupId && groupNavItems.map((item) => (
+          {groupId && (
             <Link
-              key={item.href}
-              href={item.href}
-              className={`nav-item ${pathname === item.href ? "active" : ""}`}
+              href="/dashboard"
+              className={`nav-item ${pathname === "/dashboard" ? "active" : ""}`}
               onClick={() => setMobileOpen(false)}
+              style={{ marginBottom: 4 }}
             >
-              <Icon path={item.icon} />
-              {item.label}
+              <Icon path={ICONS.groups} />
+              ← All Groups
             </Link>
+          )}
+
+          {navSections.map((sec) => (
+            <div key={sec.label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <div className="nav-section-label">{sec.label}</div>
+              {sec.items.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`nav-item ${pathname === item.href ? "active" : ""}`}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  <Icon path={item.icon} />
+                  {item.label}
+                </Link>
+              ))}
+            </div>
           ))}
 
-          <div style={{ flex: 1 }} />
+          <div style={{ flex: 1, minHeight: 20 }} />
         </nav>
 
         <div className="sidebar-footer">
@@ -154,8 +187,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {user.firstName}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div className="user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {user.firstName}
+                  </div>
+                  <span className="status-dot-online" title="Online" />
                 </div>
                 {user.username && (
                   <div className="user-handle">@{user.username}</div>
@@ -172,8 +208,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Header */}
         <header className="page-header">
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+            {/* Mobile hamburger menu toggle */}
+            <button
+              className="btn btn-ghost btn-icon show-mobile"
+              onClick={() => setMobileOpen(true)}
+              aria-label="Open menu"
+              title="Open menu"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+
             {groupId && (
-              <Link href="/dashboard" className="btn btn-ghost btn-sm">
+              <Link href="/dashboard" className="btn btn-ghost btn-sm hide-mobile">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M15 18l-6-6 6-6"/>
                 </svg>

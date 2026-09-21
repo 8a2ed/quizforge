@@ -24,7 +24,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" data-scroll-behavior="smooth">
+    <html lang="ar" dir="auto" data-scroll-behavior="smooth">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <meta name="theme-color" content="#080b11" />
+        <meta name="color-scheme" content="dark" />
+      </head>
       <body suppressHydrationWarning>
         {/* Telegram Mini App SDK — loaded before any client JS */}
         <Script

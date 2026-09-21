@@ -329,29 +329,38 @@ export default function LoginPage() {
         .login-orb {
           position: absolute;
           border-radius: 50%;
-          filter: blur(80px);
-          opacity: 0.12;
-          animation: float 20s ease-in-out infinite;
+          filter: blur(100px);
+          opacity: 0.18;
+          animation: float 22s ease-in-out infinite;
         }
-        .orb-1 { width:600px;height:600px;background:radial-gradient(circle,#4f7fff,transparent);top:-200px;left:-200px; }
-        .orb-2 { width:400px;height:400px;background:radial-gradient(circle,#a78bfa,transparent);bottom:-100px;right:-100px;animation-delay:-7s;animation-direction:reverse; }
-        .orb-3 { width:300px;height:300px;background:radial-gradient(circle,#38bdf8,transparent);top:50%;right:20%;animation-delay:-14s; }
-        @keyframes float { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(-30px) scale(1.05)} }
+        .orb-1 { width:650px;height:650px;background:radial-gradient(circle,#6366f1,transparent);top:-220px;left:-220px; }
+        .orb-2 { width:480px;height:480px;background:radial-gradient(circle,#a855f7,transparent);bottom:-120px;right:-120px;animation-delay:-8s;animation-direction:reverse; }
+        .orb-3 { width:380px;height:380px;background:radial-gradient(circle,#0ea5e9,transparent);top:45%;right:15%;animation-delay:-15s; }
+        @keyframes float { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(-35px) scale(1.06)} }
         .login-grid {
           position:absolute;inset:0;
-          background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);
-          background-size:40px 40px;
+          background-image:linear-gradient(rgba(255,255,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.03) 1px,transparent 1px);
+          background-size:48px 48px;
+          mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, #000 60%, transparent 100%);
+          -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, #000 60%, transparent 100%);
         }
         .login-card {
           width:100%;max-width:440px;
-          background:rgba(20,25,38,0.9);
-          backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
-          border:1px solid rgba(255,255,255,0.1);
+          background:rgba(14, 19, 31, 0.82);
+          backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+          border:1px solid rgba(255,255,255,0.11);
           border-radius:var(--radius-xl);
           padding:var(--space-10);
-          box-shadow:0 24px 64px rgba(0,0,0,0.6),0 0 0 1px rgba(255,255,255,0.04),inset 0 1px 0 rgba(255,255,255,0.06);
+          box-shadow:0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05), inset 0 1px 0 rgba(255,255,255,0.12);
           animation:fadeUp 0.5s var(--ease-out) both;
           position:relative;z-index:1;
+        }
+        .login-card::before {
+          content: "";
+          position: absolute;
+          top: 0; left: 15%; right: 15%;
+          height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.8), rgba(168, 85, 247, 0.8), transparent);
         }
         .login-logo { display:flex;align-items:center;gap:var(--space-4);margin-bottom:var(--space-8); }
         .login-features { display:flex;flex-direction:column;gap:var(--space-2);margin-bottom:var(--space-6); }
@@ -359,14 +368,21 @@ export default function LoginPage() {
           display:flex;align-items:center;gap:var(--space-3);
           font-size:0.875rem;color:var(--clr-text-secondary);
           padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);
-          transition:background var(--duration-fast);
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          transition:all var(--duration-fast);
         }
-        .login-feature:hover { background:rgba(255,255,255,0.04); }
+        .login-feature:hover {
+          background:rgba(255,255,255,0.05);
+          border-color: rgba(255, 255, 255, 0.09);
+          transform: translateX(2px);
+        }
         .tg-widget-container { display:flex;justify-content:center;min-height:50px;align-items:center; }
 
         .login-tabs {
           display:flex;gap:var(--space-2);
           background:rgba(255,255,255,0.04);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           border-radius:var(--radius-md);
           padding:4px;
           margin-top:var(--space-5);
@@ -380,9 +396,9 @@ export default function LoginPage() {
           cursor:pointer;transition:all var(--duration-fast);font-weight:500;
         }
         .login-tab.active {
-          background:rgba(255,255,255,0.1);
+          background:rgba(255,255,255,0.12);
           color:var(--clr-text-primary);
-          box-shadow:0 1px 3px rgba(0,0,0,0.3);
+          box-shadow:0 2px 8px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.15);
         }
         .login-tab:hover:not(.active) { color:var(--clr-text-secondary); }
       `}</style>
