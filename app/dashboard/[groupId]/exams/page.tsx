@@ -10,6 +10,7 @@ interface Exam {
   questions: Question[]; timeLimit: number | null; passingScore: number;
   isPublished: boolean; launchMsgId?: number | null; createdAt: string;
   topicId?: number | null; topicName?: string | null;
+  shuffleQuestions?: boolean; shuffleOptions?: boolean;
   _count: { results: number };
   createdBy?: { firstName: string; username?: string | null };
 }
@@ -120,6 +121,8 @@ export default function ExamsPage() {
   const [passingScore, setPassingScore] = useState("60");
   const [topicId, setTopicId] = useState<number | "">("");
   const [topicName, setTopicName] = useState("");
+  const [shuffleQuestions, setShuffleQuestions] = useState(true);
+  const [shuffleOptions, setShuffleOptions] = useState(true);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [questions, setQuestions] = useState<Question[]>([emptyQ()]);
   const [saving, setSaving] = useState(false);
@@ -148,6 +151,7 @@ export default function ExamsPage() {
   const resetForm = () => {
     setTitle(""); setDesc(""); setTimeLimit(""); setPassingScore("60");
     setTopicId(""); setTopicName("");
+    setShuffleQuestions(true); setShuffleOptions(true);
     setQuestions([emptyQ()]); setEditingExam(null);
   };
 
@@ -161,6 +165,8 @@ export default function ExamsPage() {
     setPassingScore(String(exam.passingScore));
     setTopicId(exam.topicId ?? "");
     setTopicName(exam.topicName || "");
+    setShuffleQuestions(exam.shuffleQuestions ?? true);
+    setShuffleOptions(exam.shuffleOptions ?? true);
     setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options] })));
     setMode("edit");
   };
@@ -217,6 +223,8 @@ export default function ExamsPage() {
         passingScore: score,
         topicId: topicId || null,
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
+        shuffleQuestions,
+        shuffleOptions,
       }),
     });
     const data = await res.json();
@@ -244,6 +252,8 @@ export default function ExamsPage() {
         passingScore: score,
         topicId: topicId || null,
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
+        shuffleQuestions,
+        shuffleOptions,
       }),
     });
     setSaving(false);
@@ -981,6 +991,85 @@ export default function ExamsPage() {
           </div>
         </div>
 
+        {/* Anti-Cheating & Randomization Settings */}
+        <div style={{
+          background: "var(--clr-bg-elevated)",
+          border: "1px solid var(--clr-border)",
+          borderRadius: 8,
+          padding: "14px 16px",
+          marginBottom: 16
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: "1.1rem" }}>🛡️</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--clr-text-primary)" }}>
+                Anti-Cheating & Randomization (منع الغش والخلط العشوائي)
+              </div>
+              <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)" }}>
+                Randomize questions and choices uniquely for each student to prevent answer sharing.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "var(--clr-bg)",
+              padding: "10px 14px",
+              borderRadius: 6,
+              cursor: "pointer",
+              border: "1px solid var(--clr-border)"
+            }}>
+              <div>
+                <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--clr-text-primary)" }}>
+                  🔀 Shuffle Questions (خلط الأسئلة)
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
+                  Random question order for each student
+                </div>
+              </div>
+              <div className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={shuffleQuestions}
+                  onChange={e => setShuffleQuestions(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </div>
+            </label>
+
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "var(--clr-bg)",
+              padding: "10px 14px",
+              borderRadius: 6,
+              cursor: "pointer",
+              border: "1px solid var(--clr-border)"
+            }}>
+              <div>
+                <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--clr-text-primary)" }}>
+                  🔀 Shuffle Options (خلط الخيارات)
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
+                  Random choice order (A, B, C...) per question
+                </div>
+              </div>
+              <div className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={shuffleOptions}
+                  onChange={e => setShuffleOptions(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </div>
+            </label>
+          </div>
+        </div>
+
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <h5 style={{ margin: 0 }}>Questions ({questions.length})</h5>
@@ -1084,6 +1173,16 @@ export default function ExamsPage() {
                     <span className="badge badge-brand" style={{ fontSize: "0.68rem" }}>👥 {exam._count.results} result{exam._count.results !== 1 ? "s" : ""}</span>
                     <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>🕐 {timeAgo(exam.createdAt)}</span>
                     {exam.createdBy && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>👤 {exam.createdBy.firstName}</span>}
+                    {exam.shuffleQuestions && (
+                      <span className="badge badge-muted" style={{ fontSize: "0.68rem", color: "#10b981", borderColor: "rgba(16, 185, 129, 0.3)", background: "rgba(16, 185, 129, 0.08)" }} title="Questions randomized per student">
+                        🔀 Shuffled Qs
+                      </span>
+                    )}
+                    {exam.shuffleOptions && (
+                      <span className="badge badge-muted" style={{ fontSize: "0.68rem", color: "#10b981", borderColor: "rgba(16, 185, 129, 0.3)", background: "rgba(16, 185, 129, 0.08)" }} title="Choices randomized per question">
+                        🔀 Shuffled Choices
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>

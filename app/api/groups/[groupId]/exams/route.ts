@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { parseExamConfig, formatExamDescription } from "@/lib/examConfig";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -75,7 +76,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ grou
     orderBy: { createdAt: "desc" },
   }));
 
-  return NextResponse.json({ exams });
+  const mappedExams = exams.map(e => {
+    const cfg = parseExamConfig(e.description);
+    return {
+      ...e,
+      description: cfg.cleanDescription || null,
+      shuffleQuestions: cfg.shuffleQuestions,
+      shuffleOptions: cfg.shuffleOptions,
+    };
+  });
+
+  return NextResponse.json({ exams: mappedExams });
 }
 
 // POST /api/groups/[groupId]/exams
@@ -85,7 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { title, description, questions, timeLimit, passingScore, topicId, topicName } = body;
+  const { title, description, questions, timeLimit, passingScore, topicId, topicName, shuffleQuestions, shuffleOptions } = body;
 
   if (!title?.trim()) return NextResponse.json({ error: "Exam title is required" }, { status: 400 });
   const cleanedQuestions = sanitizeQuestions(questions);
@@ -96,10 +107,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   const cleanPassingScore = Math.min(100, Math.max(1, Number(passingScore) || 60));
   const cleanTimeLimit = timeLimit && Number(timeLimit) > 0 ? Math.round(Number(timeLimit)) : null;
 
+  const formattedDesc = formatExamDescription(description, {
+    shuffleQuestions: shuffleQuestions !== false,
+    shuffleOptions: shuffleOptions !== false,
+  });
+
   const exam = await withRetry(() => prisma.exam.create({
     data: {
       title: title.trim(),
-      description: description?.trim() || null,
+      description: formattedDesc,
       questions: cleanedQuestions as unknown as Prisma.InputJsonValue,
       timeLimit: cleanTimeLimit,
       passingScore: cleanPassingScore,
@@ -111,7 +127,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
     },
   }));
 
-  return NextResponse.json({ ok: true, exam });
+  const cfg = parseExamConfig(exam.description);
+
+  return NextResponse.json({
+    ok: true,
+    exam: {
+      ...exam,
+      description: cfg.cleanDescription || null,
+      shuffleQuestions: cfg.shuffleQuestions,
+      shuffleOptions: cfg.shuffleOptions,
+    },
+  });
 }
 
 // PATCH /api/groups/[groupId]/exams — update exam
@@ -121,7 +147,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName } = body;
+  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName, shuffleQuestions, shuffleOptions } = body;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   let cleanedQuestions: SanitizedQuestion[] | undefined = undefined;
@@ -136,11 +162,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   const cleanPassingScore = passingScore !== undefined ? Math.min(100, Math.max(1, Number(passingScore) || 60)) : undefined;
   const cleanTimeLimit = timeLimit !== undefined ? (Number(timeLimit) > 0 ? Math.round(Number(timeLimit)) : null) : undefined;
 
+  let formattedDesc: string | undefined = undefined;
+  if (description !== undefined || shuffleQuestions !== undefined || shuffleOptions !== undefined) {
+    const current = await withRetry(() => prisma.exam.findUnique({ where: { id }, select: { description: true } }));
+    const currentCfg = parseExamConfig(current?.description);
+    const nextCleanDesc = description !== undefined ? description : currentCfg.cleanDescription;
+    const nextShuffleQ = shuffleQuestions !== undefined ? Boolean(shuffleQuestions) : currentCfg.shuffleQuestions;
+    const nextShuffleOpts = shuffleOptions !== undefined ? Boolean(shuffleOptions) : currentCfg.shuffleOptions;
+    formattedDesc = formatExamDescription(nextCleanDesc, { shuffleQuestions: nextShuffleQ, shuffleOptions: nextShuffleOpts });
+  }
+
   const updated = await withRetry(() => prisma.exam.updateMany({
     where: { id, groupId },
     data: {
       ...(title !== undefined ? { title: title.trim() } : {}),
-      ...(description !== undefined ? { description: description?.trim() || null } : {}),
+      ...(formattedDesc !== undefined ? { description: formattedDesc } : {}),
       ...(cleanedQuestions !== undefined ? { questions: cleanedQuestions as unknown as Prisma.InputJsonValue } : {}),
       ...(cleanTimeLimit !== undefined ? { timeLimit: cleanTimeLimit } : {}),
       ...(cleanPassingScore !== undefined ? { passingScore: cleanPassingScore } : {}),
@@ -155,9 +191,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
     const exam = await withRetry(() => prisma.exam.findFirst({ where: { id, groupId }, include: { group: true } }));
     if (exam?.group) {
       const qs = exam.questions as Array<Record<string, unknown>>;
+      const cleanDesc = parseExamConfig(exam.description).cleanDescription;
       const msg = [
         `📋 <b>${escapeHtml(exam.title)}</b>`,
-        exam.description ? `\n${escapeHtml(exam.description)}` : "",
+        cleanDesc ? `\n${escapeHtml(cleanDesc)}` : "",
         `\n\n📊 <b>${qs.length} question${qs.length !== 1 ? "s" : ""}</b>`,
         exam.timeLimit ? `\n⏱ <b>${Math.floor(exam.timeLimit / 60)} minute time limit</b>` : "",
         `\n✅ <b>Passing score: ${exam.passingScore}%</b>`,

@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import {
+  parseExamConfig,
+  prepareStudentExamQuestions,
+  mapStudentAnswersToMaster,
+  type StudentExamQuestion,
+  type MasterExamQuestion,
+} from "@/lib/examConfig";
 
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
@@ -11,6 +19,8 @@ interface ExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  originalQIndex?: number;
+  originalOptionIndices?: number[];
 }
 interface ExamSession {
   examId: string;
@@ -86,13 +96,15 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     where: { examId, telegramId, score: -1 }
   }));
 
+  const cfg = parseExamConfig(exam.description);
   const questions = exam.questions as unknown as ExamQuestion[];
   const text = [
     `📋 <b>${escapeHtml(exam.title)}</b>`,
-    exam.description ? `\n${escapeHtml(exam.description)}` : "",
+    cfg.cleanDescription ? `\n${escapeHtml(cfg.cleanDescription)}` : "",
     `\n\n📊 <b>${questions.length} question${questions.length !== 1 ? "s" : ""}</b>`,
     exam.timeLimit ? `\n⏱ <b>Time limit: ${Math.floor(exam.timeLimit / 60)} minutes</b>` : "",
     `\n✅ <b>Passing score: ${exam.passingScore}%</b>`,
+    cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>Anti-cheating: Randomized question & option order</b>` : "",
     inProgress ? "\n\n⚠️ <i>You have an exam session in progress! Tap Resume to continue.</i>" : "\n\n👉 <i>Tap Begin to start — questions arrive one by one.</i>",
   ].filter(Boolean).join("");
 
@@ -209,16 +221,19 @@ async function finishExam(session: ExamSession, timedOut = false) {
   const passed   = score >= passingScore;
   const duration = Math.floor((Date.now() - startedAt) / 1000);
 
+  // Map student answers back to master question and option indices so teacher analytics align perfectly
+  const masterAnswers = mapStudentAnswersToMaster(questions as unknown as StudentExamQuestion[], answers);
+
   try {
     const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
     if (existing) {
       await withRetry(() => prisma.examResult.update({
         where: { id: existing.id },
-        data: { name, answers, score, passed, duration, completedAt: new Date() },
+        data: { name, answers: masterAnswers, score, passed, duration, completedAt: new Date() },
       }));
     } else {
       await withRetry(() => prisma.examResult.create({
-        data: { examId, name, telegramId, answers, score, passed, duration, completedAt: new Date() },
+        data: { examId, name, telegramId, answers: masterAnswers, score, passed, duration, completedAt: new Date() },
       }));
     }
   } catch (e) {
@@ -325,7 +340,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       session = {
         examId, examTitle: exam.title,
         chatId, msgId, name, telegramId,
-        questions: exam.questions as unknown as ExamQuestion[],
+        questions: (data.questions as unknown as ExamQuestion[]) || (exam.questions as unknown as ExamQuestion[]),
         answers: (data.answers as Record<number, number>) || {},
         currentQ: Number(data.currentQ) || 0,
         startedAt: Number(data.startedAt) || Date.now(),
@@ -333,10 +348,16 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
         passingScore: exam.passingScore,
       };
     } else {
+      const cfg = parseExamConfig(exam.description);
+      const studentQuestions = prepareStudentExamQuestions(
+        exam.questions as unknown as MasterExamQuestion[],
+        cfg
+      );
+
       session = {
         examId, examTitle: exam.title,
         chatId, msgId, name, telegramId,
-        questions: exam.questions as unknown as ExamQuestion[],
+        questions: studentQuestions as unknown as ExamQuestion[],
         answers: {},
         currentQ: 0,
         startedAt: Date.now(),
@@ -347,7 +368,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       await withRetry(() => prisma.examResult.create({
         data: {
           examId, name, telegramId,
-          answers: { answers: {}, currentQ: 0, startedAt: session.startedAt, msgId, chatId },
+          answers: { answers: {}, questions: studentQuestions, currentQ: 0, startedAt: session.startedAt, msgId, chatId } as unknown as Prisma.InputJsonValue,
           score: -1,
           passed: false,
           duration: null,
@@ -385,7 +406,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
           chatId: (cb.message as { chat: { id: number } }).chat.id,
           msgId: (cb.message as { message_id: number }).message_id,
           name: inProgress.name, telegramId,
-          questions: inProgress.exam.questions as unknown as ExamQuestion[],
+          questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
           answers: (data.answers as Record<number, number>) || {},
           currentQ: Number(data.currentQ) || 0,
           startedAt: Number(data.startedAt) || Date.now(),
@@ -428,11 +449,12 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     data: {
       answers: {
         answers: session!.answers,
+        questions: session!.questions,
         currentQ: session!.currentQ,
         startedAt: session!.startedAt,
         msgId: session!.msgId,
         chatId: session!.chatId,
-      },
+      } as unknown as Prisma.InputJsonValue,
     },
   })).catch(e => console.error("[exam] save progress error:", e));
 
