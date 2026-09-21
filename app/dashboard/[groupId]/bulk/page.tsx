@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -34,6 +34,101 @@ interface Collection {
   color: string;
   quizCount?: number;
 }
+
+interface SmartTemplate {
+  id: string;
+  title: string;
+  badge: string;
+  description: string;
+  sample: string;
+}
+
+const TEMPLATES: SmartTemplate[] = [
+  {
+    id: "ar-standard",
+    title: "اصطمبة قياسية شاملة (عربي)",
+    badge: "الأكثر استخداماً 🇸🇦",
+    description: "نموذج عربي متكامل يشمل السؤال، الخيارات، الإجابة الصحيحة، الشرح التوضيحي، التوبيك، والتصنيف.",
+    sample: `الموضوع: تكنولوجيا البرمجة
+التصنيف: اختبارات عامة
+الوسوم: javascript, web, easy
+
+س1: ما هي لغة البرمجة الأكثر استخداماً لتطوير واجهات مواقع الويب التفاعلية؟
+أ. Python
+ب. JavaScript
+ج. C++
+د. Ruby
+الإجابة: ب
+الشرح: لغة JavaScript هي اللغة الأساسية لتشغيل التفاعلات البرمجية في متصفحات الويب الحديثة.
+
+س2: ما هو الاختصار لـ Cascading Style Sheets؟
+أ. CSS
+ب. HTML
+ج. SQL
+د. PHP
+الإجابة: أ
+الشرح: CSS هي لغة تنسيق صفحات الويب وتصميم المظهر والخطوط والألوان المتجاوبة.`,
+  },
+  {
+    id: "quick-inline",
+    title: "اصطمبة الحل المباشر (علامة صح ✓)",
+    badge: "سريعة وذكية ⚡",
+    description: "ضع علامة (صح) أو ✓ بجانب الخيار الصحيح مباشرة داخل النص دون الحاجة لكتابة سطر الإجابة بشكل منفصل.",
+    sample: `س1: ما هي عاصمة جمهورية مصر العربية؟
+- الإسكندرية
+- القاهرة (صح)
+- الجيزة
+- أسوان
+الشرح: القاهرة هي العاصمة الرسمية وأكبر مدن جمهورية مصر العربية وأعرقها تاريخاً.
+
+س2: ما هو الكوكب الملقب بـ الكوكب الأحمر في المجموعة الشمسية؟
+أ. الزهرة
+ب. المريخ (صحيح)
+ج. المشتري
+د. زحل
+الشرح: يكتسب كوكب المريخ لونه الأحمر نتيجة انتشار أكسيد الحديد (الصدأ) على سطحه بكثافة.`,
+  },
+  {
+    id: "en-standard",
+    title: "Standard English Template",
+    badge: "English Standard 🇬🇧",
+    description: "Full English template with Topic, Category, Question, Options, Answer, Explanation, and Tags.",
+    sample: `Topic: Computer Science
+Category: General Knowledge
+Tags: tech, hardware, basics
+
+1. What does CPU stand for in computer hardware?
+A. Central Processing Unit
+B. Computer Personal Unit
+C. Central Power Utility
+D. Core Processor Unified
+Answer: A
+Explanation: The CPU is often described as the brain of the computer, executing instructions.
+
+2. Which type of computer memory is volatile and loses data when powered off?
+A. Solid State Drive (SSD)
+B. Read-Only Memory (ROM)
+C. Random Access Memory (RAM)
+D. Magnetic Hard Disk
+Answer: C
+Explanation: RAM is high-speed temporary memory that gets cleared when the machine turns off.`,
+  },
+  {
+    id: "poll-template",
+    title: "اصطمبة استطلاع الرأي (Poll)",
+    badge: "تفاعلي واستطلاعات 📊",
+    description: "استطلاع بدون إجابة صحيحة محددة، مخصص للتصويت وقياس آراء الأعضاء في الجروب أو التوبيك.",
+    sample: `الموضوع: النقاشات العامة
+الوسوم: استطلاع, تصويت
+
+ما هو إطار العمل المفضل لديك لتطوير وتصميم تطبيقات الويب الحديثة؟
+• Next.js / React
+• Vue.js / Nuxt
+• Svelte / SvelteKit
+• Angular
+• إطار عمل آخر`,
+  },
+];
 
 function validate(p: Partial<QuizPreview>): string[] {
   const e: string[] = [];
@@ -70,15 +165,31 @@ function validate(p: Partial<QuizPreview>): string[] {
 
 function resolveCorrectOption(raw: string | undefined | null, options: string[]): number | null {
   if (!raw || options.length === 0) return null;
-  const str = String(raw).trim().replace(/^["']|["']$/g, "");
+  const str = String(raw).trim().replace(/^["'\[\(\]\)]+|["'\[\(\]\)]+$/g, "").trim();
   if (!str) return null;
 
-  // Arabic letters map
-  const arabicLetters = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
-  const arabicIdx = arabicLetters.indexOf(str);
-  if (arabicIdx !== -1 && arabicIdx < options.length) return arabicIdx;
+  // Eastern Arabic numerals: ١, ٢, ٣, ٤, ٥, ٦, ٧, ٨, ٩, ١٠
+  const easternDigits: Record<string, number> = {
+    "١": 0, "٢": 1, "٣": 2, "٤": 3, "٥": 4,
+    "٦": 5, "٧": 6, "٨": 7, "٩": 8, "١٠": 9
+  };
+  if (str in easternDigits && easternDigits[str] < options.length) {
+    return easternDigits[str];
+  }
 
-  if (str === "ا" && options.length > 0) return 0;
+  // Arabic letters map
+  // Abjadi order: أ, ب, ج, د, هـ, و, ز, ح, ط, ي
+  const arabicAbjadi = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
+  // Hijai order: أ, ب, ت, ث, ج, ح, خ, د, ذ, ر
+  const arabicHijai = ["أ", "ب", "ت", "ث", "ج", "ح", "خ", "د", "ذ", "ر"];
+
+  const normalizedChar = str.replace(/^[إآا]/, "أ");
+
+  const abjadiIdx = arabicAbjadi.indexOf(normalizedChar);
+  if (abjadiIdx !== -1 && abjadiIdx < options.length) return abjadiIdx;
+
+  const hijaiIdx = arabicHijai.indexOf(normalizedChar);
+  if (hijaiIdx !== -1 && hijaiIdx < options.length) return hijaiIdx;
 
   // English letters A-J
   if (/^[a-jA-J]$/.test(str)) {
@@ -86,47 +197,121 @@ function resolveCorrectOption(raw: string | undefined | null, options: string[])
     if (idx < options.length) return idx;
   }
 
-  // Exact match with option text (case-insensitive)
-  const matchIdx = options.findIndex(o => o.trim().toLowerCase() === str.toLowerCase());
+  // Exact match with option text (case-insensitive, trimmed)
+  const cleanStr = str.toLowerCase();
+  const matchIdx = options.findIndex(o => o.trim().toLowerCase() === cleanStr);
   if (matchIdx !== -1) return matchIdx;
 
-  // Numeric index check (both 0-based and 1-based)
+  // Substring / prefix match
+  const prefixIdx = options.findIndex(o => {
+    const optClean = o.trim().toLowerCase();
+    return optClean === cleanStr || optClean.startsWith(cleanStr) || cleanStr.startsWith(optClean);
+  });
+  if (prefixIdx !== -1) return prefixIdx;
+
+  // Numeric index check (both 1-based and 0-based)
   const n = Number(str);
   if (!isNaN(n) && Number.isInteger(n)) {
-    if (n >= 0 && n < options.length) return n;
     if (n >= 1 && n <= options.length) return n - 1;
+    if (n >= 0 && n < options.length) return n;
   }
 
   return null;
 }
 
-function parseSmartText(text: string): QuizPreview[] {
-  const chunks = text.split(/\n\s*\n/);
+function splitIntoQuestionChunks(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  // Split on divider rules or multiple newlines
+  let chunks = normalized.split(/\n\s*[-=_*]{3,}\s*\n|\n\s*\n+/).map(c => c.trim()).filter(Boolean);
+
+  // If only 1 chunk found, check if multiple questions exist without blank lines
+  if (chunks.length <= 1 && normalized.trim().length > 0) {
+    const questionSplitRegex = /(?:^|\n)(?=(?:س\s*\d*|السؤال\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|\d+)?|Q\s*\d*|Question\s*\d*|Quiz\s*\d*|#\s*\d*)[:\.\)\-]|(?:\d+|[١-٩]|١٠)[\.\)\-]\s+\S)/i;
+    const subChunks = normalized.split(questionSplitRegex).map(c => c.trim()).filter(Boolean);
+    if (subChunks.length > 1) {
+      chunks = subChunks;
+    }
+  }
+
+  return chunks;
+}
+
+function parseSmartText(text: string, topicsList: Topic[] = [], collectionsList: Collection[] = []): QuizPreview[] {
+  const chunks = splitIntoQuestionChunks(text);
   const items: QuizPreview[] = [];
+
   for (const chunk of chunks) {
     if (!chunk.trim()) continue;
     const lines = chunk.split("\n").map(l => l.trim()).filter(Boolean);
-    let question = "", options: string[] = [], correctAnswerStr = "", explanationStr = "";
+    let question = "";
+    const options: string[] = [];
+    let correctAnswerStr = "";
+    let explanationStr = "";
+    let inlineCorrectIndex: number | null = null;
+    let topicNameStr = "";
+    let categoryStr = "";
+    let tagsList: string[] = [];
 
     for (const line of lines) {
-      // Answer / Explanation keywords
-      if (/^(answer|correct answer|correct|ans|حل|الجواب|الإجابة|الاجابة)\s*[:=-]/i.test(line)) {
-        correctAnswerStr = line.replace(/^(answer|correct answer|correct|ans|حل|الجواب|الإجابة|الاجابة)\s*[:=-]\s*/i, "").trim();
-        continue;
-      }
-      if (/^(explanation|note|reason|شرح|تفسير|ملاحظة)\s*[:=-]/i.test(line)) {
-        explanationStr = line.replace(/^(explanation|note|reason|شرح|تفسير|ملاحظة)\s*[:=-]\s*/i, "").trim();
+      // 1. Topic metadata
+      const topicMatch = line.match(/^(?:topic|توبيك|الموضوع|توبك)\s*[:=-]\s*(.+)/i);
+      if (topicMatch) {
+        topicNameStr = topicMatch[1].trim();
         continue;
       }
 
-      const isLetterOption  = /^[a-dA-Dأ-ي][\.\)\-]\s+\S/.test(line); // A. text or أ. text or A) text
-      const isBulletOption  = /^[-•*]\s+\S/.test(line);                // - text or • text
-      const isNumberedLine  = /^\d+[\.\)\-]\s+\S/.test(line);            // 1. text
+      // 2. Category metadata
+      const catMatch = line.match(/^(?:category|collection|تصنيف|القسم|قسم|المجموعة)\s*[:=-]\s*(.+)/i);
+      if (catMatch) {
+        categoryStr = catMatch[1].trim();
+        continue;
+      }
 
-      if (isLetterOption || isBulletOption) {
-        options.push(line.replace(/^[a-dA-Dأ-ي][\.\)\-]\s+|^[-•*]\s+/, "").trim());
-      } else if (isNumberedLine && question) {
-        options.push(line.replace(/^\d+[\.\)\-]\s+/, "").trim());
+      // 3. Tags metadata
+      const tagsMatch = line.match(/^(?:tags|tag|وسوم|الوسوم|هاشتاق)\s*[:=-]\s*(.+)/i);
+      if (tagsMatch) {
+        tagsList = tagsMatch[1].split(/[,#\s]+/).map(t => t.trim()).filter(Boolean);
+        continue;
+      }
+
+      // 4. Answer metadata
+      const ansMatch = line.match(/^(?:answer|correct answer|correct|ans|حل|الجواب|الإجابة|الاجابة)\s*[:=-]\s*(.+)/i);
+      if (ansMatch) {
+        correctAnswerStr = ansMatch[1].trim();
+        continue;
+      }
+
+      // 5. Explanation metadata
+      const expMatch = line.match(/^(?:explanation|note|reason|شرح|تفسير|ملاحظة|سبب)\s*[:=-]\s*(.+)/i);
+      if (expMatch) {
+        explanationStr = expMatch[1].trim();
+        continue;
+      }
+
+      // 6. Option detection
+      const isLetterOption = /^[a-jA-Jأ-ي][\.\)\-]\s+\S/.test(line);
+      const isEasternNumOption = /^[١-٩][\.\)\-]\s+\S/.test(line);
+      const isBulletOption = /^[-•*⁃]\s+\S/.test(line);
+      const isNumberedOption = /^\d+[\.\)\-]\s+\S/.test(line);
+
+      if (isLetterOption || isEasternNumOption || isBulletOption || (isNumberedOption && question.length > 0)) {
+        let optText = line
+          .replace(/^[a-jA-Jأ-ي][\.\)\-]\s+/, "")
+          .replace(/^[١-٩][\.\)\-]\s+/, "")
+          .replace(/^[-•*⁃]\s+/, "")
+          .replace(/^\d+[\.\)\-]\s+/, "")
+          .trim();
+
+        // Check inline correct marker (e.g. "Option text (صح)" or "Option text ✓")
+        const inlineMarkerRegex = /[\(\[]?\s*(?:صح|صحيح|الصح|الإجابة الصحيحة|الاجابة الصحيحة|correct|true|right|answer|✓|✔|★|\[x\])\s*[\)\]]?$/i;
+        const prefixMarkerRegex = /^(?:✓|✔|★|\[x\])\s*/i;
+
+        if (inlineMarkerRegex.test(optText) || prefixMarkerRegex.test(optText)) {
+          inlineCorrectIndex = options.length;
+          optText = optText.replace(inlineMarkerRegex, "").replace(prefixMarkerRegex, "").trim();
+        }
+
+        options.push(optText);
       } else {
         if (options.length === 0) {
           question += (question ? "\n" : "") + line;
@@ -136,22 +321,90 @@ function parseSmartText(text: string): QuizPreview[] {
       }
     }
 
-    // Strip leading "Q1:" or "1." or "س1:" prefix from question
-    question = question.replace(/^(q\s*\d*|question\s*\d*|س\s*\d*)\s*[:.]\s*/i, "").replace(/^\d+[\.\)]\s+/, "").trim();
-    const cleanOpts = options.filter(Boolean);
-    const correctOptionId = resolveCorrectOption(correctAnswerStr, cleanOpts);
+    // Strip question prefixes
+    question = question
+      .replace(/^(?:q\s*\d*|question\s*\d*|س\s*\d*|السؤال\s*(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|\d+)?)\s*[:.\)\-]\s*/i, "")
+      .replace(/^(?:\d+|[١-٩]|١٠)[\.\)\-]\s+/, "")
+      .trim();
+
+    const cleanOpts = options.map(o => o.trim()).filter(Boolean);
+
+    // Determine correct option
+    let correctOptionId: number | null = null;
+    if (inlineCorrectIndex !== null && inlineCorrectIndex < cleanOpts.length) {
+      correctOptionId = inlineCorrectIndex;
+    } else if (correctAnswerStr) {
+      correctOptionId = resolveCorrectOption(correctAnswerStr, cleanOpts);
+    }
+
+    // Match topic from in-text metadata
+    let topicId: number | undefined;
+    let topicName: string | undefined;
+    if (topicNameStr && topicsList.length > 0) {
+      const match = topicsList.find(t =>
+        t.name.toLowerCase().includes(topicNameStr.toLowerCase()) ||
+        topicNameStr.toLowerCase().includes(t.name.toLowerCase())
+      );
+      if (match) {
+        topicId = match.message_thread_id;
+        topicName = match.name;
+      } else {
+        topicName = topicNameStr;
+      }
+    }
+
+    // Match collection / category from in-text metadata
+    let collectionId: string | undefined;
+    let collectionName: string | undefined;
+    let collectionIds: string[] | undefined;
+    if (categoryStr && collectionsList.length > 0) {
+      const match = collectionsList.find(c =>
+        c.name.toLowerCase().includes(categoryStr.toLowerCase()) ||
+        categoryStr.toLowerCase().includes(c.name.toLowerCase())
+      );
+      if (match) {
+        collectionId = match.id;
+        collectionName = `${match.emoji} ${match.name}`;
+        collectionIds = [match.id];
+      } else {
+        collectionName = categoryStr;
+      }
+    }
 
     if (question || cleanOpts.length > 0) {
-      const partial = {
+      const partial: Partial<QuizPreview> = {
         question,
         options: cleanOpts,
         correctOptionId,
         explanation: explanationStr || undefined,
         type: correctOptionId !== null ? ("quiz" as const) : ("poll" as const),
+        topicId,
+        topicName,
+        collectionId,
+        collectionName,
+        collectionIds,
+        tags: tagsList.length > 0 ? tagsList : undefined,
+        isAnonymous: true,
       };
-      items.push({ id: uid(), ...partial, errors: validate(partial) });
+      items.push({
+        id: uid(),
+        question,
+        options: cleanOpts,
+        correctOptionId,
+        explanation: explanationStr || undefined,
+        type: correctOptionId !== null ? "quiz" : "poll",
+        topicId,
+        topicName,
+        collectionId,
+        collectionName,
+        collectionIds,
+        tags: tagsList.length > 0 ? tagsList : undefined,
+        isAnonymous: true,
+        errors: validate(partial),
+      });
     }
   }
+
   return items;
 }
 
@@ -282,7 +535,15 @@ export default function BulkPage() {
   const [result, setResult] = useState<{ ok: boolean; processed?: number; errors?: string[] } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "info"; msg: string } | null>(null);
-  const [showErrorsOnly, setShowErrorsOnly] = useState(false);
+
+  // Template states
+  const [activeTemplateTab, setActiveTemplateTab] = useState<string>("ar-standard");
+  const [showTemplates, setShowTemplates] = useState<boolean>(true);
+  const [templateCopied, setTemplateCopied] = useState<boolean>(false);
+
+  // Queue search & filter states
+  const [queueSearch, setQueueSearch] = useState<string>("");
+  const [queueFilter, setQueueFilter] = useState<"all" | "valid" | "errors" | "quiz" | "poll">("all");
 
   // Global settings
   const [globalTopicId, setGlobalTopicId] = useState<number | "">("");
@@ -306,6 +567,18 @@ export default function BulkPage() {
     setTimeout(() => setNotification(null), 3000);
   };
 
+  const handleCopyTemplate = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setTemplateCopied(true);
+    notify("success", "📋 تم نسخ الاصطمبة بنجاح! يمكنك لصقها وتعديل أسئلتك.");
+    setTimeout(() => setTemplateCopied(false), 2500);
+  };
+
+  const handleLoadSample = (sample: string) => {
+    setRawText(sample);
+    notify("info", "🧪 تم وضع النموذج في صندوق الإدخال لتجربته.");
+  };
+
   const addToQueue = (items: QuizPreview[]) => {
     if (items.length === 0) return;
     setQueue(prev => [...prev, ...items]);
@@ -313,11 +586,189 @@ export default function BulkPage() {
   };
 
   const handleExtract = () => {
-    const items = parseSmartText(rawText);
-    if (items.length === 0) { notify("info", "No quizzes found — check your format"); return; }
-    addToQueue(items);
+    const items = parseSmartText(rawText, topics, collections);
+    if (items.length === 0) {
+      notify("info", "لم يتم العثور على أي أسئلة — يرجى التأكد من التنسيق أو استخدام إحدى الاصطمبات بالأعلى");
+      return;
+    }
+    // Fallback to global topic/collection if question didn't specify one
+    const enriched = items.map(item => ({
+      ...item,
+      topicId: item.topicId ?? (globalTopicId === "" ? undefined : (globalTopicId as number)),
+      topicName: item.topicName ?? (globalTopicName || undefined),
+      collectionId: item.collectionId ?? (globalCollectionId || undefined),
+      collectionName: item.collectionName ?? (globalCollectionName || undefined),
+      collectionIds: item.collectionIds ?? (globalCollectionId ? [globalCollectionId] : undefined),
+    }));
+    addToQueue(enriched);
     setRawText("");
   };
+
+  const shuffleQueue = () => {
+    if (queue.length < 2) return;
+    setQueue(prev => {
+      const copy = [...prev];
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy;
+    });
+    notify("success", "🔀 تم خلط ترتيب الأسئلة في القائمة عشوائياً!");
+  };
+
+  const shuffleOptionsAll = () => {
+    if (queue.length === 0) return;
+    setQueue(prev => prev.map(item => {
+      if (item.options.length < 2) return item;
+
+      const pairs = item.options.map((opt, idx) => ({
+        opt,
+        isCorrect: item.correctOptionId === idx,
+      }));
+
+      for (let i = pairs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
+      }
+
+      const newOptions = pairs.map(p => p.opt);
+      const newCorrectIndex = pairs.findIndex(p => p.isCorrect);
+
+      const updated: QuizPreview = {
+        ...item,
+        options: newOptions,
+        correctOptionId: item.type === "quiz" ? (newCorrectIndex !== -1 ? newCorrectIndex : 0) : null,
+      };
+      return { ...updated, errors: validate(updated) };
+    }));
+    notify("success", "🎲 تم خلط خيارات جميع الأسئلة بنجاح مع الحفاظ التام على الإجابات الصحيحة!");
+  };
+
+  const autoFixAll = () => {
+    if (queue.length === 0) return;
+    setQueue(prev => prev.map(item => {
+      // 1. Truncate question length
+      let q = (item.question || "").trim();
+      if (q.length > 300) q = q.slice(0, 297) + "...";
+
+      // 2. Clean & deduplicate options
+      const rawOpts = (item.options || []).map(o => o.trim().slice(0, 100)).filter(Boolean);
+      const uniqueOpts: string[] = [];
+      const seen = new Set<string>();
+      const correctStr = (item.correctOptionId !== null && item.correctOptionId !== undefined && item.options[item.correctOptionId])
+        ? item.options[item.correctOptionId].trim().slice(0, 100)
+        : null;
+
+      for (const opt of rawOpts) {
+        const lower = opt.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          uniqueOpts.push(opt);
+        }
+      }
+
+      if (uniqueOpts.length === 0) {
+        uniqueOpts.push("خيار 1", "خيار 2");
+      } else if (uniqueOpts.length === 1) {
+        uniqueOpts.push("خيار بديل");
+      }
+
+      const finalOpts = uniqueOpts.slice(0, 10);
+
+      // 3. Fix correctOptionId
+      let nextCorrect = item.correctOptionId;
+      if (item.type === "quiz") {
+        if (correctStr) {
+          const found = finalOpts.findIndex(o => o.toLowerCase() === correctStr.toLowerCase());
+          nextCorrect = found !== -1 ? found : 0;
+        } else if (nextCorrect === null || nextCorrect === undefined || nextCorrect < 0 || nextCorrect >= finalOpts.length) {
+          nextCorrect = 0;
+        }
+      } else {
+        nextCorrect = null;
+      }
+
+      // 4. Truncate explanation
+      let expl = item.explanation?.trim();
+      if (expl && expl.length > 200) {
+        expl = expl.slice(0, 197) + "...";
+      }
+
+      const fixed: QuizPreview = {
+        ...item,
+        question: q || "سؤال بدون عنوان",
+        options: finalOpts,
+        correctOptionId: nextCorrect,
+        explanation: expl || undefined,
+      };
+      return { ...fixed, errors: validate(fixed) };
+    }));
+    notify("success", "✨ تم الفحص والإصلاح التلقائي لكافة الأسئلة والخيارات بنجاح!");
+  };
+
+  const applyPreset = (preset: "exam" | "poll" | "speed") => {
+    if (queue.length === 0) return;
+    setQueue(prev => prev.map(p => {
+      let updated: QuizPreview;
+      if (preset === "exam") {
+        updated = {
+          ...p,
+          type: "quiz",
+          correctOptionId: p.correctOptionId ?? 0,
+          openPeriod: 60,
+          isAnonymous: true,
+          allowsMultiple: false,
+        };
+      } else if (preset === "speed") {
+        updated = {
+          ...p,
+          type: "quiz",
+          correctOptionId: p.correctOptionId ?? 0,
+          openPeriod: 30,
+          isAnonymous: true,
+          allowsMultiple: false,
+        };
+      } else {
+        updated = {
+          ...p,
+          type: "poll",
+          correctOptionId: null,
+          openPeriod: undefined,
+          allowsMultiple: true,
+        };
+      }
+      return { ...updated, errors: validate(updated) };
+    }));
+    notify("success", `🎯 تم تطبيق وضع ${preset === "exam" ? "الامتحان (60 ثانية)" : preset === "speed" ? "تحدي السرعة (30 ثانية)" : "الاستطلاع التفاعلي"} بنجاح!`);
+  };
+
+  const filteredQueue = useMemo(() => {
+    return queue.filter(item => {
+      if (queueFilter === "valid") {
+        if (item.errors && item.errors.length > 0) return false;
+      } else if (queueFilter === "errors") {
+        if (!item.errors || item.errors.length === 0) return false;
+      } else if (queueFilter === "quiz") {
+        if (item.type !== "quiz") return false;
+      } else if (queueFilter === "poll") {
+        if (item.type !== "poll") return false;
+      }
+
+      if (queueSearch.trim()) {
+        const q = queueSearch.trim().toLowerCase();
+        const inQuestion = item.question?.toLowerCase().includes(q);
+        const inOptions = item.options?.some(o => o.toLowerCase().includes(q));
+        const inExpl = item.explanation?.toLowerCase().includes(q);
+        const inTopic = item.topicName?.toLowerCase().includes(q);
+        const inTags = item.tags?.some(t => t.toLowerCase().includes(q));
+        if (!inQuestion && !inOptions && !inExpl && !inTopic && !inTags) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [queue, queueFilter, queueSearch]);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -474,18 +925,125 @@ export default function BulkPage() {
 
           {mode === "smart" && (
             <div>
+              {/* Ready-to-copy Templates Drawer */}
+              <div style={{
+                marginBottom: "var(--space-4)",
+                background: "var(--clr-bg-elevated)",
+                border: "1px solid var(--clr-border)",
+                borderRadius: "var(--radius-lg)",
+                overflow: "hidden",
+              }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 14px",
+                    background: "rgba(255,255,255,0.02)",
+                    borderBottom: showTemplates ? "1px solid var(--clr-border)" : "none",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setShowTemplates(!showTemplates)}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: "1.1rem" }}>📋</span>
+                    <span style={{ fontWeight: 600, fontSize: "0.88rem" }}>اصطمبات ونماذج الأسئلة الجاهزة للنسخ (Templates)</span>
+                    <span className="badge badge-brand" style={{ fontSize: "0.7rem", padding: "1px 6px" }}>جاهز للنسخ</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.75rem", padding: "2px 8px" }}
+                    onClick={(e) => { e.stopPropagation(); setShowTemplates(!showTemplates); }}
+                  >
+                    {showTemplates ? "إخفاء ▲" : "عرض النماذج ▼"}
+                  </button>
+                </div>
+
+                {showTemplates && (
+                  <div style={{ padding: "14px" }}>
+                    {/* Template tabs */}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                      {TEMPLATES.map(t => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={`btn btn-sm ${activeTemplateTab === t.id ? "btn-primary" : "btn-ghost"}`}
+                          style={{ fontSize: "0.78rem", padding: "4px 10px", borderRadius: "var(--radius-md)" }}
+                          onClick={() => setActiveTemplateTab(t.id)}
+                        >
+                          {t.title}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Active template content */}
+                    {(() => {
+                      const curTemplate = TEMPLATES.find(t => t.id === activeTemplateTab) || TEMPLATES[0];
+                      return (
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span className="badge badge-accent" style={{ fontSize: "0.72rem" }}>{curTemplate.badge}</span>
+                              <span style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>{curTemplate.description}</span>
+                            </div>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: "0.75rem", padding: "3px 10px" }}
+                                onClick={() => handleLoadSample(curTemplate.sample)}
+                                title="وضع هذا النموذج مباشرة في صندوق الإدخال لتجربته فوراً"
+                              >
+                                🧪 تجربة فورية بالصندوق
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                style={{ fontSize: "0.75rem", padding: "3px 12px" }}
+                                onClick={() => handleCopyTemplate(curTemplate.sample)}
+                              >
+                                {templateCopied ? "✓ تم النسخ!" : "📋 نسخ الاصطمبة"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <pre style={{
+                            margin: 0,
+                            padding: "12px",
+                            background: "var(--clr-bg-surface)",
+                            borderRadius: "var(--radius-md)",
+                            border: "1px solid var(--clr-border)",
+                            fontSize: "0.78rem",
+                            lineHeight: 1.5,
+                            maxHeight: 160,
+                            overflowY: "auto",
+                            fontFamily: "monospace",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            color: "var(--clr-text-primary)",
+                          }}>
+                            {curTemplate.sample}
+                          </pre>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
               <p style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)", marginBottom: "var(--space-3)" }}>
-                Supports: numbered lists, A/B/C/D or أ/ب/ج/د, Answer: X, Explanation: Y. Each question separated by blank line.
+                التعرف الذكي يدعم: الترقيم (1. أو س1: أو السؤال الأول)، الخيارات (أ/ب/ج/د أو A/B/C/D أو •)، علامة صح المباشرة (صح) أو ✓، سطر الإجابة، الشرح، التوبيك، التصنيف، والوسوم.
               </p>
               <textarea
                 className="input"
                 style={{ minHeight: 180, fontFamily: "monospace", fontSize: "0.85rem", resize: "vertical" }}
-                placeholder={"1. What is the capital of France?\nA. Berlin\nB. Paris\nC. Rome\nAnswer: B\nExplanation: Paris is the capital.\n\n2. Next question..."}
+                placeholder={"الموضوع: تكنولوجيا\nالتصنيف: اختبارات تقنية\n\nس1: ما هي عاصمة جمهورية مصر العربية؟\nأ. الإسكندرية\nب. القاهرة (صح)\nج. الجيزة\nد. أسوان\nالشرح: القاهرة هي العاصمة الرسمية."}
                 value={rawText}
                 onChange={e => setRawText(e.target.value)}
               />
               <button className="btn btn-secondary" style={{ marginTop: "var(--space-3)", width: "100%" }} onClick={handleExtract}>
-                ➕ Extract & Add to Queue
+                ➕ استخراج الأسئلة وإضافتها لقائمة الانتظار (Extract & Queue)
               </button>
             </div>
           )}
@@ -585,28 +1143,156 @@ export default function BulkPage() {
 
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {hasErrors && (
-                  <>
-                    <button
-                      className={`btn btn-sm ${showErrorsOnly ? "btn-secondary" : "btn-ghost"}`}
-                      onClick={() => setShowErrorsOnly(!showErrorsOnly)}
-                      style={{ fontSize: "0.8rem" }}
-                    >
-                      {showErrorsOnly ? "👁 Show All" : "⚠ Show Errors Only"}
-                    </button>
-                    <button
-                      className="btn btn-sm btn-ghost"
-                      onClick={removeInvalid}
-                      style={{ color: "var(--clr-danger)", fontSize: "0.8rem" }}
-                    >
-                      🗑 Remove Invalid
-                    </button>
-                  </>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    onClick={removeInvalid}
+                    style={{ color: "var(--clr-danger)", fontSize: "0.8rem" }}
+                  >
+                    🗑 حذف غير الصالح ({queue.length - validCount})
+                  </button>
                 )}
                 {uploading && (
                   <span style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
                     ⏳ ETA ~{queue.length}s
                   </span>
                 )}
+              </div>
+            </div>
+
+            {/* Queue Toolbar: Power Tools, Presets, Search & Filter pills */}
+            <div style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              padding: "12px",
+              marginBottom: "var(--space-4)",
+              background: "var(--clr-bg-surface)",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--clr-border)",
+            }}>
+              {/* Power Actions & Presets */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)" }}>أدوات متقدمة:</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.76rem", padding: "3px 8px" }}
+                    onClick={shuffleQueue}
+                    title="خلط ترتيب ظهور الأسئلة في القائمة"
+                  >
+                    🔀 خلط الأسئلة
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.76rem", padding: "3px 8px" }}
+                    onClick={shuffleOptionsAll}
+                    title="خلط خيارات كل سؤال عشوائياً مع الحفاظ التام على الإجابة الصحيحة"
+                  >
+                    🎲 خلط الخيارات (منع الغش)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.76rem", padding: "3px 8px", color: "var(--clr-brand)" }}
+                    onClick={autoFixAll}
+                    title="إصلاح تلقائي لحدود الحروف والخيارات المكررة وضبط الإجابات الصحيحة"
+                  >
+                    ✨ إصلاح ذكي للجميع
+                  </button>
+                </div>
+
+                {/* Presets */}
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)" }}>أوضاع سريعة:</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.72rem", padding: "2px 6px" }}
+                    onClick={() => applyPreset("exam")}
+                    title="وضع الامتحان: 60 ثانية للحل + مجهول الهوية"
+                  >
+                    ⏱️ امتحان (60ث)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.72rem", padding: "2px 6px" }}
+                    onClick={() => applyPreset("speed")}
+                    title="تحدي السرعة: 30 ثانية لكل سؤال"
+                  >
+                    ⚡ سرعة (30ث)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.72rem", padding: "2px 6px" }}
+                    onClick={() => applyPreset("poll")}
+                    title="تحويل جميع الأسئلة إلى استطلاعات رأي متعددة الخيارات"
+                  >
+                    📊 استطلاع
+                  </button>
+                </div>
+              </div>
+
+              {/* Search & Filter pills */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, paddingTop: 8, borderTop: "1px solid var(--clr-border)" }}>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${queueFilter === "all" ? "btn-primary" : "btn-ghost"}`}
+                    style={{ fontSize: "0.74rem", padding: "2px 8px", height: 26 }}
+                    onClick={() => setQueueFilter("all")}
+                  >
+                    الكل ({queue.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${queueFilter === "valid" ? "btn-primary" : "btn-ghost"}`}
+                    style={{ fontSize: "0.74rem", padding: "2px 8px", height: 26 }}
+                    onClick={() => setQueueFilter("valid")}
+                  >
+                    ✓ الصالحة ({validCount})
+                  </button>
+                  {hasErrors && (
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${queueFilter === "errors" ? "btn-secondary" : "btn-ghost"}`}
+                      style={{ fontSize: "0.74rem", padding: "2px 8px", height: 26, color: queueFilter === "errors" ? undefined : "var(--clr-danger)" }}
+                      onClick={() => setQueueFilter("errors")}
+                    >
+                      ⚠ بها أخطاء ({queue.length - validCount})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${queueFilter === "quiz" ? "btn-primary" : "btn-ghost"}`}
+                    style={{ fontSize: "0.74rem", padding: "2px 8px", height: 26 }}
+                    onClick={() => setQueueFilter("quiz")}
+                  >
+                    🎯 كويز ({queue.filter(q => q.type === "quiz").length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${queueFilter === "poll" ? "btn-primary" : "btn-ghost"}`}
+                    style={{ fontSize: "0.74rem", padding: "2px 8px", height: 26 }}
+                    onClick={() => setQueueFilter("poll")}
+                  >
+                    📊 استطلاع ({queue.filter(q => q.type === "poll").length})
+                  </button>
+                </div>
+
+                <div style={{ minWidth: 200, flex: "1 1 200px", maxWidth: 300 }}>
+                  <input
+                    type="text"
+                    className="input"
+                    style={{ height: 28, fontSize: "0.76rem", padding: "2px 10px" }}
+                    placeholder="🔍 تصفية وبحث في الأسئلة والخيارات..."
+                    value={queueSearch}
+                    onChange={e => setQueueSearch(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
 
@@ -618,16 +1304,21 @@ export default function BulkPage() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", maxHeight: 580, overflowY: "auto", paddingRight: 4 }}>
-              {(showErrorsOnly ? queue.filter(p => p.errors && p.errors.length > 0) : queue).map((p, idx) => {
-                const isEditing = editingId === p.id;
-                const hasErr = p.errors && p.errors.length > 0;
-                const matchedCol = collections.find(c => c.id === p.collectionId);
+              {filteredQueue.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "var(--space-6)", color: "var(--clr-text-muted)", fontSize: "0.85rem" }}>
+                  🔍 لا توجد أسئلة مطابقة للبحث أو الفلتر المحدد.
+                </div>
+              ) : (
+                filteredQueue.map((p, idx) => {
+                  const isEditing = editingId === p.id;
+                  const hasErr = p.errors && p.errors.length > 0;
+                  const matchedCol = collections.find(c => c.id === p.collectionId);
 
-                return (
-                  <div key={p.id} style={{ padding: "var(--space-4)", background: "var(--clr-bg-elevated)", border: `1px solid ${hasErr ? "var(--clr-danger)" : "var(--clr-border)"}`, borderRadius: "var(--radius-md)" }}>
-                    {/* Row header */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hasErr ? 8 : 12, gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  return (
+                    <div key={p.id} style={{ padding: "var(--space-4)", background: "var(--clr-bg-elevated)", border: `1px solid ${hasErr ? "var(--clr-danger)" : "var(--clr-border)"}`, borderRadius: "var(--radius-md)" }}>
+                      {/* Row header */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hasErr ? 8 : 12, gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <span className={`badge ${p.type === "quiz" ? "badge-brand" : "badge-accent"}`}>{p.type.toUpperCase()}</span>
                         <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>#{idx + 1}</span>
                         {hasErr && <span className="badge" style={{ background: "var(--clr-danger-muted)", color: "var(--clr-danger)" }}>⚠ Fix needed</span>}
@@ -917,7 +1608,7 @@ export default function BulkPage() {
                     )}
                   </div>
                 );
-              })}
+              }))}
             </div>
 
             {/* Bottom send bar */}
