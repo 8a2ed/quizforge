@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 
 interface Template {
   id: string; question: string; options: string[];
@@ -163,8 +164,12 @@ export default function LibraryPage() {
 
       const t = toSend[i];
       try {
-        const qTopicId = perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : sendTopicId;
-        const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name;
+        const qTopicId = perQuizTopic[t.id] !== undefined && perQuizTopic[t.id] !== ""
+          ? perQuizTopic[t.id]
+          : t.topicId !== undefined && t.topicId !== null
+          ? t.topicId
+          : sendTopicId;
+        const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name || (qTopicId === t.topicId ? (t.topicName || undefined) : undefined);
         
         const payload = {
           question: t.question,
@@ -180,6 +185,7 @@ export default function LibraryPage() {
           tags: t.tags || [],
           topicId: qTopicId || undefined,
           topicName: qTopicName || undefined,
+          collectionIds: t.collectionIds || [],
         };
 
         let res = await fetch(`/api/groups/${groupId}/quiz/send`, {
@@ -262,6 +268,9 @@ export default function LibraryPage() {
           allowRevoting: t.allowRevoting,
           openPeriod: t.openPeriod,
           tags: t.tags || [],
+          topicId: t.topicId,
+          topicName: t.topicName,
+          collectionIds: t.collectionIds || [],
         }),
       });
       const data = await res.json();
@@ -329,6 +338,8 @@ export default function LibraryPage() {
       options: [...t.options],
       tags: t.tags ? [...t.tags] : [],
       collectionIds: t.collectionIds ? [...t.collectionIds] : [],
+      topicId: t.topicId,
+      topicName: t.topicName,
     });
   };
   const cancelEdit = () => setEditingId(null);
@@ -394,6 +405,9 @@ export default function LibraryPage() {
       allowsMultiple: editDraft.type === "POLL" ? Boolean(editDraft.allowsMultiple) : false,
       allowAddingOptions: editDraft.type === "POLL" ? Boolean(editDraft.allowAddingOptions) : false,
       allowRevoting: editDraft.type === "POLL" ? Boolean(editDraft.allowRevoting) : false,
+      topicId: editDraft.topicId !== undefined ? editDraft.topicId : null,
+      topicName: editDraft.topicName || null,
+      collectionIds: editDraft.collectionIds || [],
     };
 
     try {
@@ -559,7 +573,23 @@ export default function LibraryPage() {
       {/* Header */}
       <div className="section-header animate-fade-up">
         <div>
-          <h1>Question Library</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <h1 style={{ margin: 0 }}>Question Library</h1>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Link href={`/dashboard/${groupId}/bulk`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📥 Bulk Import
+              </Link>
+              <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                ➕ New Quiz
+              </Link>
+              <Link href={`/dashboard/${groupId}/topics`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                🏷️ Topics
+              </Link>
+              <Link href={`/dashboard/${groupId}/analytics`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📊 Analytics
+              </Link>
+            </div>
+          </div>
           <p style={{ marginTop: 4 }}>
             {templates.length} template{templates.length !== 1 ? "s" : ""}
             {sentIds.size > 0 && <span style={{ color: "var(--clr-success)", marginLeft: 10 }}>· {sentIds.size} sent this session</span>}
@@ -785,6 +815,18 @@ export default function LibraryPage() {
                     <span className={`badge ${t.type === "QUIZ" ? "badge-brand" : "badge-accent"}`} style={{ fontSize: "0.7rem" }}>{t.type}</span>
                     <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>#{idx + 1}</span>
                     {isSent && <span className="badge" style={{ background: "var(--clr-success-muted)", color: "var(--clr-success)", fontSize: "0.7rem" }}>✓ Sent</span>}
+                    {t.topicName && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>📍 {t.topicName}</span>}
+                    {t.collectionIds?.map(cid => {
+                      const col = collections.find(c => c.id === cid);
+                      if (!col) return null;
+                      return (
+                        <span key={cid} className="badge" style={{ fontSize: "0.68rem", background: col.color + "22", color: col.color, border: `1px solid ${col.color}44`, cursor: "pointer" }}
+                          onClick={e => { e.stopPropagation(); setActiveCollection(activeCollection === cid ? null : cid); }}
+                          title={`Filter by ${col.name}`}>
+                          {col.emoji} {col.name}
+                        </span>
+                      );
+                    })}
                     {t.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.68rem", cursor: "pointer" }} onClick={e => { e.stopPropagation(); setTagFilter(tag); }}>#{tag}</span>)}
                   </div>
                   <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
@@ -793,7 +835,7 @@ export default function LibraryPage() {
                         <button className="btn btn-ghost btn-sm" title="Edit" style={{ fontSize: "0.78rem" }} onClick={() => startEdit(t)}>✏️</button>
                         <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
                         <a className="btn btn-ghost btn-sm" title="Open in Quiz Creator"
-                          href={`/dashboard/${groupId}/quiz/new?draft=${encodeURIComponent(JSON.stringify({ question: t.question, options: t.options, type: t.type === "QUIZ" ? "quiz" : "poll", correctOptionId: t.correctOptionId, explanation: t.explanation, isAnonymous: t.isAnonymous, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags }))}`}
+                          href={`/dashboard/${groupId}/quiz/new?draft=${encodeURIComponent(JSON.stringify({ question: t.question, options: t.options, type: t.type === "QUIZ" ? "quiz" : "poll", correctOptionId: t.correctOptionId, explanation: t.explanation, isAnonymous: t.isAnonymous, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags, topicId: t.topicId, topicName: t.topicName, collectionIds: t.collectionIds }))}`}
                           style={{ fontSize: "0.78rem", textDecoration: "none" }}>🔗</a>
                         <button className="btn btn-ghost btn-sm" title="Send now" style={{ color: "var(--clr-success)", fontSize: "0.78rem" }}
                           onClick={() => handleSendOne(t)} disabled={!!progress?.active}>🚀</button>
@@ -973,6 +1015,81 @@ export default function LibraryPage() {
                       />
                     </div>
 
+                    {/* Forum Topic */}
+                    <div>
+                      <label className="input-label" style={{ marginBottom: 3 }}>Forum Topic</label>
+                      <select
+                        className="select"
+                        value={editDraft.topicId !== undefined && editDraft.topicId !== null ? editDraft.topicId : ""}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const found = topics.find(tp => tp.message_thread_id === Number(val));
+                          setEditDraft(d => ({
+                            ...d,
+                            topicId: val ? Number(val) : null,
+                            topicName: found?.name || null,
+                          }));
+                        }}
+                      >
+                        <option value="">📌 General (Main chat)</option>
+                        {topics.map(tp => (
+                          <option key={tp.message_thread_id} value={tp.message_thread_id}>
+                            📂 {tp.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Categories / Collections */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <label className="input-label" style={{ margin: 0 }}>Categories / Collections</label>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: "0.72rem", padding: "1px 6px" }}
+                          onClick={() => { setShowNewColl(true); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); }}
+                        >
+                          + New Collection
+                        </button>
+                      </div>
+                      {collections.length === 0 ? (
+                        <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>No collections created yet.</div>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {collections.map(c => {
+                            const isAssigned = (editDraft.collectionIds || []).includes(c.id);
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  setEditDraft(d => {
+                                    const cur = d.collectionIds || [];
+                                    const next = isAssigned ? cur.filter(id => id !== c.id) : [...cur, c.id];
+                                    return { ...d, collectionIds: next };
+                                  });
+                                }}
+                                className="btn btn-sm"
+                                style={{
+                                  fontSize: "0.74rem",
+                                  padding: "3px 8px",
+                                  height: "auto",
+                                  borderRadius: "var(--radius-sm)",
+                                  background: isAssigned ? c.color + "33" : "var(--clr-bg-surface)",
+                                  border: `1px solid ${isAssigned ? c.color : "var(--clr-border)"}`,
+                                  color: isAssigned ? c.color : "var(--clr-text-muted)",
+                                  fontWeight: isAssigned ? 600 : 400,
+                                }}
+                              >
+                                {isAssigned ? "✓ " : ""}{c.emoji} {c.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
                     {/* Grid: Type + openPeriod */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div>
@@ -1097,11 +1214,11 @@ export default function LibraryPage() {
                       <select
                         className="select"
                         style={{ fontSize: "0.75rem", padding: "3px 8px", height: 28, width: "100%", maxWidth: 240 }}
-                        value={perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : sendTopicId}
+                        value={perQuizTopic[t.id] !== undefined ? perQuizTopic[t.id] : (t.topicId !== undefined && t.topicId !== null ? t.topicId : sendTopicId)}
                         onChange={e => setPerQuizTopic(prev => ({ ...prev, [t.id]: e.target.value ? Number(e.target.value) : "" }))}
                       >
-                        <option value="">📌 General (default)</option>
-                        {topics.map(tp => <option key={tp.message_thread_id} value={tp.message_thread_id}>📂 {tp.name}</option>)}
+                        <option value="">📌 General {t.topicId === null || t.topicId === undefined ? "(default)" : ""}</option>
+                        {topics.map(tp => <option key={tp.message_thread_id} value={tp.message_thread_id}>📂 {tp.name} {t.topicId === tp.message_thread_id ? "(saved)" : ""}</option>)}
                       </select>
                     </div>
                     <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", fontSize: "0.72rem", color: "var(--clr-text-muted)", alignItems: "center" }}>

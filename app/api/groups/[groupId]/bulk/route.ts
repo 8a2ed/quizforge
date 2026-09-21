@@ -46,6 +46,12 @@ export async function POST(
     const createdQuizzes: { id: string; saved?: boolean; scheduled?: boolean }[] = [];
     const errors: string[] = [];
 
+    const globalCollectionIds: string[] = Array.isArray(body.collectionIds)
+      ? body.collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+      : body.collectionId && typeof body.collectionId === "string" && body.collectionId.trim().length > 0
+      ? [body.collectionId.trim()]
+      : [];
+
     // Process each quiz
     for (let i = 0; i < quizzes.length; i++) {
       const q = quizzes[i];
@@ -66,6 +72,15 @@ export async function POST(
         const sanitizedTags: string[] = Array.isArray(q.tags)
           ? q.tags.map((t: unknown) => String(t).trim().toLowerCase()).filter((t: string) => t.length > 0).slice(0, 5)
           : [];
+
+        const itemCollectionIds: string[] = Array.isArray(q.collectionIds) && q.collectionIds.length > 0
+          ? q.collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+          : q.collectionId && typeof q.collectionId === "string" && q.collectionId.trim().length > 0
+          ? [q.collectionId.trim()]
+          : globalCollectionIds;
+
+        const validatedTopicId = q.topicId !== undefined && q.topicId !== null && q.topicId !== "" ? Number(q.topicId) : null;
+        const validatedTopicName = q.topicName ? String(q.topicName).trim() : null;
 
         // Validations
         if (!question) {
@@ -139,6 +154,8 @@ export async function POST(
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
                 openPeriod: q.openPeriod ? Number(q.openPeriod) : null,
+                topicId: validatedTopicId,
+                topicName: validatedTopicName,
                 allowAddingOptions: type === "POLL" ? Boolean(q.allowAddingOptions) : false,
                 allowRevoting: type === "POLL" ? Boolean(q.allowRevoting) : false,
                 tags: sanitizedTags,
@@ -147,6 +164,19 @@ export async function POST(
               },
             })
           );
+
+          if (itemCollectionIds.length > 0) {
+            await withRetry(() =>
+              prisma.collectionQuiz.createMany({
+                data: itemCollectionIds.map((cid: string) => ({
+                  collectionId: cid,
+                  quizId: quiz.id,
+                })),
+                skipDuplicates: true,
+              })
+            );
+          }
+
           createdQuizzes.push({ id: quiz.id, saved: true });
           continue;
         }
@@ -164,8 +194,8 @@ export async function POST(
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
                 openPeriod: q.openPeriod ? Number(q.openPeriod) : null,
-                topicId: q.topicId ? Number(q.topicId) : null,
-                topicName: q.topicName || null,
+                topicId: validatedTopicId,
+                topicName: validatedTopicName,
                 allowAddingOptions: type === "POLL" ? Boolean(q.allowAddingOptions) : false,
                 allowRevoting: type === "POLL" ? Boolean(q.allowRevoting) : false,
                 tags: sanitizedTags,
@@ -176,6 +206,19 @@ export async function POST(
               },
             })
           );
+
+          if (itemCollectionIds.length > 0) {
+            await withRetry(() =>
+              prisma.collectionQuiz.createMany({
+                data: itemCollectionIds.map((cid: string) => ({
+                  collectionId: cid,
+                  quizId: quiz.id,
+                })),
+                skipDuplicates: true,
+              })
+            );
+          }
+
           createdQuizzes.push({ id: quiz.id, scheduled: true });
         } else {
           // Compute duration parameters for Telegram: open_period (<=600s) vs close_date (>600s)
@@ -193,7 +236,7 @@ export async function POST(
           // --- Send immediately via Telegram ---
           const message = await telegram.sendPoll({
             chat_id: auth.membership.group.chatId,
-            message_thread_id: q.topicId ? Number(q.topicId) : undefined,
+            message_thread_id: validatedTopicId ? validatedTopicId : undefined,
             question,
             options: options.map((text: string) => ({ text })),
             type: type === "QUIZ" ? "quiz" : "regular",
@@ -220,8 +263,8 @@ export async function POST(
                 isAnonymous,
                 allowsMultiple: type === "POLL" ? Boolean(q.allowsMultiple) : false,
                 openPeriod: q.openPeriod ? Number(q.openPeriod) : null,
-                topicId: q.topicId ? Number(q.topicId) : null,
-                topicName: q.topicName || null,
+                topicId: validatedTopicId,
+                topicName: validatedTopicName,
                 allowAddingOptions: type === "POLL" ? Boolean(q.allowAddingOptions) : false,
                 allowRevoting: type === "POLL" ? Boolean(q.allowRevoting) : false,
                 tags: sanitizedTags,
@@ -233,6 +276,19 @@ export async function POST(
               },
             })
           );
+
+          if (itemCollectionIds.length > 0) {
+            await withRetry(() =>
+              prisma.collectionQuiz.createMany({
+                data: itemCollectionIds.map((cid: string) => ({
+                  collectionId: cid,
+                  quizId: quiz.id,
+                })),
+                skipDuplicates: true,
+              })
+            );
+          }
+
           createdQuizzes.push({ id: quiz.id, scheduled: false });
 
           // 1-second delay between sends to respect Telegram limits while avoiding serverless timeouts

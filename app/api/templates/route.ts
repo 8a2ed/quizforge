@@ -88,7 +88,22 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags, allowAddingOptions, allowRevoting } = body;
+  const {
+    question,
+    options,
+    type,
+    isAnonymous,
+    correctOptionId,
+    explanation,
+    allowsMultiple,
+    openPeriod,
+    tags,
+    allowAddingOptions,
+    allowRevoting,
+    topicId,
+    topicName,
+    collectionIds,
+  } = body;
 
   const cleanQuestion = String(question || "").trim();
   if (!cleanQuestion) {
@@ -158,6 +173,9 @@ export async function POST(req: NextRequest) {
 
   const groupId = await ensureTemplateGroup(user.sub);
 
+  const validatedTopicId = topicId !== undefined && topicId !== null && topicId !== "" ? Number(topicId) : null;
+  const validatedTopicName = topicName ? String(topicName).trim() : null;
+
   const template = await withRetry(() =>
     prisma.quiz.create({
       data: {
@@ -172,17 +190,36 @@ export async function POST(req: NextRequest) {
         allowRevoting: normalizedType === "POLL" ? Boolean(allowRevoting) : false,
         openPeriod: validatedOpenPeriod,
         tags: sanitizedTags,
+        topicId: validatedTopicId,
+        topicName: validatedTopicName,
         groupId,
         sentById: user.sub,
       },
     })
   );
 
+  const savedCollectionIds: string[] = [];
+  if (Array.isArray(collectionIds)) {
+    const validCids = collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0);
+    if (validCids.length > 0) {
+      await withRetry(() =>
+        prisma.collectionQuiz.createMany({
+          data: validCids.map((cid: string) => ({
+            collectionId: cid,
+            quizId: template.id,
+          })),
+          skipDuplicates: true,
+        })
+      );
+      savedCollectionIds.push(...validCids);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     template: {
       ...template,
-      collectionIds: [],
+      collectionIds: savedCollectionIds,
     },
   });
 }

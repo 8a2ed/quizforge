@@ -31,7 +31,22 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await req.json();
-  const { question, options, type, isAnonymous, correctOptionId, explanation, allowsMultiple, openPeriod, tags, allowAddingOptions, allowRevoting } = body;
+  const {
+    question,
+    options,
+    type,
+    isAnonymous,
+    correctOptionId,
+    explanation,
+    allowsMultiple,
+    openPeriod,
+    tags,
+    allowAddingOptions,
+    allowRevoting,
+    topicId,
+    topicName,
+    collectionIds,
+  } = body;
 
   const cleanQuestion = String(question || "").trim();
   if (!cleanQuestion) {
@@ -102,27 +117,56 @@ export async function PATCH(
   const groupId = await getTemplateGroupId(user.sub);
   if (!groupId) return NextResponse.json({ error: "Library not found" }, { status: 404 });
 
+  const validatedTopicId = topicId !== undefined ? (topicId ? Number(topicId) : null) : undefined;
+  const validatedTopicName = topicName !== undefined ? (topicName ? String(topicName).trim() : null) : undefined;
+
+  const updateData: any = {
+    question: cleanQuestion,
+    options: cleanOptions,
+    type: normalizedType,
+    isAnonymous: isAnonymous ?? true,
+    correctOptionId: validatedCorrectOptionId,
+    explanation: validatedExplanation,
+    allowsMultiple: normalizedType === "POLL" ? Boolean(allowsMultiple) : false,
+    allowAddingOptions: normalizedType === "POLL" ? Boolean(allowAddingOptions) : false,
+    allowRevoting: normalizedType === "POLL" ? Boolean(allowRevoting) : false,
+    openPeriod: validatedOpenPeriod,
+    tags: sanitizedTags,
+  };
+
+  if (validatedTopicId !== undefined) updateData.topicId = validatedTopicId;
+  if (validatedTopicName !== undefined) updateData.topicName = validatedTopicName;
+
   const updated = await withRetry(() =>
     prisma.quiz.updateMany({
       where: { id, sentById: user.sub, groupId },
-      data: {
-        question: cleanQuestion,
-        options: cleanOptions,
-        type: normalizedType,
-        isAnonymous: isAnonymous ?? true,
-        correctOptionId: validatedCorrectOptionId,
-        explanation: validatedExplanation,
-        allowsMultiple: normalizedType === "POLL" ? Boolean(allowsMultiple) : false,
-        allowAddingOptions: normalizedType === "POLL" ? Boolean(allowAddingOptions) : false,
-        allowRevoting: normalizedType === "POLL" ? Boolean(allowRevoting) : false,
-        openPeriod: validatedOpenPeriod,
-        tags: sanitizedTags,
-      },
+      data: updateData,
     })
   );
 
   if (updated.count === 0) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
+  }
+
+  // Update collections if collectionIds is provided
+  if (Array.isArray(collectionIds)) {
+    const validCollectionIds = collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0);
+    await withRetry(() =>
+      prisma.collectionQuiz.deleteMany({
+        where: { quizId: id },
+      })
+    );
+    if (validCollectionIds.length > 0) {
+      await withRetry(() =>
+        prisma.collectionQuiz.createMany({
+          data: validCollectionIds.map((cid: string) => ({
+            collectionId: cid,
+            quizId: id,
+          })),
+          skipDuplicates: true,
+        })
+      );
+    }
   }
 
   return NextResponse.json({ ok: true });

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 
 const uid = () => Math.random().toString(36).substr(2, 9);
 
@@ -14,6 +15,9 @@ interface QuizPreview {
   explanation?: string;
   topicId?: number;
   topicName?: string;
+  collectionId?: string;
+  collectionName?: string;
+  collectionIds?: string[];
   isAnonymous?: boolean;
   allowsMultiple?: boolean;
   openPeriod?: number;
@@ -22,6 +26,14 @@ interface QuizPreview {
 }
 
 interface Topic { message_thread_id: number; name: string; icon_color: number; }
+
+interface Collection {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  quizCount?: number;
+}
 
 function validate(p: Partial<QuizPreview>): string[] {
   const e: string[] = [];
@@ -275,14 +287,18 @@ export default function BulkPage() {
   // Global settings
   const [globalTopicId, setGlobalTopicId] = useState<number | "">("");
   const [globalTopicName, setGlobalTopicName] = useState("");
+  const [globalCollectionId, setGlobalCollectionId] = useState("");
+  const [globalCollectionName, setGlobalCollectionName] = useState("");
   const [globalAnonymous, setGlobalAnonymous] = useState(true);
   const [globalDuration, setGlobalDuration] = useState(0);
   const [globalAllowMultiple, setGlobalAllowMultiple] = useState(false);
   const [globalTags, setGlobalTags] = useState("");
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
 
   useEffect(() => {
     fetch(`/api/groups/${groupId}/topics`).then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
+    fetch("/api/collections").then(r => r.json()).then(d => setCollections(d.collections || [])).catch(() => {});
   }, [groupId]);
 
   const notify = (type: "success" | "info", msg: string) => {
@@ -329,10 +345,13 @@ export default function BulkPage() {
   const applyGlobal = () => {
     const tags = globalTags.split(",").map(t => t.trim()).filter(Boolean);
     setQueue(prev => prev.map(p => {
-      const updated = {
+      const updated: QuizPreview = {
         ...p,
         topicId: globalTopicId === "" ? undefined : (globalTopicId as number),
         topicName: globalTopicName || undefined,
+        collectionId: globalCollectionId || undefined,
+        collectionName: globalCollectionName || undefined,
+        collectionIds: globalCollectionId ? [globalCollectionId] : undefined,
         isAnonymous: globalAnonymous,
         openPeriod: globalDuration > 0 ? globalDuration : undefined,
         allowsMultiple: p.type === "poll" ? globalAllowMultiple : false,
@@ -340,7 +359,7 @@ export default function BulkPage() {
       };
       return { ...updated, errors: validate(updated) };
     }));
-    notify("success", "Applied to all queued quizzes");
+    notify("success", "Applied global settings to all queued quizzes");
   };
 
   const deleteItem = (id: string) => setQueue(prev => prev.filter(p => p.id !== id));
@@ -362,7 +381,16 @@ export default function BulkPage() {
       const res = await fetch(`/api/groups/${groupId}/bulk`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, quizzes: queue }),
+        body: JSON.stringify({
+          action,
+          collectionId: globalCollectionId || undefined,
+          collectionIds: globalCollectionId ? [globalCollectionId] : undefined,
+          quizzes: queue.map(q => ({
+            ...q,
+            collectionId: q.collectionId || globalCollectionId || undefined,
+            collectionIds: q.collectionIds || (q.collectionId ? [q.collectionId] : (globalCollectionId ? [globalCollectionId] : undefined)),
+          })),
+        }),
       });
       const data = await res.json();
       setResult({ ok: res.ok, processed: data.processed, errors: data.errors || (!res.ok ? [data.error] : undefined) });
@@ -404,8 +432,21 @@ export default function BulkPage() {
 
       <div className="section-header animate-fade-up">
         <div>
-          <h1>Smart Import</h1>
-          <p>Paste, extract, queue and mass-deploy quizzes at scale.</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <h1 style={{ margin: 0 }}>Smart Import</h1>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Link href={`/dashboard/${groupId}/library`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📚 Library
+              </Link>
+              <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                ➕ New Quiz
+              </Link>
+              <Link href={`/dashboard/${groupId}/topics`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                🏷️ Topics
+              </Link>
+            </div>
+          </div>
+          <p style={{ marginTop: 4 }}>Paste, extract, configure topics & categories, and mass-deploy quizzes at scale.</p>
         </div>
         {queue.length > 0 && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -473,19 +514,36 @@ export default function BulkPage() {
         {queue.length > 0 && (
           <div className="card animate-fade-up animate-delay-2">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)", flexWrap: "wrap", gap: 8 }}>
-              <h3 style={{ margin: 0 }}>Global Settings</h3>
+              <div>
+                <h3 style={{ margin: 0 }}>Global Settings</h3>
+                <p style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)", margin: "3px 0 0" }}>Apply topic, category, and options to all questions simultaneously.</p>
+              </div>
               <button className="btn btn-secondary btn-sm" onClick={applyGlobal}>⚡ Apply to All</button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
               <div>
-                <label className="input-label">Topic</label>
+                <label className="input-label">Forum Topic</label>
                 <select className="select" value={globalTopicId} onChange={e => {
                   const id = e.target.value;
                   setGlobalTopicId(id ? Number(id) : "");
                   setGlobalTopicName(topics.find(t => t.message_thread_id === Number(id))?.name || "");
                 }}>
-                  <option value="">General</option>
-                  {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>{t.name}</option>)}
+                  <option value="">📌 General (Main chat)</option>
+                  {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>📂 {t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="input-label">Category / Collection</label>
+                <select className="select" value={globalCollectionId} onChange={e => {
+                  const id = e.target.value;
+                  setGlobalCollectionId(id);
+                  const col = collections.find(c => c.id === id);
+                  setGlobalCollectionName(col ? `${col.emoji} ${col.name}` : "");
+                }}>
+                  <option value="">📂 None (Uncategorized)</option>
+                  {collections.map(c => (
+                    <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -563,6 +621,8 @@ export default function BulkPage() {
               {(showErrorsOnly ? queue.filter(p => p.errors && p.errors.length > 0) : queue).map((p, idx) => {
                 const isEditing = editingId === p.id;
                 const hasErr = p.errors && p.errors.length > 0;
+                const matchedCol = collections.find(c => c.id === p.collectionId);
+
                 return (
                   <div key={p.id} style={{ padding: "var(--space-4)", background: "var(--clr-bg-elevated)", border: `1px solid ${hasErr ? "var(--clr-danger)" : "var(--clr-border)"}`, borderRadius: "var(--radius-md)" }}>
                     {/* Row header */}
@@ -571,10 +631,20 @@ export default function BulkPage() {
                         <span className={`badge ${p.type === "quiz" ? "badge-brand" : "badge-accent"}`}>{p.type.toUpperCase()}</span>
                         <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>#{idx + 1}</span>
                         {hasErr && <span className="badge" style={{ background: "var(--clr-danger-muted)", color: "var(--clr-danger)" }}>⚠ Fix needed</span>}
-                        {p.topicName && <span className="badge badge-muted" style={{ fontSize: "0.72rem" }}>📍 {p.topicName}</span>}
+                        <span className="badge badge-muted" style={{ fontSize: "0.72rem" }}>
+                          {p.topicName ? `📍 ${p.topicName}` : "📌 General"}
+                        </span>
+                        {matchedCol ? (
+                          <span className="badge" style={{ fontSize: "0.72rem", background: matchedCol.color + "22", color: matchedCol.color, border: `1px solid ${matchedCol.color}44` }}>
+                            {matchedCol.emoji} {matchedCol.name}
+                          </span>
+                        ) : p.collectionName ? (
+                          <span className="badge badge-muted" style={{ fontSize: "0.72rem" }}>📁 {p.collectionName}</span>
+                        ) : null}
+                        {p.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.68rem" }}>#{tag}</span>)}
                       </div>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(isEditing ? null : p.id)} style={{ fontSize: "0.8rem" }}>
+                        <button className={`btn btn-sm ${isEditing ? "btn-primary" : "btn-ghost"}`} onClick={() => setEditingId(isEditing ? null : p.id)} style={{ fontSize: "0.8rem" }}>
                           {isEditing ? "✓ Done" : "✏️ Edit"}
                         </button>
                         <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)" }} onClick={() => deleteItem(p.id)}>🗑</button>
@@ -590,30 +660,238 @@ export default function BulkPage() {
 
                     {/* Edit mode */}
                     {isEditing ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <textarea className="input" rows={3} value={p.question} onChange={e => updateItem(p.id, { question: e.target.value })} placeholder="Question text" />
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {p.options.map((opt, oIdx) => (
-                            <div key={oIdx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              <input type="radio" name={`correct-${p.id}`} checked={p.correctOptionId === oIdx}
-                                onChange={() => updateItem(p.id, { correctOptionId: oIdx, type: "quiz" })}
-                                title="Mark as correct" />
-                              <input className="input" value={opt} onChange={e => {
-                                const opts = [...p.options]; opts[oIdx] = e.target.value;
-                                updateItem(p.id, { options: opts });
-                              }} style={{ flex: 1 }} />
-                              {p.options.length > 2 && (
-                                <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 6px" }}
-                                  onClick={() => { const opts = p.options.filter((_, i) => i !== oIdx); updateItem(p.id, { options: opts, correctOptionId: p.correctOptionId === oIdx ? null : p.correctOptionId }); }}>✕</button>
-                              )}
-                            </div>
-                          ))}
-                          {p.options.length < 10 && (
-                            <button className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }}
-                              onClick={() => updateItem(p.id, { options: [...p.options, ""] })}>+ Add Option</button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 6 }}>
+                        {/* Type & Toggles row */}
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderBottom: "1px solid var(--clr-border)", paddingBottom: 8 }}>
+                          <div style={{ display: "flex", gap: 4, background: "var(--clr-bg-surface)", padding: 3, borderRadius: "var(--radius-sm)" }}>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${p.type === "quiz" ? "btn-primary" : "btn-ghost"}`}
+                              style={{ fontSize: "0.75rem", padding: "2px 8px", height: 26 }}
+                              onClick={() => updateItem(p.id, {
+                                type: "quiz",
+                                correctOptionId: p.correctOptionId ?? 0,
+                                allowsMultiple: false,
+                              })}
+                            >
+                              ✅ Quiz Mode
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${p.type === "poll" ? "btn-primary" : "btn-ghost"}`}
+                              style={{ fontSize: "0.75rem", padding: "2px 8px", height: 26 }}
+                              onClick={() => updateItem(p.id, {
+                                type: "poll",
+                                correctOptionId: null,
+                              })}
+                            >
+                              📊 Poll Mode
+                            </button>
+                          </div>
+
+                          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.78rem", cursor: "pointer", marginLeft: "auto" }}>
+                            <input
+                              type="checkbox"
+                              checked={p.isAnonymous ?? true}
+                              onChange={e => updateItem(p.id, { isAnonymous: e.target.checked })}
+                            />
+                            🔒 Anonymous
+                          </label>
+
+                          {p.type === "poll" && (
+                            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.78rem", cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={p.allowsMultiple ?? false}
+                                onChange={e => updateItem(p.id, { allowsMultiple: e.target.checked })}
+                              />
+                              ☑ Multi-answer
+                            </label>
                           )}
                         </div>
-                        <input className="input" value={p.explanation || ""} onChange={e => updateItem(p.id, { explanation: e.target.value })} placeholder="Explanation (optional)" />
+
+                        {/* Question */}
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                            <label className="input-label" style={{ margin: 0 }}>Question</label>
+                            <span style={{ fontSize: "0.72rem", color: (p.question || "").trim().length > 300 ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                              {(p.question || "").trim().length}/300
+                            </span>
+                          </div>
+                          <textarea
+                            className="input"
+                            rows={2}
+                            value={p.question}
+                            onChange={e => updateItem(p.id, { question: e.target.value })}
+                            placeholder="Question text…"
+                            style={{ borderColor: (p.question || "").trim().length > 300 ? "var(--clr-danger)" : undefined }}
+                          />
+                        </div>
+
+                        {/* Options */}
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                            <label className="input-label" style={{ margin: 0 }}>
+                              Options ({p.options.length}/10) {p.type === "quiz" && <span style={{ color: "var(--clr-text-muted)", fontWeight: "normal" }}>— mark radio for correct answer</span>}
+                            </label>
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {p.options.map((opt, oIdx) => (
+                              <div key={oIdx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                {p.type === "quiz" && (
+                                  <input
+                                    type="radio"
+                                    name={`correct-${p.id}`}
+                                    checked={p.correctOptionId === oIdx}
+                                    onChange={() => updateItem(p.id, { correctOptionId: oIdx })}
+                                    title="Mark as correct answer"
+                                  />
+                                )}
+                                <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)", width: 18 }}>
+                                  {String.fromCharCode(65 + oIdx)}.
+                                </span>
+                                <input
+                                  className="input"
+                                  value={opt}
+                                  onChange={e => {
+                                    const opts = [...p.options];
+                                    opts[oIdx] = e.target.value;
+                                    updateItem(p.id, { options: opts });
+                                  }}
+                                  placeholder={`Option ${oIdx + 1}`}
+                                  style={{ flex: 1 }}
+                                />
+                                {p.options.length > 2 && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ color: "var(--clr-danger)", padding: "0 6px" }}
+                                    title="Delete option"
+                                    onClick={() => {
+                                      const opts = p.options.filter((_, i) => i !== oIdx);
+                                      let nextCorrect = p.correctOptionId;
+                                      if (p.correctOptionId === oIdx) nextCorrect = 0;
+                                      else if (p.correctOptionId !== null && p.correctOptionId !== undefined && p.correctOptionId > oIdx) {
+                                        nextCorrect = p.correctOptionId - 1;
+                                      }
+                                      updateItem(p.id, {
+                                        options: opts,
+                                        correctOptionId: p.type === "quiz" ? Math.min(nextCorrect ?? 0, opts.length - 1) : null,
+                                      });
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            {p.options.length < 10 && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ alignSelf: "flex-start", fontSize: "0.8rem" }}
+                                onClick={() => updateItem(p.id, { options: [...p.options, ""] })}
+                              >
+                                + Add Option
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Explanation (quiz mode) */}
+                        {p.type === "quiz" && (
+                          <div>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                              <label className="input-label" style={{ margin: 0 }}>💡 Explanation (optional)</label>
+                              <span style={{ fontSize: "0.72rem", color: (p.explanation || "").trim().length > 200 ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                                {(p.explanation || "").trim().length}/200
+                              </span>
+                            </div>
+                            <input
+                              className="input"
+                              value={p.explanation || ""}
+                              onChange={e => updateItem(p.id, { explanation: e.target.value })}
+                              placeholder="Shown when answer is revealed (max 200 chars)"
+                              style={{ borderColor: (p.explanation || "").trim().length > 200 ? "var(--clr-danger)" : undefined }}
+                            />
+                          </div>
+                        )}
+
+                        {/* Topic & Category row */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label className="input-label">Forum Topic</label>
+                            <select
+                              className="select"
+                              value={p.topicId !== undefined ? p.topicId : ""}
+                              onChange={e => {
+                                const tid = e.target.value;
+                                const found = topics.find(t => t.message_thread_id === Number(tid));
+                                updateItem(p.id, {
+                                  topicId: tid ? Number(tid) : undefined,
+                                  topicName: found?.name,
+                                });
+                              }}
+                            >
+                              <option value="">📌 General</option>
+                              {topics.map(t => (
+                                <option key={t.message_thread_id} value={t.message_thread_id}>
+                                  📂 {t.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="input-label">Category / Collection</label>
+                            <select
+                              className="select"
+                              value={p.collectionId || ""}
+                              onChange={e => {
+                                const cid = e.target.value;
+                                const col = collections.find(c => c.id === cid);
+                                updateItem(p.id, {
+                                  collectionId: cid || undefined,
+                                  collectionName: col ? `${col.emoji} ${col.name}` : undefined,
+                                  collectionIds: cid ? [cid] : [],
+                                });
+                              }}
+                            >
+                              <option value="">📂 None (Uncategorized)</option>
+                              {collections.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.emoji} {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Tags & Duration row */}
+                        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                          <div>
+                            <label className="input-label">Tags (comma-separated)</label>
+                            <input
+                              className="input"
+                              value={(p.tags || []).join(", ")}
+                              onChange={e => {
+                                const tgs = e.target.value.split(",").map(t => t.trim()).filter(Boolean);
+                                updateItem(p.id, { tags: tgs });
+                              }}
+                              placeholder="e.g. math, algebra"
+                            />
+                          </div>
+                          <div>
+                            <label className="input-label">Duration (sec, 0=∞)</label>
+                            <input
+                              type="number"
+                              min={0}
+                              className="input"
+                              value={p.openPeriod ?? 0}
+                              onChange={e => updateItem(p.id, { openPeriod: Number(e.target.value) || undefined })}
+                            />
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <>

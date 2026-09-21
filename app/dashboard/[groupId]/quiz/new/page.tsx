@@ -356,17 +356,14 @@ export default function NewQuizPage() {
           allowRevoting,
           openPeriod: showDuration && openPeriod > 0 ? openPeriod : null,
           tags: tags.length > 0 ? tags : [],
+          topicId: selectedTopic?.message_thread_id,
+          topicName: selectedTopic?.name,
+          collectionIds: saveCollId ? [saveCollId] : [],
         }),
       });
       if (!res.ok) { addToast("error", "Failed to save template"); return; }
       const data = await res.json();
-      // Optionally add to selected collection
-      if (saveCollId && data.template?.id) {
-        await fetch(`/api/collections/${saveCollId}/quizzes`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ quizIds: [data.template.id] }),
-        });
+      if (saveCollId) {
         const col = saveCollections.find(c => c.id === saveCollId);
         addToast("success", `Saved to library${col ? ` & added to "${col.name}"` : ""} ${E.ok}`);
       } else {
@@ -552,7 +549,21 @@ export default function NewQuizPage() {
             )}
           </p>
         </div>
-        <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
+          <Link
+            href={`/dashboard/${groupId}/library`}
+            className="btn btn-ghost btn-sm"
+            style={{ border: "1px solid var(--clr-border)" }}
+          >
+            📚 Library
+          </Link>
+          <Link
+            href={`/dashboard/${groupId}/bulk`}
+            className="btn btn-ghost btn-sm"
+            style={{ border: "1px solid var(--clr-border)" }}
+          >
+            📥 Bulk Import
+          </Link>
           {sentCount > 0 && (
             <Link
               href={`/dashboard/${groupId}/history`}

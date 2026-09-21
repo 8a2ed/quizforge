@@ -50,6 +50,8 @@ export async function POST(
     tags,            // Array of tags
     allowAddingOptions = false,
     allowRevoting = false,
+    collectionIds,
+    collectionId,
   } = body;
 
   // Validations & Human-Error Prevention
@@ -132,6 +134,25 @@ export async function POST(
       data: { ...quizData, scheduledAt: scheduledDate, sentAt: null },
       include: { sentBy: { select: { firstName: true, username: true } } },
     }));
+
+    const targetCids: string[] = Array.isArray(collectionIds)
+      ? collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+      : collectionId && typeof collectionId === "string" && collectionId.trim().length > 0
+      ? [collectionId.trim()]
+      : [];
+
+    if (targetCids.length > 0) {
+      await withRetry(() =>
+        prisma.collectionQuiz.createMany({
+          data: targetCids.map((cid: string) => ({
+            collectionId: cid,
+            quizId: quiz.id,
+          })),
+          skipDuplicates: true,
+        })
+      );
+    }
+
     return NextResponse.json({ ok: true, quiz, scheduled: true });
   }
 
@@ -220,6 +241,24 @@ export async function POST(
     },
     include: { sentBy: { select: { firstName: true, username: true } } },
   }));
+
+  const targetCids: string[] = Array.isArray(collectionIds)
+    ? collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+    : collectionId && typeof collectionId === "string" && collectionId.trim().length > 0
+    ? [collectionId.trim()]
+    : [];
+
+  if (targetCids.length > 0) {
+    await withRetry(() =>
+      prisma.collectionQuiz.createMany({
+        data: targetCids.map((cid: string) => ({
+          collectionId: cid,
+          quizId: quiz.id,
+        })),
+        skipDuplicates: true,
+      })
+    );
+  }
 
   return NextResponse.json({ ok: true, quiz, scheduled: false });
 }
