@@ -518,6 +518,35 @@ export async function POST(req: NextRequest) {
         where: { OR: [{ chatId }, { chatId: `-100${chatId.replace(/^-/, "")}` }] },
       });
 
+      // In-chat forum topic sync command: /topic or /sync inside any thread
+      const topicCmdMatch = text.trim().match(/^\/(?:topic|sync)(?:@\w+)?(?:\s+(.+))?$/i);
+      if (topicCmdMatch && msg.message_thread_id) {
+        const group = await resolveGroup();
+        if (group) {
+          const rawName = topicCmdMatch[1]?.trim();
+          const topicName = rawName || `Topic #${msg.message_thread_id}`;
+
+          await prisma.topic.upsert({
+            where: { groupId_topicId: { groupId: group.id, topicId: msg.message_thread_id } },
+            update: rawName ? { name: rawName } : {},
+            create: {
+              groupId: group.id,
+              topicId: msg.message_thread_id,
+              name: topicName,
+              iconColor: 7322096,
+              isClosed: false,
+            },
+          }).catch((e) => console.error("[webhook] /topic upsert error:", e));
+
+          await tgCall("sendMessage", {
+            chat_id: msg.chat.id,
+            message_thread_id: msg.message_thread_id,
+            text: `✅ <b>تم تسجيل هذا الموضوع في QuizForge بنجاح!</b>\n\n📌 <b>الاسم:</b> ${escapeHtml(topicName)}\n🆔 <b>المعرّف:</b> <code>#${msg.message_thread_id}</code>\n\n<i>الموضوع متاح الآن فوراً في لوحة التحكم وعند إرسال الكويزات والامتحانات.</i>`,
+            parse_mode: "HTML",
+          }).catch((e) => console.error("[webhook] /topic reply error:", e));
+        }
+      }
+
       if (msg.forum_topic_created && msg.message_thread_id) {
         const group = await resolveGroup();
         if (group) {

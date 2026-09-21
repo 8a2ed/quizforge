@@ -23,7 +23,7 @@ async function getAuth(req: NextRequest, groupId: string) {
   }
 }
 
-// GET — fetch topics (with auto-sync from history & optional auto-creation in Telegram)
+// GET — fetch topics from DB & sync Telegram status (NO aggressive historical resurrection)
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -77,51 +77,7 @@ export async function GET(
     console.warn("[topics] getChatMember error:", e);
   }
 
-  // 3. Sync historical topics from past quizzes & exams in QuizForge
-  try {
-    const pastQuizzes = await withRetry(() =>
-      prisma.quiz.findMany({
-        where: { groupId, topicId: { not: null } },
-        select: { topicId: true, topicName: true },
-        distinct: ["topicId"],
-      })
-    );
-    const pastExams = await withRetry(() =>
-      prisma.exam.findMany({
-        where: { groupId, topicId: { not: null } },
-        select: { topicId: true, topicName: true },
-        distinct: ["topicId"],
-      })
-    );
-
-    const historical = new Map<number, string | null>();
-    for (const q of pastQuizzes) {
-      if (q.topicId) historical.set(q.topicId, q.topicName);
-    }
-    for (const ex of pastExams) {
-      if (ex.topicId && !historical.has(ex.topicId)) historical.set(ex.topicId, ex.topicName);
-    }
-
-    for (const [tId, tName] of historical.entries()) {
-      await withRetry(() =>
-        prisma.topic.upsert({
-          where: { groupId_topicId: { groupId, topicId: tId } },
-          update: tName ? { name: tName } : {},
-          create: {
-            groupId,
-            topicId: tId,
-            name: tName || `Topic #${tId}`,
-            iconColor: 0,
-            isClosed: false,
-          },
-        })
-      );
-    }
-  } catch (e) {
-    console.warn("[topics] historical sync error:", e);
-  }
-
-  // 4. Auto-create standard topics in Telegram if requested and bot has rights
+  // 3. Auto-create standard topics ONLY if explicitly requested via ?autoCreate=true
   if (shouldAutoCreate) {
     if (!isForum) {
       return NextResponse.json({
@@ -141,13 +97,11 @@ export async function GET(
       }, { status: 403 });
     }
 
-    // Check what topics currently exist in DB
     const currentTopics = await withRetry(() =>
       prisma.topic.findMany({ where: { groupId } })
     );
 
     for (const std of STANDARD_FORUM_TOPICS) {
-      // Check if already created (e.g. includes "إعلانات" or "اختبارات" etc.)
       const coreWord = std.name.replace(/[^\u0621-\u064A\w]/g, "").slice(0, 7);
       const exists = currentTopics.some(t => {
         const cleanExisting = t.name.replace(/[^\u0621-\u064A\w]/g, "");
@@ -183,7 +137,7 @@ export async function GET(
     }
   }
 
-  // 5. Fetch and return all topics for this group
+  // 4. Fetch topics strictly from the Topic table (respects deletions & edits)
   const dbTopics = await withRetry(() =>
     prisma.topic.findMany({
       where: { groupId },
@@ -210,7 +164,7 @@ export async function GET(
   });
 }
 
-// POST — create topic directly in Telegram (default) or link existing topic by ID
+// POST — create topic directly in Telegram, link existing by ID, or bulk import
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -221,6 +175,30 @@ export async function POST(
 
   const group = membership.group;
   const body = await req.json().catch(() => ({}));
+
+  // Bulk import mode: Array<{ name: string; topicId: number; iconColor?: number }>
+  if (Array.isArray(body.bulkTopics) && body.bulkTopics.length > 0) {
+    const saved: Array<{ topicId: number; name: string }> = [];
+    for (const item of body.bulkTopics) {
+      const topicId = Number(item.topicId);
+      const name = String(item.name || "").trim() || `Topic #${topicId}`;
+      const iconColor = item.iconColor ? Number(item.iconColor) : 7322096;
+
+      if (topicId && !isNaN(topicId) && topicId > 0) {
+        const row = await withRetry(() =>
+          prisma.topic.upsert({
+            where: { groupId_topicId: { groupId, topicId } },
+            update: { name, iconColor },
+            create: { groupId, topicId, name, iconColor, isClosed: false },
+          })
+        );
+        saved.push({ topicId: row.topicId, name: row.name });
+      }
+    }
+
+    return NextResponse.json({ ok: true, count: saved.length, topics: saved });
+  }
+
   const name = String(body.name || "").trim();
   const rawTopicId = body.topicId !== undefined && body.topicId !== "" ? Number(body.topicId) : null;
   const iconColor = body.iconColor ? Number(body.iconColor) : 7322096;
@@ -230,6 +208,7 @@ export async function POST(
     return NextResponse.json({ error: "اسم الموضوع مطلوب" }, { status: 400 });
   }
 
+  // Create directly in Telegram via Bot API
   if (createInTelegram) {
     if (!name) {
       return NextResponse.json({ error: "يرجى كتابة اسم الموضوع" }, { status: 400 });
@@ -277,8 +256,8 @@ export async function POST(
   const topic = await withRetry(() =>
     prisma.topic.upsert({
       where: { groupId_topicId: { groupId, topicId: rawTopicId } },
-      update: { name: topicName },
-      create: { groupId, topicId: rawTopicId, name: topicName, iconColor: 0, isClosed: false },
+      update: { name: topicName, iconColor },
+      create: { groupId, topicId: rawTopicId, name: topicName, iconColor, isClosed: false },
     })
   );
 
@@ -289,7 +268,7 @@ export async function POST(
   });
 }
 
-// PATCH — rename topic in Telegram and DB
+// PATCH — rename topic in Telegram, Topic table, and Quiz/Exam tables
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -307,7 +286,7 @@ export async function PATCH(
     return NextResponse.json({ error: "topicId and name are required" }, { status: 400 });
   }
 
-  // Attempt to edit in Telegram
+  // Edit in Telegram
   try {
     await telegram.editForumTopic({
       chat_id: group.chatId,
@@ -318,7 +297,7 @@ export async function PATCH(
     console.warn("[topics] editForumTopic error:", e);
   }
 
-  // Update in DB
+  // Update in Topic table
   const updated = await withRetry(() =>
     prisma.topic.update({
       where: { groupId_topicId: { groupId, topicId } },
@@ -326,10 +305,25 @@ export async function PATCH(
     })
   );
 
+  // Synchronize name in past quizzes and exams
+  await withRetry(() =>
+    prisma.quiz.updateMany({
+      where: { groupId, topicId },
+      data: { topicName: name },
+    })
+  ).catch(() => {});
+
+  await withRetry(() =>
+    prisma.exam.updateMany({
+      where: { groupId, topicId },
+      data: { topicName: name },
+    })
+  ).catch(() => {});
+
   return NextResponse.json({ ok: true, topic: { message_thread_id: updated.topicId, name: updated.name } });
 }
 
-// DELETE — remove topic from DB, optionally deleting from Telegram
+// DELETE — permanently remove topic and unlink from past quizzes/exams so it NEVER returns
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -340,24 +334,53 @@ export async function DELETE(
 
   const group = membership.group;
   const body = await req.json().catch(() => ({}));
-  const topicId = Number(body.topicId);
+
+  // Support single ID or array of IDs for batch deletion
+  const rawIds = Array.isArray(body.topicIds)
+    ? body.topicIds
+    : body.topicId !== undefined
+    ? [body.topicId]
+    : [];
+
+  const topicIds = rawIds
+    .map((id: unknown) => Number(id))
+    .filter((n: number) => !isNaN(n) && n > 0);
+
   const deleteFromTelegram = Boolean(body.deleteFromTelegram);
 
-  if (!topicId) {
-    return NextResponse.json({ error: "topicId is required" }, { status: 400 });
+  if (topicIds.length === 0) {
+    return NextResponse.json({ error: "topicId or topicIds is required" }, { status: 400 });
   }
 
-  if (deleteFromTelegram) {
-    try {
-      await telegram.deleteForumTopic(group.chatId, topicId);
-    } catch (e) {
-      console.warn("[topics] deleteForumTopic error:", e);
+  for (const topicId of topicIds) {
+    // 1. Optionally delete from Telegram directly
+    if (deleteFromTelegram) {
+      try {
+        await telegram.deleteForumTopic(group.chatId, topicId);
+      } catch (e) {
+        console.warn(`[topics] deleteForumTopic ${topicId} error:`, e);
+      }
     }
+
+    // 2. Permanently delete from Topic table
+    await withRetry(() =>
+      prisma.topic.deleteMany({ where: { groupId, topicId } })
+    );
+
+    // 3. Completely unlink from old Quizzes & Exams so it can NEVER resurrect
+    await withRetry(() =>
+      prisma.quiz.updateMany({
+        where: { groupId, topicId },
+        data: { topicId: null, topicName: null },
+      })
+    );
+    await withRetry(() =>
+      prisma.exam.updateMany({
+        where: { groupId, topicId },
+        data: { topicId: null, topicName: null },
+      })
+    );
   }
 
-  await withRetry(() =>
-    prisma.topic.deleteMany({ where: { groupId, topicId } })
-  );
-
-  return NextResponse.json({ ok: true, deletedFromTelegram: deleteFromTelegram });
+  return NextResponse.json({ ok: true, deletedCount: topicIds.length });
 }

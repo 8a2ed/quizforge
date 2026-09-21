@@ -20,6 +20,60 @@ const COLOR_OPTIONS = [
   { value: 16478047, name: "أحمر",   hex: "#FB6F5F" },
 ];
 
+interface ParsedBulkTopic {
+  topicId: number;
+  name: string;
+}
+
+function parseBulkText(text: string): ParsedBulkTopic[] {
+  const lines = text.split("\n");
+  const result: ParsedBulkTopic[] = [];
+  const seenIds = new Set<number>();
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Pattern 1: Telegram link (e.g. https://t.me/agricult1/3677 or https://t.me/c/12345/3677)
+    const linkMatch = line.match(/t\.me\/(?:c\/\d+|\w+)\/(\d+)/i);
+    if (linkMatch) {
+      const id = parseInt(linkMatch[1], 10);
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        const remaining = line.replace(linkMatch[0], "").replace(/[-:–—|]/g, "").trim();
+        result.push({ topicId: id, name: remaining || `Topic #${id}` });
+        continue;
+      }
+    }
+
+    // Pattern 2: "3683 - علم الحيوان" or "3683 : علم الحيوان" or "3683 علم الحيوان"
+    const leadingIdMatch = line.match(/^(\d{2,10})\s*[-:–—|,]?\s*(.*)$/);
+    if (leadingIdMatch) {
+      const id = parseInt(leadingIdMatch[1], 10);
+      const name = leadingIdMatch[2]?.trim() || `Topic #${id}`;
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        result.push({ topicId: id, name });
+        continue;
+      }
+    }
+
+    // Pattern 3: "علم الحيوان : 3683" or "علم الحيوان - 3683"
+    const trailingIdMatch = line.match(/^(.*?)\s*[-:–—|,]?\s*(\d{2,10})$/);
+    if (trailingIdMatch) {
+      const name = trailingIdMatch[1]?.trim() || `Topic #${trailingIdMatch[2]}`;
+      const id = parseInt(trailingIdMatch[2], 10);
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        result.push({ topicId: id, name });
+        continue;
+      }
+    }
+  }
+
+  return result;
+}
+
 export default function TopicsPage() {
   const params = useParams();
   const groupId = params.groupId as string;
@@ -39,7 +93,12 @@ export default function TopicsPage() {
   const [manualTopicId, setManualTopicId] = useState("");
   const [adding, setAdding] = useState(false);
 
-  // Edit topic modal/inline
+  // Bulk Import modal state
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkImporting, setBulkImporting] = useState(false);
+
+  // Edit topic modal
   const [editingTopic, setEditingTopic] = useState<Topic | null>(null);
   const [editName, setEditName] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
@@ -74,9 +133,9 @@ export default function TopicsPage() {
 
         if (autoCreate) {
           if (d.createdCount > 0) {
-            showToast("success", `🎉 تم إنشاء ${d.createdCount} توبيك جديد في تليجرام بنجاح وحفظهم!`);
+            showToast("success", `🎉 تم إنشاء ${d.createdCount} توبيك جديد في تليجرام وحفظهم!`);
           } else {
-            showToast("info", "✅ جميع التوبيكس الأساسية جاهزة ومتزامنة في تليجرام بالفعل.");
+            showToast("info", "✅ التوبيكس الأساسية مسجلة بالفعل.");
           }
         }
       } else {
@@ -86,7 +145,7 @@ export default function TopicsPage() {
       }
     } catch (e) {
       console.error(e);
-      showToast("error", "تعذر الاتصال بـ QuizForge أو تليجرام.");
+      showToast("error", "تعذر الاتصال بقاعدة البيانات أو تليجرام.");
     } finally {
       setLoading(false);
       setAutoCreating(false);
@@ -141,6 +200,37 @@ export default function TopicsPage() {
     }
   };
 
+  // Handle Bulk Import
+  const handleBulkSubmit = async () => {
+    const parsed = parseBulkText(bulkText);
+    if (parsed.length === 0) {
+      showToast("error", "لم يتم العثور على موضوعات صالحة. تأكد من إدخال رقم الموضوع أو رابطه.");
+      return;
+    }
+
+    setBulkImporting(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/topics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bulkTopics: parsed }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast("success", `🎉 تم استيراد وحفظ ${data.count} موضوع بنجاح!`);
+        setShowBulkModal(false);
+        setBulkText("");
+        load(false);
+      } else {
+        showToast("error", data.error || "فشل الاستيراد");
+      }
+    } catch {
+      showToast("error", "تعذر استيراد التوبيكس");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
+
   // Handle renaming
   const handleSaveEdit = async () => {
     if (!editingTopic || !editName.trim()) return;
@@ -154,9 +244,15 @@ export default function TopicsPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        showToast("success", `تم تعديل اسم التوبيك إلى "${editName.trim()}" في تليجرام`);
+        setTopics(prev =>
+          prev.map(t =>
+            t.message_thread_id === editingTopic.message_thread_id
+              ? { ...t, name: editName.trim() }
+              : t
+          )
+        );
+        showToast("success", `تم تعديل اسم التوبيك إلى "${editName.trim()}" بنجاح`);
         setEditingTopic(null);
-        load(false);
       } else {
         showToast("error", data.error || "فشل تعديل الاسم");
       }
@@ -170,6 +266,8 @@ export default function TopicsPage() {
   // Handle delete
   const handleConfirmDelete = async () => {
     if (!deletingTopic) return;
+    const targetId = deletingTopic.message_thread_id;
+    const targetName = deletingTopic.name;
     setDeleting(true);
 
     try {
@@ -177,21 +275,22 @@ export default function TopicsPage() {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          topicId: deletingTopic.message_thread_id,
+          topicId: targetId,
           deleteFromTelegram,
         }),
       });
       const data = await res.json();
       if (data.ok) {
+        // Immediately remove from UI
+        setTopics(prev => prev.filter(t => t.message_thread_id !== targetId));
         showToast(
           "success",
           deleteFromTelegram
-            ? `تم حذف "${deletingTopic.name}" من QuizForge وتليجرام`
-            : `تمت إزالة "${deletingTopic.name}" من QuizForge`
+            ? `تم حذف "${targetName}" من QuizForge وتليجرام نهائياً`
+            : `تمت إزالة "${targetName}" وفصله نهائياً`
         );
         setDeletingTopic(null);
         setDeleteFromTelegram(false);
-        load(false);
       } else {
         showToast("error", data.error || "فشل حذف التوبيك");
       }
@@ -201,6 +300,8 @@ export default function TopicsPage() {
       setDeleting(false);
     }
   };
+
+  const parsedBulkPreview = parseBulkText(bulkText);
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", paddingBottom: "var(--space-12)" }}>
@@ -222,17 +323,40 @@ export default function TopicsPage() {
       {/* Header */}
       <div className="section-header animate-fade-up" style={{
         display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "var(--space-4)",
-        marginBottom: "var(--space-6)"
+        marginBottom: "var(--space-5)"
       }}>
         <div>
           <h1 style={{ fontSize: "1.75rem", fontWeight: 700, margin: 0 }}>موضوعات المنتدى (Forum Topics)</h1>
           <p style={{ color: "var(--clr-text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            صنع ومزامنة موضوعات المناقشة والاختبارات في مجموعة تليجرام بنقرة واحدة
+            إدارة ومزامنة أقسام وتوبيكس مجموعتك في تليجرام بدقة وسرعة
           </p>
         </div>
 
         <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
-          {/* Main Auto-create button */}
+          {/* Bulk Import button */}
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowBulkModal(true)}
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+            title="استيراد عدة موضوعات دفعة واحدة بالروابط أو الأرقام"
+          >
+            <span>📋</span>
+            استيراد سريع متعدد (Bulk)
+          </button>
+
+          {/* Simple Refresh button */}
+          <button
+            className="btn btn-secondary"
+            onClick={() => load(false)}
+            disabled={loading || autoCreating}
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+            title="تحديث القائمة الحالية من قاعدة البيانات"
+          >
+            <span>↻</span>
+            {loading ? "جاري التحديث…" : "تحديث القائمة"}
+          </button>
+
+          {/* Auto-create Standard Topics */}
           <button
             className="btn btn-primary"
             onClick={() => load(true)}
@@ -243,31 +367,47 @@ export default function TopicsPage() {
               boxShadow: "0 4px 14px rgba(79, 127, 255, 0.35)",
               fontWeight: 600
             }}
+            title="صنع الأقسام التعليمية القياسية الخمسة في تليجرام"
           >
             {autoCreating ? (
               <>
                 <span className="spinner-border" style={{ width: 16, height: 16, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block", animation: "spin 1s linear infinite" }} />
-                جاري صنع التوبيكس في تليجرام…
+                جاري الصنع في تليجرام…
               </>
             ) : (
               <>
                 <span>✨</span>
-                صنع التوبيكس تلقائياً في تليجرام
+                توليد 5 توبيكس قياسية
               </>
             )}
           </button>
+        </div>
+      </div>
 
-          {/* Refresh button */}
-          <button
-            className="btn btn-secondary"
-            onClick={() => load(true)}
-            disabled={loading || autoCreating}
-            style={{ display: "flex", alignItems: "center", gap: 6 }}
-            title="تحديث الموضوعات من تليجرام وصنع أي توبيك أساسي ناقص"
-          >
-            <span>↻</span>
-            {loading ? "جاري التحديث…" : "تحديث من تليجرام (Refresh)"}
-          </button>
+      {/* Hero Tip: Telegram In-Chat Sync Command */}
+      <div className="card animate-fade-up" style={{
+        background: "linear-gradient(135deg, rgba(79, 127, 255, 0.08) 0%, rgba(167, 139, 250, 0.08) 100%)",
+        border: "1px solid rgba(79, 127, 255, 0.25)",
+        padding: "var(--space-4) var(--space-5)",
+        marginBottom: "var(--space-5)",
+        borderRadius: "var(--radius-lg)",
+      }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+          <span style={{ fontSize: "1.6rem" }}>⚡</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: "0.98rem", color: "var(--clr-text-primary)", marginBottom: 4 }}>
+              أسرع طريقة لتسجيل التوبيكس الموجودة حالياً في مجموعتك بتليجرام:
+            </div>
+            <div style={{ fontSize: "0.88rem", color: "var(--clr-text-secondary)", lineHeight: 1.7 }}>
+              افتح أي توبيك موجود في مجموعتك واكتب فيه فقط:
+              <span style={{ display: "inline-block", margin: "0 6px" }}>
+                <code style={{ background: "rgba(79, 127, 255, 0.2)", padding: "3px 10px", borderRadius: 6, color: "#60a5fa", fontWeight: 700, fontSize: "0.92rem" }}>
+                  /topic اسم الموضوع
+                </code>
+              </span>
+              (أو فقط <code>/topic</code> أو <code>/sync</code>)، وسيقوم البوت فوراً بالتقاط المعرّف وحفظه وتأكيده لك في ثانية واحدة!
+            </div>
+          </div>
         </div>
       </div>
 
@@ -320,42 +460,17 @@ export default function TopicsPage() {
         </div>
       )}
 
-      {/* Auto-Creation Highlights Banner if forum enabled */}
-      {!forumWarning && !permissionWarning && (
-        <div className="card animate-fade-up" style={{
-          marginBottom: "var(--space-5)",
-          background: "rgba(79, 127, 255, 0.05)",
-          border: "1px solid rgba(79, 127, 255, 0.2)",
-          padding: "var(--space-3) var(--space-4)",
-          display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: "1.2rem" }}>🚀</span>
-            <div style={{ fontSize: "0.88rem" }}>
-              <strong>التوبيكس التلقائية:</strong> بالضغط على &quot;صنع التوبيكس تلقائياً&quot;، يقوم البوت فوراً بإنشاء 5 أقسام تعليمية منظمة بألوان مميزة في مجموعتك.
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <span className="badge" style={{ background: "rgba(111,185,240,0.15)", color: "#6FB9F0", fontSize: "0.75rem", border: "1px solid rgba(111,185,240,0.3)" }}>📢 إعلانات</span>
-            <span className="badge" style={{ background: "rgba(142,238,152,0.15)", color: "#8EEE98", fontSize: "0.75rem", border: "1px solid rgba(142,238,152,0.3)" }}>📝 كويزات</span>
-            <span className="badge" style={{ background: "rgba(255,214,126,0.15)", color: "#FFD67E", fontSize: "0.75rem", border: "1px solid rgba(255,214,126,0.3)" }}>🏆 امتحانات</span>
-            <span className="badge" style={{ background: "rgba(203,134,219,0.15)", color: "#CB86DB", fontSize: "0.75rem", border: "1px solid rgba(203,134,219,0.3)" }}>📚 بنك الأسئلة</span>
-            <span className="badge" style={{ background: "rgba(255,147,178,0.15)", color: "#FF93B2", fontSize: "0.75rem", border: "1px solid rgba(255,147,178,0.3)" }}>💬 نقاشات</span>
-          </div>
-        </div>
-      )}
-
-      {/* Add / Create Topic Form */}
+      {/* Add / Create Single Topic Form */}
       <div className="card animate-fade-up animate-delay-1" style={{ marginBottom: "var(--space-6)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
           <div>
             <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
-              {showManualLink ? "🔗 ربط توبيك يدوي موجود برقم ID" : "➕ إنشاء توبيك جديد في تليجرام"}
+              {showManualLink ? "🔗 ربط توبيك موجود مسبقاً برقم ID" : "➕ إنشاء توبيك جديد في تليجرام"}
             </h3>
             <p style={{ margin: "4px 0 0", fontSize: "0.82rem", color: "var(--clr-text-secondary)" }}>
               {showManualLink
-                ? "إذا كان لديك توبيك تم إنشاؤه مسبقاً في تليجرام قبل دعوة البوت، يمكنك ربطه برقم الـ ID"
-                : "اكتب اسم الموضوع وسيتم إنشاؤه في تليجرام واستخراج رقم الـ ID تلقائياً بدون تعب"}
+                ? "أدخل رقم الـ Topic ID واسم الموضوع لحفظه وربطه"
+                : "اكتب اسم الموضوع وسيتم إنشاؤه في تليجرام وحفظه تلقائياً"}
             </p>
           </div>
           <button
@@ -363,7 +478,7 @@ export default function TopicsPage() {
             onClick={() => setShowManualLink(!showManualLink)}
             style={{ fontSize: "0.8rem", color: "var(--clr-text-secondary)" }}
           >
-            {showManualLink ? "⚡ العودة للإنشاء المباشر في تليجرام" : "⚙️ ربط يدوي بـ Topic ID القديم"}
+            {showManualLink ? "⚡ العودة للإنشاء المباشر بالاسم" : "⚙️ ربط يدوي برقم ID محدد"}
           </button>
         </div>
 
@@ -390,7 +505,7 @@ export default function TopicsPage() {
               <label className="input-label" style={{ fontSize: "0.82rem" }}>اسم الموضوع في تليجرام</label>
               <input
                 className="input"
-                placeholder="مثال: أحياء - الفصل الثالث، كيمياء عضوية، مناقشات عامة..."
+                placeholder="مثال: أحياء - الفصل الثالث، كيمياء عضوية، مناقشات..."
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAdd()}
@@ -401,10 +516,10 @@ export default function TopicsPage() {
 
           {showManualLink ? (
             <div className="input-wrapper" style={{ marginBottom: 0 }}>
-              <label className="input-label" style={{ fontSize: "0.82rem" }}>اسم الموضوع (اختياري)</label>
+              <label className="input-label" style={{ fontSize: "0.82rem" }}>اسم الموضوع</label>
               <input
                 className="input"
-                placeholder="مثال: علم الحيوان"
+                placeholder="مثال: علم النبات"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAdd()}
@@ -460,45 +575,45 @@ export default function TopicsPage() {
       <div className="card animate-fade-up animate-delay-2">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <h3 style={{ margin: 0, fontSize: "1.1rem" }}>قائمة الموضوعات الحالية</h3>
+            <h3 style={{ margin: 0, fontSize: "1.1rem" }}>قائمة الموضوعات النشطة</h3>
             <span className="badge badge-brand" style={{ fontSize: "0.8rem", padding: "2px 8px" }}>
               {topics.length} توبيك
             </span>
           </div>
 
           <span style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
-            متاحة تلقائياً في إنشاء الكويزات، الامتحانات، والإرسال الجماعي
+            أي موضوع يتم حذفه يختفي نهائياً ولا يعود أبداً
           </span>
         </div>
 
         {loading && topics.length === 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", padding: "var(--space-3) 0" }}>
-            {[1, 2, 3, 4].map((i) => (
+            {[1, 2, 3].map((i) => (
               <div key={i} className="skeleton" style={{ height: 64, borderRadius: "var(--radius-md)" }} />
             ))}
           </div>
         ) : topics.length === 0 ? (
           <div className="empty-state" style={{ padding: "48px 24px", textAlign: "center" }}>
             <div style={{ fontSize: "3rem", marginBottom: 12 }}>💬</div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: 8 }}>لا توجد أي موضوعات مسجلة بعد</h3>
+            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: 8 }}>لا توجد أي موضوعات مسجلة حالياً</h3>
             <p style={{ color: "var(--clr-text-secondary)", maxWidth: 520, margin: "0 auto 24px", fontSize: "0.92rem", lineHeight: 1.6 }}>
-              بدلاً من إدخال التوبيكس يدوياً، يمكنك بنقرة واحدة أن تدع البوت يصنع كل الموضوعات الأساسية لمجموعتك في تليجرام تلقائياً:
+              يمكنك كتابة <code>/topic اسم الموضوع</code> داخل أي توبيك في تليجرام، أو استخدام الاستيراد السريع للصق روابط موضوعاتك دفعة واحدة!
             </p>
-            <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 24 }}>
-              <span className="badge" style={{ background: "rgba(111,185,240,0.15)", color: "#6FB9F0" }}>📢 الإعلانات العامة</span>
-              <span className="badge" style={{ background: "rgba(142,238,152,0.15)", color: "#8EEE98" }}>📝 الاختبارات القصيرة</span>
-              <span className="badge" style={{ background: "rgba(255,214,126,0.15)", color: "#FFD67E" }}>🏆 الامتحانات الشاملة</span>
-              <span className="badge" style={{ background: "rgba(203,134,219,0.15)", color: "#CB86DB" }}>📚 بنك الأسئلة</span>
-              <span className="badge" style={{ background: "rgba(255,147,178,0.15)", color: "#FF93B2" }}>💬 استفسارات ونقاشات</span>
+            <div style={{ display: "flex", justifyContent: "center", gap: 12 }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowBulkModal(true)}
+              >
+                📋 استيراد سريع متعدد
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => load(true)}
+                disabled={autoCreating}
+              >
+                {autoCreating ? "جاري التوليد…" : "✨ توليد 5 توبيكس قياسية"}
+              </button>
             </div>
-            <button
-              className="btn btn-primary"
-              onClick={() => load(true)}
-              disabled={autoCreating}
-              style={{ padding: "12px 28px", fontSize: "0.95rem", fontWeight: 600, background: "linear-gradient(135deg, #4f7fff 0%, #a78bfa 100%)" }}
-            >
-              {autoCreating ? "جاري صنع التوبيكس في تليجرام…" : "✨ صنع كل التوبيكس تلقائياً في تليجرام الآن"}
-            </button>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
@@ -573,7 +688,7 @@ export default function TopicsPage() {
                     {/* Delete Button */}
                     <button
                       className="btn btn-ghost btn-sm"
-                      title="حذف الموضوع"
+                      title="حذف الموضوع نهائياً"
                       onClick={() => {
                         setDeletingTopic(topic);
                         setDeleteFromTelegram(false);
@@ -592,16 +707,76 @@ export default function TopicsPage() {
         )}
       </div>
 
+      {/* Bulk Import Modal */}
+      {showBulkModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16
+        }}>
+          <div className="card" style={{ maxWidth: 580, width: "100%", padding: "var(--space-6)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700 }}>📋 استيراد سريع لعدة موضوعات</h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowBulkModal(false)}>✕</button>
+            </div>
+
+            <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", lineHeight: 1.6, marginBottom: 14 }}>
+              الصق روابط تليجرام الخاصة بالتوبيكس أو أرقامها وأسماءها (سطر لكل موضوع). يدعم الروابط المباشرة مثل <code>t.me/.../3678</code> أو الصيغ النصية:
+            </p>
+
+            <textarea
+              className="input"
+              rows={6}
+              placeholder={`مثال:\nhttps://t.me/agricult1/3678 علم النبات\nhttps://t.me/agricult1/3685 كيمياء\n3690 - اقتصاد زراعي\n3695 فيزياء`}
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              style={{ fontFamily: "monospace", fontSize: "0.85rem", resize: "vertical", marginBottom: 14 }}
+            />
+
+            {parsedBulkPreview.length > 0 && (
+              <div style={{
+                maxHeight: 140, overflowY: "auto", background: "var(--clr-bg-elevated)",
+                border: "1px solid var(--clr-border)", borderRadius: "var(--radius-md)",
+                padding: "8px 12px", marginBottom: 16
+              }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-muted)", marginBottom: 6 }}>
+                  تم التعرف على ({parsedBulkPreview.length}) موضوع:
+                </div>
+                {parsedBulkPreview.map(p => (
+                  <div key={p.topicId} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.82rem", padding: "3px 0" }}>
+                    <span><strong>{p.name}</strong></span>
+                    <span style={{ color: "var(--clr-accent)" }}>#{p.topicId}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
+              <button className="btn btn-secondary" onClick={() => setShowBulkModal(false)} disabled={bulkImporting}>
+                إلغاء
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleBulkSubmit}
+                disabled={bulkImporting || parsedBulkPreview.length === 0}
+                style={{ fontWeight: 600 }}
+              >
+                {bulkImporting ? "جاري الحفظ…" : `حفظ (${parsedBulkPreview.length}) موضوع دفعة واحدة`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit Topic Modal */}
       {editingTopic && (
         <div style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)",
           display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16
         }}>
           <div className="card" style={{ maxWidth: 460, width: "100%", padding: "var(--space-6)" }}>
             <h3 style={{ margin: "0 0 8px", fontSize: "1.15rem", fontWeight: 700 }}>✏️ تعديل اسم الموضوع</h3>
             <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", marginBottom: "var(--space-4)" }}>
-              سيتم تحديث اسم الموضوع داخل مجموعة تليجرام وفي QuizForge معاً.
+              سيتم تحديث اسم الموضوع داخل مجموعة تليجرام وفي QuizForge ولا يعود للاسم القديم أبداً.
             </p>
             <div className="input-wrapper">
               <label className="input-label">الاسم الجديد</label>
@@ -628,7 +803,7 @@ export default function TopicsPage() {
       {/* Delete Topic Modal */}
       {deletingTopic && (
         <div style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)",
           display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16
         }}>
           <div className="card" style={{ maxWidth: 480, width: "100%", padding: "var(--space-6)" }}>
@@ -636,7 +811,7 @@ export default function TopicsPage() {
               🗑️ حذف موضوع &quot;{deletingTopic.name}&quot;
             </h3>
             <p style={{ fontSize: "0.88rem", color: "var(--clr-text-secondary)", lineHeight: 1.6, marginBottom: "var(--space-4)" }}>
-              هل أنت متأكد من رغبتك في حذف هذا الموضوع؟
+              سيتم حذف الموضوع نهائياً وفصله من سجلات الكويزات لضمان عدم عودته مجدداً.
             </p>
 
             <label style={{
@@ -651,7 +826,7 @@ export default function TopicsPage() {
                 style={{ width: 16, height: 16, accentColor: "var(--clr-danger)", cursor: "pointer" }}
               />
               <span style={{ fontSize: "0.85rem", color: "var(--clr-text-primary)" }}>
-                <strong>حذف التوبيك نهائياً من تليجرام أيضاً</strong> (Delete from Telegram)
+                <strong>حذف التوبيك أيضاً من مجموعة تليجرام</strong> (Delete from Telegram)
               </span>
             </label>
 
@@ -665,7 +840,7 @@ export default function TopicsPage() {
                 disabled={deleting}
                 style={{ background: "var(--clr-danger)", color: "#fff" }}
               >
-                {deleting ? "جاري الحذف…" : "تأكيد الحذف"}
+                {deleting ? "جاري الحذف…" : "تأكيد الحذف النهائي"}
               </button>
             </div>
           </div>
