@@ -8,6 +8,7 @@ import {
   type StudentExamQuestion,
   type MasterExamQuestion,
 } from "@/lib/examConfig";
+import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
@@ -493,7 +494,7 @@ export async function POST(req: NextRequest) {
 
     const update = await req.json();
 
-    // ── Poll answer ──────────────────────────────────────────────────────────
+    // ── Poll answer (for non-anonymous polls) ────────────────────────────────
     if (update.poll_answer) {
       const { poll_id, user, option_ids } = update.poll_answer;
       const quiz = await withRetry(() => prisma.quiz.findFirst({ where: { pollId: poll_id } }));
@@ -506,9 +507,39 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Poll closed ──────────────────────────────────────────────────────────
-    if (update.poll?.is_closed) {
-      await prisma.quiz.updateMany({ where: { pollId: update.poll.id }, data: { pollClosed: true } }).catch(() => {});
+    // ── Poll state & anonymous votes sync (real-time for both types) ─────────
+    if (update.poll) {
+      const poll = update.poll;
+      const quiz = await withRetry(() =>
+        prisma.quiz.findFirst({
+          where: { pollId: poll.id },
+          include: { group: true },
+        })
+      );
+
+      if (quiz) {
+        const wasClosed = quiz.pollClosed;
+
+        // If poll is closed now, update in DB
+        if (poll.is_closed && !wasClosed) {
+          await withRetry(() =>
+            prisma.quiz.update({
+              where: { id: quiz.id },
+              data: { pollClosed: true },
+            })
+          ).catch(() => {});
+        }
+
+        // If anonymous, sync the aggregated option votes into poll_answers
+        if (poll.is_anonymous && Array.isArray(poll.options)) {
+          await syncAnonymousPollAnswers(quiz.id, poll.options, poll.total_voter_count || 0);
+        }
+
+        // If poll just transitioned to closed, send a polite closing summary
+        if (poll.is_closed && !wasClosed && (poll.total_voter_count || 0) > 0) {
+          await sendPollClosureSummary(quiz, poll);
+        }
+      }
     }
 
     // ── Message events ───────────────────────────────────────────────────────
@@ -539,6 +570,43 @@ export async function POST(req: NextRequest) {
       const resolveGroup = () => prisma.group.findFirst({
         where: { OR: [{ chatId }, { chatId: `-100${chatId.replace(/^-/, "")}` }] },
       });
+
+      // In-chat /stats or /status command
+      const statsCmdMatch = text.trim().match(/^\/(?:stats|quizstats|status)(?:@\w+)?$/i);
+      if (statsCmdMatch) {
+        const group = await resolveGroup();
+        if (group) {
+          const [totalQuizzes, totalAnswers, correctCount] = await Promise.all([
+            withRetry(() => prisma.quiz.count({ where: { groupId: group.id, sentAt: { not: null } } })),
+            withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId: group.id } } })),
+            withRetry(() =>
+              prisma.pollAnswer.count({
+                where: {
+                  quiz: { groupId: group.id, type: "QUIZ", correctOptionId: { not: null } },
+                  optionIds: { isEmpty: false },
+                },
+              })
+            ),
+          ]);
+
+          const overallRate = totalAnswers > 0 ? Math.round((correctCount / totalAnswers) * 100) : 0;
+
+          const statsMsg =
+            `📊 <b>إحصائيات الكويزات في هذه المجموعة:</b>\n\n` +
+            `🎯 <b>إجمالي الكويزات المرسلة:</b> ${totalQuizzes}\n` +
+            `📝 <b>إجمالي إجابات الطلاب:</b> ${totalAnswers} (بما فيها الكويزات المجهولة 🔒)\n` +
+            `📈 <b>معدل النجاح العام:</b> ${overallRate}%\n\n` +
+            `🔒 <i>نظام خصوصية الطلاب مفعّل: يمكن للجميع الإجابة والمحاولة بأمان دون أي حرج من الخطأ.</i>`;
+
+          await tgCall("sendMessage", {
+            chat_id: msg.chat.id,
+            message_thread_id: msg.message_thread_id || undefined,
+            reply_to_message_id: msg.message_id || undefined,
+            text: statsMsg,
+            parse_mode: "HTML",
+          }).catch((e) => console.error("[webhook] /stats error:", e));
+        }
+      }
 
       // In-chat forum topic sync command: /topic or /sync inside any thread
       const topicCmdMatch = text.trim().match(/^\/(?:topic|sync)(?:@\w+)?(?:\s+(.+))?$/i);

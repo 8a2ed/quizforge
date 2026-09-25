@@ -22,6 +22,7 @@ interface Quiz {
   tags?: string[];
   messageId?: number | null;
   topicId?: number | null;
+  optionVotes?: Record<number, number>;
 }
 
 interface Pagination {
@@ -328,9 +329,17 @@ export default function HistoryPage() {
                         </div>
                       </td>
                       <td data-label="Type">
-                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
                           <span className={`badge ${quiz.type === "QUIZ" ? "badge-brand" : "badge-accent"}`}>
                             {quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"}
+                          </span>
+                          <span className="badge" style={{
+                            background: quiz.isAnonymous ? "rgba(99,102,241,0.12)" : "rgba(16,185,129,0.12)",
+                            color: quiz.isAnonymous ? "var(--clr-brand)" : "var(--clr-success)",
+                            fontSize: "0.68rem",
+                            padding: "2px 6px"
+                          }}>
+                            {quiz.isAnonymous ? "🔒 Anon" : "👥 Public"}
                           </span>
                           {quiz.deletedAt && (
                             <span className="badge" style={{ background: "rgba(239,68,68,0.15)", color: "#f87171", fontSize: "0.7rem" }}>🗑 Deleted</span>
@@ -363,7 +372,10 @@ export default function HistoryPage() {
                         </div>
                       </td>
                       <td data-label="Responses">
-                        <span style={{ fontWeight: 600 }}>{quiz._count.answers}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          {quiz.isAnonymous && <span title="تصويت مجهول الهوية" style={{ fontSize: "0.75rem" }}>🔒</span>}
+                          <span style={{ fontWeight: 600 }}>{quiz._count.answers}</span>
+                        </div>
                       </td>
                       <td data-label="Correct Rate">
                         {quiz.correctRate !== null ? (
@@ -443,21 +455,53 @@ export default function HistoryPage() {
                                 <p style={{ color: "var(--clr-text-primary)", fontWeight: 500, marginBottom: "var(--space-4)", lineHeight: 1.5 }}>
                                   {quiz.question}
                                 </p>
-                                <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Answer Options</h4>
-                                {quiz.options.map((opt, idx) => (
-                                  <div key={idx} style={{
-                                    padding: "var(--space-2) var(--space-3)",
-                                    marginBottom: 6,
-                                    borderRadius: "var(--radius-md)",
-                                    background: quiz.type === "QUIZ" && quiz.correctOptionId === idx ? "var(--clr-success-muted)" : "var(--clr-bg-hover)",
-                                    border: `1px solid ${quiz.type === "QUIZ" && quiz.correctOptionId === idx ? "rgba(52,211,153,0.3)" : "var(--clr-border)"}`,
-                                    display: "flex", alignItems: "center", fontSize: "0.875rem",
-                                  }}>
-                                    <span style={{ color: "var(--clr-text-muted)", marginRight: 8, fontWeight: 600, minWidth: 20 }}>{String.fromCharCode(65 + idx)}.</span>
-                                    {quiz.type === "QUIZ" && quiz.correctOptionId === idx && <span style={{ color: "var(--clr-success)", marginRight: 6 }}>✓</span>}
-                                    {opt}
-                                  </div>
-                                ))}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
+                                  <h4 style={{ margin: 0, fontSize: "0.875rem" }}>Answer Options</h4>
+                                  <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>
+                                    {quiz._count.answers} total responses
+                                  </span>
+                                </div>
+                                {quiz.options.map((opt, idx) => {
+                                  const votes = quiz.optionVotes?.[idx] || 0;
+                                  const total = quiz._count.answers || 0;
+                                  const pct = total > 0 ? Math.round((votes / total) * 100) : 0;
+                                  const isCorrect = quiz.type === "QUIZ" && quiz.correctOptionId === idx;
+
+                                  return (
+                                    <div key={idx} style={{
+                                      padding: "8px 12px",
+                                      marginBottom: 8,
+                                      borderRadius: "var(--radius-md)",
+                                      background: isCorrect ? "var(--clr-success-muted)" : "var(--clr-bg-hover)",
+                                      border: `1px solid ${isCorrect ? "rgba(52,211,153,0.3)" : "var(--clr-border)"}`,
+                                      fontSize: "0.875rem",
+                                    }}>
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, marginRight: 8 }}>
+                                          <span style={{ color: "var(--clr-text-muted)", fontWeight: 600, minWidth: 20 }}>{String.fromCharCode(65 + idx)}.</span>
+                                          {isCorrect && <span style={{ color: "var(--clr-success)", fontWeight: 700 }}>✓</span>}
+                                          <span style={{ wordBreak: "break-word" }}>{opt}</span>
+                                        </div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, fontSize: "0.78rem", fontWeight: 600 }}>
+                                          <span style={{ color: isCorrect ? "var(--clr-success)" : "var(--clr-text-secondary)" }}>
+                                            {votes} ({pct}%)
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {total > 0 && (
+                                        <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 99, overflow: "hidden", marginTop: 6 }}>
+                                          <div style={{
+                                            width: `${pct}%`,
+                                            height: "100%",
+                                            background: isCorrect ? "var(--clr-success)" : "var(--clr-brand)",
+                                            borderRadius: 99,
+                                            transition: "width 0.5s ease",
+                                          }} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                                 {quiz.explanation && (
                                   <div style={{ marginTop: "var(--space-3)", fontSize: "0.85rem", color: "var(--clr-text-muted)", background: "var(--clr-bg-hover)", padding: "var(--space-3)", borderRadius: "var(--radius-md)", borderLeft: "3px solid var(--clr-brand)" }}>
                                     💡 <strong>Explanation:</strong> {quiz.explanation}
@@ -466,13 +510,37 @@ export default function HistoryPage() {
                               </div>
                               {/* Meta */}
                               <div>
-                                <h4 style={{ marginBottom: "var(--space-3)", fontSize: "0.875rem" }}>Details</h4>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
+                                  <h4 style={{ margin: 0, fontSize: "0.875rem" }}>Details</h4>
+                                  {quiz.isAnonymous && (
+                                    <span className="badge" style={{ background: "rgba(99,102,241,0.12)", color: "var(--clr-brand)", fontSize: "0.72rem" }}>
+                                      🔒 Anonymous Quiz
+                                    </span>
+                                  )}
+                                </div>
+
+                                {quiz.isAnonymous && (
+                                  <div style={{
+                                    padding: "8px 12px",
+                                    background: "rgba(99,102,241,0.07)",
+                                    border: "1px solid rgba(99,102,241,0.2)",
+                                    borderRadius: "var(--radius-md)",
+                                    fontSize: "0.76rem",
+                                    color: "var(--clr-text-secondary)",
+                                    marginBottom: "var(--space-4)",
+                                    lineHeight: 1.45,
+                                  }}>
+                                    <span style={{ fontWeight: 600, color: "var(--clr-brand)" }}>🔒 كويز مجهول الهوية: </span>
+                                    تم حفظ سرية وخصوصية الطلاب بالكامل لتشجيعهم على المحاولة دون إحراج، وتظهر كافة الإحصائيات مجمعة بدقة 100%.
+                                  </div>
+                                )}
+
                                 <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "var(--space-2) var(--space-4)", marginBottom: "var(--space-4)" }}>
                                   {([
                                     ["Type", quiz.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"],
                                     ["Sent By", `${quiz.sentBy.firstName}${quiz.sentBy.username ? ` (@${quiz.sentBy.username})` : ""}`],
-                                    ["Anonymous", quiz.isAnonymous ? "Yes" : "No"],
-                                    ["Responses", String(quiz._count.answers)],
+                                    ["Privacy", quiz.isAnonymous ? "🔒 Anonymous (مخفي)" : "👥 Public (علني)"],
+                                    ["Responses", `${quiz._count.answers} طالب`],
                                     ["Correct Rate", quiz.correctRate !== null ? `${quiz.correctRate}%` : "N/A"],
                                     ["Topic", quiz.topicName || "General"],
                                     ["Tags", quiz.tags && quiz.tags.length > 0 ? quiz.tags.map(t => `#${t}`).join(", ") : "None"],

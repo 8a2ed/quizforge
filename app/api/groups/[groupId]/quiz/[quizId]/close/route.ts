@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
+import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -50,6 +51,16 @@ export async function POST(
       const data = await res.json();
       if (data.ok) {
         telegramClosed = true;
+
+        // If returned poll has options and is anonymous, sync voter counts
+        if (data.result && Array.isArray(data.result.options)) {
+          if (quiz.isAnonymous) {
+            await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+          }
+          if ((data.result.total_voter_count || 0) > 0) {
+            await sendPollClosureSummary({ ...quiz, group: membership.group }, data.result);
+          }
+        }
       } else {
         telegramError = data.description || "Telegram stopPoll failed";
       }

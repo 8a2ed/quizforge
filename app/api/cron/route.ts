@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma, dbPing } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
+import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -163,6 +164,14 @@ export async function GET(req: Request) {
         } else {
           // stopPoll succeeded → mark closed
           await prisma.quiz.update({ where: { id: quiz.id }, data: { pollClosed: true } });
+          if (data.result && Array.isArray(data.result.options)) {
+            if (quiz.isAnonymous) {
+              await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+            }
+            if ((data.result.total_voter_count || 0) > 0) {
+              await sendPollClosureSummary(quiz, data.result);
+            }
+          }
         }
       } catch { /* ignore individual check errors */ }
     }

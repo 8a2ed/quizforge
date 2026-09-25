@@ -16,6 +16,14 @@ const TT = ({ active, payload, label }: { active?: boolean; payload?: Array<{ va
 
 interface AnalyticsData {
   summary: { totalQuizzes: number; totalAnswers: number; overallCorrectRate: number; quizTypes: { type: string; _count: { id: number } }[]; deletedCount: number; closedCount: number; activeCount: number };
+  anonymousStats?: {
+    anonQuizzes: number;
+    publicQuizzes: number;
+    anonAnswers: number;
+    publicAnswers: number;
+    anonAvgAnswers: number;
+    publicAvgAnswers: number;
+  };
   byTopic: { topicName: string | null; _count: { id: number } }[];
   bySender: { sentById: string; _count: { id: number }; user: { firstName: string; username: string | null } | null }[];
   activityData: { date: string; count: number }[];
@@ -102,6 +110,64 @@ export default function AnalyticsPage() {
         <StatCard label="Closed" value={data.summary.closedCount} icon="⏹" />
         <StatCard label="Deleted" value={data.summary.deletedCount} icon="🗑" />
       </div>
+
+      {/* Anonymous vs Public Impact Card */}
+      {data.anonymousStats && (
+        <div className="card animate-fade-up animate-delay-1" style={{
+          background: "linear-gradient(135deg, rgba(99,102,241,0.06) 0%, rgba(16,185,129,0.04) 100%)",
+          border: "1px solid rgba(99,102,241,0.22)",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: "1.2rem" }}>🔒</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "0.95rem" }}>أثر الخصوصية والمجهولية على مشاركة الطلاب (Student Privacy & Participation)</h3>
+                <p style={{ margin: "2px 0 0", fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>
+                  إحصائيات تفاعل ومشاركة الطلاب عند تفعيل الكويزات المجهولة لتفادي الحرج عند الخطأ
+                </p>
+              </div>
+            </div>
+            <span className="badge badge-brand" style={{ fontSize: "0.72rem" }}>خصوصية محمية 100%</span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginTop: 12 }}>
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>الكويزات المجهولة (Anonymous)</span>
+                <span style={{ fontSize: "0.9rem" }}>🔒</span>
+              </div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--clr-brand)" }}>
+                {data.anonymousStats.anonAnswers} <span style={{ fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-muted)" }}>إجابة</span>
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-secondary)", marginTop: 4 }}>
+                عبر {data.anonymousStats.anonQuizzes} كويز مخفي · معدل <b>{data.anonymousStats.anonAvgAnswers}</b> إجابة/كويز
+              </div>
+            </div>
+
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>الكويزات العلنية (Public)</span>
+                <span style={{ fontSize: "0.9rem" }}>👥</span>
+              </div>
+              <div style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--clr-success)" }}>
+                {data.anonymousStats.publicAnswers} <span style={{ fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-muted)" }}>إجابة</span>
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-secondary)", marginTop: 4 }}>
+                عبر {data.anonymousStats.publicQuizzes} كويز علني · معدل <b>{data.anonymousStats.publicAvgAnswers}</b> إجابة/كويز
+              </div>
+            </div>
+
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--clr-text-primary)", marginBottom: 4 }}>
+                💡 حماية الطلاب من الحرج
+              </div>
+              <p style={{ margin: 0, fontSize: "0.74rem", color: "var(--clr-text-muted)", lineHeight: 1.4 }}>
+                الكويزات المجهولة تشجع الطلاب على المحاولة دون خوف من نظرة زملائهم عند الخطأ، مع تزويد المعلم بكافة نسب الحل والخيارات بدقة تامة.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Activity + Peak Hours */}
       <div className="animate-fade-up animate-delay-2" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: "var(--space-4)" }}>

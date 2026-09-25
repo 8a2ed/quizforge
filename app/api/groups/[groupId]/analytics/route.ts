@@ -177,6 +177,23 @@ export async function GET(
       })
     );
 
+    // ── Anonymous vs Public Quizzes stats ─────────────────────────────────────
+    const [anonQuizzesCount, publicQuizzesCount, anonAnswersCount, publicAnswersCount] = await Promise.all([
+      withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: true, sentAt: { not: null } } })),
+      withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: false, sentAt: { not: null } } })),
+      withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: true } } })),
+      withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: false } } })),
+    ]);
+
+    const anonymousStats = {
+      anonQuizzes: anonQuizzesCount,
+      publicQuizzes: publicQuizzesCount,
+      anonAnswers: anonAnswersCount,
+      publicAnswers: publicAnswersCount,
+      anonAvgAnswers: anonQuizzesCount > 0 ? Math.round((anonAnswersCount / anonQuizzesCount) * 10) / 10 : 0,
+      publicAvgAnswers: publicQuizzesCount > 0 ? Math.round((publicAnswersCount / publicQuizzesCount) * 10) / 10 : 0,
+    };
+
     return NextResponse.json({
       summary: {
         totalQuizzes,
@@ -187,6 +204,7 @@ export async function GET(
         closedCount,
         activeCount: totalQuizzes - deletedCount - closedCount,
       },
+      anonymousStats,
       byTopic,
       bySender: senderDetails,
       activityData,

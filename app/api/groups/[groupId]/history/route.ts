@@ -104,9 +104,33 @@ export async function GET(
       }
     }
 
+    // ── Batch option vote breakdown ──────────────────────────────────────────
+    const allQuizIds = quizzes.map((q) => q.id);
+    const optionVotesMap: Record<string, Record<number, number>> = {};
+
+    if (allQuizIds.length > 0) {
+      type OptionVoteRow = { quiz_id: string; opt_id: number; vote_count: bigint };
+      const optionVoteRows = await prisma.$queryRaw<OptionVoteRow[]>`
+        SELECT
+          pa."quizId" AS quiz_id,
+          opt.opt_id,
+          COUNT(pa.id) AS vote_count
+        FROM "poll_answers" pa,
+        UNNEST(pa."optionIds") AS opt(opt_id)
+        WHERE pa."quizId" = ANY(${allQuizIds}::text[])
+        GROUP BY pa."quizId", opt.opt_id
+      `.catch(() => [] as OptionVoteRow[]);
+
+      for (const r of optionVoteRows) {
+        if (!optionVotesMap[r.quiz_id]) optionVotesMap[r.quiz_id] = {};
+        optionVotesMap[r.quiz_id][Number(r.opt_id)] = Number(r.vote_count);
+      }
+    }
+
     const enriched = quizzes.map((q) => ({
       ...q,
       correctRate: rateMap[q.id] ?? null,
+      optionVotes: optionVotesMap[q.id] || {},
     }));
 
     return NextResponse.json({
