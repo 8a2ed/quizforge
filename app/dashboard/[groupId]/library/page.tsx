@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -38,12 +38,13 @@ interface SendProgress {
   failed: number;
   errors: { id: string; question: string; msg: string }[];
   startTime: number;
+  statuses: ("pending" | "sending" | "sent" | "failed")[];
 }
 
 const DELAY_MS = 3200; // 3.2s between sends to respect Telegram rate limits
 
 export default function LibraryPage() {
-  const { groupId } = useParams() as { groupId: string };
+  const { groupId } = useParams<{ groupId: string }>();
 
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +72,14 @@ export default function LibraryPage() {
   const [collForm, setCollForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
   const [showAddToColl, setShowAddToColl] = useState(false);
   const [collLoading, setCollLoading] = useState(false);
+
+  // Live timer tick — re-renders once per second while broadcasting
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!progress?.active) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [progress?.active]);
 
   const showToast = (type: "success" | "error", msg: string) => {
     setToast({ type, msg });
@@ -101,10 +110,10 @@ export default function LibraryPage() {
   }, []);
   useEffect(() => { loadCollections(); }, [loadCollections]);
 
-  // ── Derived state ─────────────────────────────────────────────────
-  const allTags = [...new Set(templates.flatMap(t => t.tags || []))].sort();
+  // ── Derived state (memoized) ────────────────────────────────────────
+  const allTags = useMemo(() => [...new Set(templates.flatMap(t => t.tags || []))].sort(), [templates]);
 
-  const filtered = templates
+  const filtered = useMemo(() => templates
     .filter(t => {
       if (!showSent && sentIds.has(t.id)) return false;
       if (activeCollection && !t.collectionIds?.includes(activeCollection)) return false;
@@ -123,13 +132,13 @@ export default function LibraryPage() {
       if (sortKey === "az") return a.question.localeCompare(b.question);
       if (sortKey === "type") return a.type.localeCompare(b.type);
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    }), [templates, showSent, sentIds, activeCollection, tagFilter, typeFilter, search, sortKey]);
 
-  const visibleSelected = [...selected].filter(id => filtered.some(t => t.id === id));
+  const visibleSelected = useMemo(() => [...selected].filter(id => filtered.some(t => t.id === id)), [selected, filtered]);
 
   // ── Selection ─────────────────────────────────────────────────────
-  const toggleSelect = (id: string) =>
-    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const toggleSelect = useCallback((id: string) =>
+    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; }), []);
   const selectAll = () => setSelected(new Set(filtered.map(t => t.id)));
   const selectNone = () => setSelected(new Set());
 
@@ -148,7 +157,7 @@ export default function LibraryPage() {
     a.href = url;
     a.download = `quiz-templates-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
     showToast("success", `Exported ${toExport.length} template(s) to JSON ✓`);
   };
 
@@ -157,10 +166,13 @@ export default function LibraryPage() {
     if (toSend.length === 0) return;
     cancelRef.current = false;
 
-    setProgress({ active: true, total: toSend.length, sent: 0, failed: 0, errors: [], startTime: Date.now() });
+    setProgress({ active: true, total: toSend.length, sent: 0, failed: 0, errors: [], startTime: Date.now(), statuses: Array(toSend.length).fill("pending") });
 
     for (let i = 0; i < toSend.length; i++) {
       if (cancelRef.current) break;
+
+      // Mark current as sending
+      setProgress(prev => prev ? { ...prev, statuses: prev.statuses.map((s, j) => j === i ? "sending" : s) } : prev);
 
       const t = toSend[i];
       try {
@@ -211,12 +223,13 @@ export default function LibraryPage() {
         if (res.ok) {
           setSentIds(prev => new Set([...prev, t.id]));
           setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
-          setProgress(prev => prev ? { ...prev, sent: prev.sent + 1 } : prev);
+          setProgress(prev => prev ? { ...prev, sent: prev.sent + 1, statuses: prev.statuses.map((s, j) => j === i ? "sent" : s) } : prev);
         } else {
           const data = await res.json().catch(() => ({}));
           setProgress(prev => prev ? {
             ...prev,
             failed: prev.failed + 1,
+            statuses: prev.statuses.map((s, j) => j === i ? "failed" : s),
             errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: data.error || "Broadcast error" }],
           } : prev);
         }
@@ -224,6 +237,7 @@ export default function LibraryPage() {
         setProgress(prev => prev ? {
           ...prev,
           failed: prev.failed + 1,
+          statuses: prev.statuses.map((s, j) => j === i ? "failed" : s),
           errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: "Network error" }],
         } : prev);
       }
@@ -438,53 +452,68 @@ export default function LibraryPage() {
   const createCollection = async () => {
     if (!collForm.name.trim()) return;
     setCollLoading(true);
-    const res = await fetch("/api/collections", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(collForm),
-    });
-    setCollLoading(false);
-    if (res.ok) { showToast("success", `Collection "${collForm.name}" created!`); setShowNewColl(false); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
-    else showToast("error", "Failed to create collection");
+    try {
+      const res = await fetch("/api/collections", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(collForm),
+      });
+      if (res.ok) { showToast("success", `Collection "${collForm.name}" created!`); setShowNewColl(false); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
+      else { const d = await res.json().catch(() => ({})); showToast("error", d.error || "Failed to create collection"); }
+    } catch { showToast("error", "Network error creating collection"); }
+    finally { setCollLoading(false); }
   };
 
   const saveCollEdit = async () => {
     if (!editColl) return;
     setCollLoading(true);
-    const res = await fetch(`/api/collections/${editColl.id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(collForm),
-    });
-    setCollLoading(false);
-    if (res.ok) { showToast("success", "Collection updated!"); setEditColl(null); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
-    else showToast("error", "Failed to update");
+    try {
+      const res = await fetch(`/api/collections/${editColl.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(collForm),
+      });
+      if (res.ok) { showToast("success", "Collection updated!"); setEditColl(null); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); loadCollections(); }
+      else { const d = await res.json().catch(() => ({})); showToast("error", d.error || "Failed to update"); }
+    } catch { showToast("error", "Network error updating collection"); }
+    finally { setCollLoading(false); }
   };
 
   const deleteCollection = async (c: Collection) => {
     if (!confirm(`Delete collection "${c.name}"? Quizzes will NOT be deleted.`)) return;
-    await fetch(`/api/collections/${c.id}`, { method: "DELETE" });
-    if (activeCollection === c.id) setActiveCollection(null);
-    showToast("success", `"${c.name}" deleted`);
-    loadCollections();
-    load(); // refresh collectionIds
+    try {
+      const res = await fetch(`/api/collections/${c.id}`, { method: "DELETE" });
+      if (res.ok) {
+        if (activeCollection === c.id) setActiveCollection(null);
+        showToast("success", `"${c.name}" deleted`);
+        loadCollections();
+        load();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showToast("error", d.error || "Failed to delete collection");
+      }
+    } catch { showToast("error", "Network error deleting collection"); }
   };
 
   const addSelectedToCollection = async (collId: string) => {
     if (visibleSelected.length === 0) return;
-    const res = await fetch(`/api/collections/${collId}/quizzes`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ quizIds: visibleSelected }),
-    });
-    if (res.ok) { showToast("success", `Added ${visibleSelected.length} quiz(zes) to collection!`); setShowAddToColl(false); load(); loadCollections(); }
-    else showToast("error", "Failed to add to collection");
+    try {
+      const res = await fetch(`/api/collections/${collId}/quizzes`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quizIds: visibleSelected }),
+      });
+      if (res.ok) { showToast("success", `Added ${visibleSelected.length} quiz(zes) to collection!`); setShowAddToColl(false); load(); loadCollections(); }
+      else { const d = await res.json().catch(() => ({})); showToast("error", d.error || "Failed to add to collection"); }
+    } catch { showToast("error", "Network error adding to collection"); }
   };
 
   const removeFromCollection = async (quizId: string, collId: string) => {
-    await fetch(`/api/collections/${collId}/quizzes`, {
-      method: "DELETE", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ quizIds: [quizId] }),
-    });
-    showToast("success", "Removed from collection");
-    load(); loadCollections();
+    try {
+      const res = await fetch(`/api/collections/${collId}/quizzes`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quizIds: [quizId] }),
+      });
+      if (res.ok) { showToast("success", "Removed from collection"); load(); loadCollections(); }
+      else { const d = await res.json().catch(() => ({})); showToast("error", d.error || "Failed to remove from collection"); }
+    } catch { showToast("error", "Network error removing from collection"); }
   };
 
   // ── Progress helpers ───────────────────────────────────────────────
@@ -689,19 +718,15 @@ export default function LibraryPage() {
 
           {/* Per-quiz progress */}
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {Array.from({ length: progress.total }, (_, i) => {
-              const isDone = i < progress.sent;
-              const isFailed = i >= progress.sent && i < progress.sent + progress.failed;
-              const isCurrent = progress.active && i === progress.sent + progress.failed;
-              return (
-                <div key={i} style={{
-                  width: 10, height: 10, borderRadius: "var(--radius-full)",
-                  background: isDone ? "var(--clr-success)" : isFailed ? "var(--clr-danger)" :
-                    isCurrent ? "var(--clr-brand)" : "var(--clr-bg-hover)",
-                  transition: "background 0.3s",
+            {progress.statuses.map((status, i) => (
+              <div key={i} style={{
+                width: 10, height: 10, borderRadius: "var(--radius-full)",
+                background: status === "sent" ? "var(--clr-success)" : status === "failed" ? "var(--clr-danger)" :
+                  status === "sending" ? "var(--clr-brand)" : "var(--clr-bg-hover)",
+                transition: "background 0.3s",
+                animation: status === "sending" ? "glow-pulse 1s infinite" : undefined,
                 }} />
-              );
-            })}
+            ))}
           </div>
 
           {/* Errors */}
@@ -798,7 +823,8 @@ export default function LibraryPage() {
                   padding: "var(--space-4)",
                   border: `1px solid ${isSent ? "var(--clr-success)" : isSelected ? "var(--clr-brand)" : "var(--clr-border)"}`,
                   background: isSent ? "rgba(52,211,153,0.04)" : isSelected ? "var(--clr-brand-muted)" : "var(--clr-bg-card)",
-                  transition: "all 0.15s",
+                  boxShadow: isSelected ? "0 4px 20px rgba(99, 102, 241, 0.18)" : undefined,
+                  transition: "all 0.18s ease",
                   cursor: isEditing ? "default" : "pointer",
                   opacity: isSent ? 0.75 : 1,
                 }}
@@ -829,23 +855,23 @@ export default function LibraryPage() {
                     })}
                     {t.tags?.map(tag => <span key={tag} className="badge badge-muted" style={{ fontSize: "0.68rem", cursor: "pointer" }} onClick={e => { e.stopPropagation(); setTagFilter(tag); }}>#{tag}</span>)}
                   </div>
-                  <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
-                    {!isEditing && !isSent && (
+                  <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
+                    {!isEditing && (
                       <>
-                        <button className="btn btn-ghost btn-sm" title="Edit" style={{ fontSize: "0.78rem" }} onClick={() => startEdit(t)}>✏️</button>
-                        <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
-                        <a className="btn btn-ghost btn-sm" title="Open in Quiz Creator"
-                          href={`/dashboard/${groupId}/quiz/new?draft=${encodeURIComponent(JSON.stringify({ question: t.question, options: t.options, type: t.type === "QUIZ" ? "quiz" : "poll", correctOptionId: t.correctOptionId, explanation: t.explanation, isAnonymous: t.isAnonymous, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags, topicId: t.topicId, topicName: t.topicName, collectionIds: t.collectionIds }))}`}
-                          style={{ fontSize: "0.78rem", textDecoration: "none" }}>🔗</a>
-                        <button className="btn btn-ghost btn-sm" title="Send now" style={{ color: "var(--clr-success)", fontSize: "0.78rem" }}
-                          onClick={() => handleSendOne(t)} disabled={!!progress?.active}>🚀</button>
-                        <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
-                      </>
-                    )}
-                    {!isEditing && isSent && (
-                      <>
-                        <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.78rem" }} onClick={() => duplicateOne(t)}>⧉</button>
-                        <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.78rem" }} onClick={() => deleteOne(t.id)}>🗑</button>
+                        <button className="btn btn-ghost btn-sm" title="Edit" style={{ fontSize: "0.82rem", padding: "4px 8px" }} onClick={() => startEdit(t)}>✏️</button>
+                        <button className="btn btn-ghost btn-sm" title="Duplicate" style={{ fontSize: "0.82rem", padding: "4px 8px" }} onClick={() => duplicateOne(t)}>⧉</button>
+                        <button className="btn btn-ghost btn-sm" title="Open in Quiz Creator"
+                          style={{ fontSize: "0.82rem", padding: "4px 8px" }}
+                          onClick={() => {
+                            const draft = { question: t.question, options: t.options, type: t.type === "QUIZ" ? "quiz" : "poll", correctOptionId: t.correctOptionId, explanation: t.explanation, isAnonymous: t.isAnonymous, allowsMultiple: t.allowsMultiple, openPeriod: t.openPeriod, tags: t.tags, topicId: t.topicId, topicName: t.topicName, collectionIds: t.collectionIds };
+                            try { sessionStorage.setItem("quiz-draft", JSON.stringify(draft)); } catch { /* storage full — ignore */ }
+                            window.open(`/dashboard/${groupId}/quiz/new?fromLibrary=1`, "_blank");
+                          }}>🔗</button>
+                        {!isSent && (
+                          <button className="btn btn-ghost btn-sm" title="Send now" style={{ color: "var(--clr-success)", fontSize: "0.82rem", padding: "4px 8px" }}
+                            onClick={() => handleSendOne(t)} disabled={!!progress?.active}>🚀</button>
+                        )}
+                        <button className="btn btn-ghost btn-sm" title="Delete" style={{ color: "var(--clr-danger)", fontSize: "0.82rem", padding: "4px 8px" }} onClick={() => deleteOne(t.id)}>🗑</button>
                       </>
                     )}
                     {isEditing && (
@@ -1192,25 +1218,37 @@ export default function LibraryPage() {
                 ) : (
                   /* View mode */
                   <>
-                    <div style={{ fontWeight: 500, marginBottom: 8, lineHeight: 1.45, wordBreak: "break-word", fontSize: "0.9rem" }}>{t.question}</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ fontWeight: 500, marginBottom: 10, lineHeight: 1.5, wordBreak: "break-word", fontSize: "0.92rem" }}>{t.question}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                       {t.options.map((o, i) => (
                         <div key={i} style={{
-                          padding: "4px 10px", borderRadius: "var(--radius-sm)", fontSize: "0.82rem",
-                          background: t.correctOptionId === i ? "var(--clr-success-muted)" : "rgba(255,255,255,0.02)",
-                          border: `1px solid ${t.correctOptionId === i ? "var(--clr-success)" : "transparent"}`,
+                          padding: "6px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.82rem",
+                          display: "flex", alignItems: "center", gap: 8,
+                          background: t.correctOptionId === i ? "var(--clr-success-muted)" : "var(--clr-bg-elevated)",
+                          border: `1px solid ${t.correctOptionId === i ? "var(--clr-success)" : "var(--clr-border)"}`,
                           color: t.correctOptionId === i ? "var(--clr-success)" : "var(--clr-text-secondary)",
+                          transition: "all 0.15s",
                         }}>
-                          <b>{String.fromCharCode(65 + i)}.</b> {o}
+                          <span style={{
+                            width: 22, height: 22, borderRadius: "var(--radius-full)",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: "0.72rem", fontWeight: 700, flexShrink: 0,
+                            background: t.correctOptionId === i ? "var(--clr-success)" : "var(--clr-bg-hover)",
+                            color: t.correctOptionId === i ? "white" : "var(--clr-text-muted)",
+                          }}>
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                          <span style={{ flex: 1 }}>{o}</span>
+                          {t.correctOptionId === i && <span style={{ fontSize: "0.72rem" }}>✓</span>}
                         </div>
                       ))}
                     </div>
                     {t.explanation && (
-                      <div style={{ marginTop: 8, fontSize: "0.76rem", color: "var(--clr-text-muted)", padding: "5px 10px", background: "rgba(0,0,0,0.2)", borderRadius: 6 }}>
+                      <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "8px 12px", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-sm)", borderLeft: "3px solid var(--clr-brand)" }}>
                         💡 {t.explanation}
                       </div>
                     )}
-                    <div style={{ marginTop: 8 }} onClick={e => e.stopPropagation()}>
+                    <div style={{ marginTop: 10 }} onClick={e => e.stopPropagation()}>
                       <select
                         className="select"
                         style={{ fontSize: "0.75rem", padding: "3px 8px", height: 28, width: "100%", maxWidth: 240 }}
@@ -1221,17 +1259,17 @@ export default function LibraryPage() {
                         {topics.map(tp => <option key={tp.message_thread_id} value={tp.message_thread_id}>📂 {tp.name} {t.topicId === tp.message_thread_id ? "(saved)" : ""}</option>)}
                       </select>
                     </div>
-                    <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", fontSize: "0.72rem", color: "var(--clr-text-muted)", alignItems: "center" }}>
-                      {t.isAnonymous && <span>🔒 Anon</span>}
-                      {t.openPeriod ? <span>⏱ {t.openPeriod}s</span> : null}
-                      {t.allowsMultiple && <span>☑ Multi</span>}
-                      {t.topicName && <span>📂 {t.topicName}</span>}
+                    <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", fontSize: "0.73rem", color: "var(--clr-text-muted)", alignItems: "center", paddingTop: 8, borderTop: "1px solid var(--clr-border)" }}>
+                      {t.isAnonymous && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 20, background: "var(--clr-bg-elevated)" }}>🔒 Anon</span>}
+                      {t.openPeriod ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 20, background: "var(--clr-bg-elevated)" }}>⏱ {t.openPeriod}s</span> : null}
+                      {t.allowsMultiple && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 20, background: "var(--clr-bg-elevated)" }}>☑ Multi</span>}
+                      {t.topicName && <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 20, background: "var(--clr-bg-elevated)" }}>📂 {t.topicName}</span>}
                       {/* Collection badges */}
                       {t.collectionIds && t.collectionIds.length > 0 && t.collectionIds.map(cid => {
                         const col = collections.find(c => c.id === cid);
                         if (!col) return null;
                         return (
-                          <span key={cid} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", borderRadius: 10, background: col.color + "22", color: col.color, border: `1px solid ${col.color}44`, fontSize: "0.68rem", fontWeight: 500 }}>
+                          <span key={cid} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 20, background: col.color + "22", color: col.color, border: `1px solid ${col.color}44`, fontSize: "0.68rem", fontWeight: 500 }}>
                             {col.emoji} {col.name}
                             {activeCollection === cid && (
                               <button onClick={e => { e.stopPropagation(); removeFromCollection(t.id, cid); }}
@@ -1247,6 +1285,48 @@ export default function LibraryPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Floating selection bar ── */}
+      {visibleSelected.length > 0 && !progress?.active && (
+        <div style={{
+          position: "fixed",
+          bottom: 24,
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 900,
+          background: "var(--clr-bg-card)",
+          border: "1px solid var(--clr-brand)",
+          boxShadow: "0 16px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--clr-brand)",
+          borderRadius: "var(--radius-full)",
+          padding: "8px 16px",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
+          animation: "fadeUp 0.25s ease-out",
+        }}>
+          <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--clr-text-primary)", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+            <span style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--clr-brand)", color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 700 }}>
+              {visibleSelected.length}
+            </span>
+            <span>selected</span>
+          </span>
+          <div style={{ width: 1, height: 18, background: "var(--clr-border)" }} />
+          <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.8rem", padding: "4px 10px", whiteSpace: "nowrap" }} onClick={() => setShowAddToColl(true)}>
+            📁 Collection
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", fontSize: "0.8rem", padding: "4px 10px", whiteSpace: "nowrap" }} onClick={deleteSelected}>
+            🗑 Delete
+          </button>
+          <button className="btn btn-primary btn-sm" style={{ fontSize: "0.8rem", padding: "5px 16px", borderRadius: "var(--radius-full)", whiteSpace: "nowrap" }} onClick={handleSendSelected}>
+            🚀 Send {visibleSelected.length}
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.75rem", padding: "2px 6px", color: "var(--clr-text-muted)" }} onClick={selectNone} title="Deselect all">
+            ✕
+          </button>
         </div>
       )}
     </div>

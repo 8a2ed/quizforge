@@ -76,16 +76,24 @@ export default function NewQuizPage() {
   const [saveCollections, setSaveCollections] = useState<{id:string;name:string;emoji:string;color:string}[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load draft from URL (for duplication)
+  // Load draft from URL or sessionStorage (for duplication / library)
   useEffect(() => {
-    const draftParam = searchParams.get("draft");
-    if (draftParam) {
+    let draftRaw = searchParams.get("draft");
+    let fromStorage = false;
+    if (!draftRaw && searchParams.get("fromLibrary")) {
+      try {
+        draftRaw = sessionStorage.getItem("quiz-draft");
+        fromStorage = true;
+      } catch {}
+    }
+
+    if (draftRaw) {
       try {
         let draft: any;
         try {
-          draft = JSON.parse(draftParam);
+          draft = JSON.parse(draftRaw);
         } catch {
-          draft = JSON.parse(decodeURIComponent(draftParam));
+          draft = JSON.parse(decodeURIComponent(draftRaw));
         }
         if (draft.question) setQuestion(draft.question);
         if (draft.options?.length) {
@@ -105,8 +113,11 @@ export default function NewQuizPage() {
         if (draft.topicId && draft.topicName) {
           setSelectedTopic({ message_thread_id: draft.topicId, name: draft.topicName, icon_color: 0 });
         }
+        if (fromStorage) {
+          try { sessionStorage.removeItem("quiz-draft"); } catch {}
+        }
       } catch (err) {
-        console.error("Failed to load draft from URL", err);
+        console.error("Failed to load draft", err);
       }
     }
   }, [searchParams]);
