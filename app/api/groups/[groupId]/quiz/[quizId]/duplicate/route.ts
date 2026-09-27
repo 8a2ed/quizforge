@@ -41,6 +41,9 @@ export async function POST(
       openPeriod: original.openPeriod,
       topicId: original.topicId,
       topicName: original.topicName,
+      tags: original.tags,
+      allowAddingOptions: original.allowAddingOptions,
+      allowRevoting: original.allowRevoting,
     },
   });
 }

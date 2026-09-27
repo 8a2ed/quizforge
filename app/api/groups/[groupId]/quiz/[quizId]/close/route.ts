@@ -15,10 +15,15 @@ export async function POST(
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  let userId: string;
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    const userId = (payload as { sub: string }).sub;
+    userId = (payload as { sub: string }).sub;
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
+  try {
     const membership = await withRetry(() =>
       prisma.groupMember.findUnique({
         where: { userId_groupId: { userId, groupId } },
@@ -33,48 +38,54 @@ export async function POST(
     );
     if (!quiz) return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
     if (quiz.pollClosed) return NextResponse.json({ error: "Poll already closed" }, { status: 400 });
-    if (!quiz.messageId)
-      return NextResponse.json({ error: "No Telegram message ID — cannot close remotely" }, { status: 400 });
 
-    // Call Telegram stopPoll (NOT sendPoll — stopPoll closes the existing poll in place)
     let telegramClosed = false;
     let telegramError: string | null = null;
-    try {
-      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/stopPoll`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: membership.group.chatId,
-          message_id: quiz.messageId,
-        }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        telegramClosed = true;
+    let telegramResult: unknown = null;
 
-        // If returned poll has options and is anonymous, sync voter counts
-        if (data.result && Array.isArray(data.result.options)) {
-          if (quiz.isAnonymous) {
-            await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+    // If messageId exists, attempt Telegram stopPoll API call
+    if (quiz.messageId && BOT_TOKEN) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/stopPoll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: membership.group.chatId,
+            message_id: quiz.messageId,
+          }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          telegramClosed = true;
+          telegramResult = data.result;
+
+          // If returned poll has options and is anonymous, sync voter counts
+          if (data.result && Array.isArray(data.result.options)) {
+            if (quiz.isAnonymous) {
+              await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+            }
+            if ((data.result.total_voter_count || 0) > 0) {
+              await sendPollClosureSummary({ ...quiz, group: membership.group }, data.result);
+            }
           }
-          if ((data.result.total_voter_count || 0) > 0) {
-            await sendPollClosureSummary({ ...quiz, group: membership.group }, data.result);
-          }
+        } else {
+          telegramError = data.description || "Telegram stopPoll failed";
         }
-      } else {
-        telegramError = data.description || "Telegram stopPoll failed";
+      } catch (err) {
+        telegramError = err instanceof Error ? err.message : "Network error";
       }
-    } catch (err) {
-      telegramError = err instanceof Error ? err.message : "Network error";
+    } else if (!quiz.messageId) {
+      telegramError = "No Telegram message ID — closed in QuizForge database only";
     }
 
-    // Always mark closed in DB, even if Telegram failed (message may be deleted)
+    // Always mark closed in DB so history and stats reflect completion
     await withRetry(() =>
       prisma.quiz.update({ where: { id: quizId }, data: { pollClosed: true } })
     );
 
-    return NextResponse.json({ ok: true, telegramClosed, telegramError });
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ ok: true, telegramClosed, telegramError, poll: telegramResult });
+  } catch (error) {
+    console.error("[quiz/close] error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -1863,4 +1863,172 @@ body.sidebar-open {
 
 .clr-border-subtle { border-color: rgba(255,255,255,0.04); }
 
+/* ═══════════════════════════════════════════════════════════
+   HISTORY PAGE & QUIZ CARDS RESPONSIVE SUITE
+═══════════════════════════════════════════════════════════ */
+.history-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.history-kpi-card {
+  background: var(--clr-bg-card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  transition: all var(--duration-normal) var(--ease-out);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.history-kpi-card:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.history-kpi-card.is-active-filter {
+  border-color: var(--clr-brand);
+  background: rgba(99, 102, 241, 0.08);
+  box-shadow: 0 0 0 1px var(--clr-brand), var(--shadow-sm);
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .history-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-2);
+  }
+  .history-kpi-card {
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+  }
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  .history-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.history-card {
+  background: var(--clr-bg-card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  transition: all var(--duration-normal) var(--ease-out);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+}
+
+.history-card:hover {
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5);
+  transform: translateY(-2px);
+}
+
+.history-card.is-active {
+  border-left: 3px solid var(--clr-success);
+}
+
+.history-card.is-closed {
+  border-left: 3px solid var(--clr-border);
+}
+
+.history-card.is-deleted {
+  border-left: 3px solid var(--clr-danger);
+  opacity: 0.75;
+}
+
+/* History Table Styling & Mobile Details */
+.history-table-row {
+  transition: background var(--duration-fast);
+  cursor: pointer;
+}
+
+.history-table-row:hover td {
+  background: var(--clr-bg-elevated);
+}
+
+.history-table-row.is-expanded td {
+  background: rgba(99, 102, 241, 0.06);
+  border-bottom: 1px dashed var(--clr-border-subtle);
+}
+
+.history-table-detail-row td {
+  display: table-cell !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: var(--space-4) !important;
+  background: var(--clr-bg-card) !important;
+  border-bottom: 2px solid var(--clr-border) !important;
+}
+
+.history-table-detail-row td::before {
+  display: none !important;
+}
+
+.history-table-detail-row td > div {
+  max-width: 100% !important;
+  text-align: inherit !important;
+}
+
+@media (max-width: 768px) {
+  .history-table-detail-row {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    border-top: 1px dashed var(--clr-border) !important;
+    border-bottom: 2px solid var(--clr-brand) !important;
+    background: var(--clr-bg-card) !important;
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-3);
+  }
+  .history-table-detail-row td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: var(--space-3) !important;
+    border: none !important;
+  }
+}
+
+@keyframes pulse-live {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.pulsing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--clr-success);
+  display: inline-block;
+  box-shadow: 0 0 8px var(--clr-success);
+  animation: pulse-live 1.8s infinite ease-in-out;
+}
+
+
 
