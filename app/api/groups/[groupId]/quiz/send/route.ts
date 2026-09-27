@@ -92,10 +92,15 @@ export async function POST(
 
   const chatId = auth.membership.group.chatId;
   const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
-  const isFuture = scheduledDate && scheduledDate > new Date();
+  const isFuture = scheduledDate && scheduledDate.getTime() > Date.now();
 
-  if (scheduledAt && scheduledDate && scheduledDate.getTime() < Date.now() + 30_000) {
-    return NextResponse.json({ error: "Scheduled time must be at least 1 minute in the future." }, { status: 400 });
+  if (scheduledAt) {
+    if (!scheduledDate || isNaN(scheduledDate.getTime())) {
+      return NextResponse.json({ error: "Invalid scheduled date/time." }, { status: 400 });
+    }
+    if (scheduledDate.getTime() < Date.now() + 30_000) {
+      return NextResponse.json({ error: "Scheduled time must be at least 1 minute in the future." }, { status: 400 });
+    }
   }
 
   // Sanitize tags
@@ -107,29 +112,40 @@ export async function POST(
       .slice(0, 5); // max 5 tags
   }
 
+  // Telegram open_period must be between 5 and 600 seconds
+  let telegramOpenPeriod: number | undefined = undefined;
+  if (openPeriod && Number(openPeriod) > 0) {
+    const parsedPeriod = Number(openPeriod);
+    if (!isNaN(parsedPeriod)) {
+      telegramOpenPeriod = Math.min(600, Math.max(5, Math.round(parsedPeriod)));
+    }
+  }
+
   // Shared DB payload
+  const effectiveMediaUrl = mediaUrl?.trim() || (mediaBase64 ? `data:${mediaMimeType || "image/jpeg"};base64,${mediaBase64}` : null);
+
   const quizData = {
     question: cleanQuestion,
     options: cleanOptions,
     correctOptionId: type === "quiz" ? correctOptionId : null,
     explanation: cleanExplanation,
     type: type === "quiz" ? "QUIZ" as const : "POLL" as const,
-    isAnonymous,
-    allowsMultiple: type === "poll" ? allowsMultiple : false,
-    openPeriod: openPeriod || null,
+    isAnonymous: Boolean(isAnonymous),
+    allowsMultiple: type === "poll" ? Boolean(allowsMultiple) : false,
+    openPeriod: telegramOpenPeriod || null,
     topicId: topicId || null,
     topicName: topicName || null,
-    mediaUrl: mediaUrl?.trim() || null,
+    mediaUrl: effectiveMediaUrl,
     recurrence: recurrence || null,
     tags: sanitizedTags,
-    allowAddingOptions: type === "poll" ? allowAddingOptions : false,
-    allowRevoting: type === "poll" ? allowRevoting : false,
+    allowAddingOptions: type === "poll" ? Boolean(allowAddingOptions) : false,
+    allowRevoting: type === "poll" ? Boolean(allowRevoting) : false,
     groupId,
     sentById: auth.userId,
   };
 
   // ── Scheduled: save for cron ──────────────────────────────────────────────
-  if (isFuture) {
+  if (isFuture && scheduledDate) {
     const quiz = await withRetry(() => prisma.quiz.create({
       data: { ...quizData, scheduledAt: scheduledDate, sentAt: null },
       include: { sentBy: { select: { firstName: true, username: true } } },
@@ -179,7 +195,6 @@ export async function POST(
           message_thread_id: topicId || undefined,
           photo: mediaUrl.trim(),
           caption: cleanQuestion,
-          parse_mode: "HTML",
         });
         replyToMessageId = photoMsg.message_id;
       }
@@ -189,37 +204,37 @@ export async function POST(
     }
   }
 
-  // Step 2: Configure open_period (<= 600s) vs close_date (> 600s)
-  let telegramOpenPeriod: number | undefined = undefined;
-  let telegramCloseDate: number | undefined = undefined;
-  if (openPeriod && openPeriod > 0) {
-    if (openPeriod <= 600) {
-      telegramOpenPeriod = Math.max(5, openPeriod);
-    } else {
-      telegramCloseDate = Math.floor(Date.now() / 1000) + openPeriod;
-    }
-  }
-
-  // Step 3: Send the poll
+  // Step 2: Send the poll with resilience against parse mode failures
   let message;
+  const wantsHtmlExplanation = Boolean(cleanExplanation && /<[a-z][\s\S]*>/i.test(cleanExplanation));
+  const basePollPayload = {
+    chat_id: chatId,
+    message_thread_id: topicId || undefined,
+    question: cleanQuestion,
+    options: cleanOptions.map((o: string) => ({ text: o })),
+    type: type === "quiz" ? ("quiz" as const) : ("regular" as const),
+    is_anonymous: Boolean(isAnonymous),
+    correct_option_id: type === "quiz" ? correctOptionId : undefined,
+    explanation: cleanExplanation || undefined,
+    explanation_parse_mode: wantsHtmlExplanation ? ("HTML" as const) : undefined,
+    allows_multiple_answers: type === "poll" ? Boolean(allowsMultiple) : false,
+    open_period: telegramOpenPeriod,
+    reply_to_message_id: replyToMessageId,
+  };
+
   try {
-    message = await telegram.sendPoll({
-      chat_id: chatId,
-      message_thread_id: topicId || undefined,
-      question: cleanQuestion,
-      options: cleanOptions.map((o: string) => ({ text: o })),
-      type: type === "quiz" ? "quiz" : "regular",
-      is_anonymous: isAnonymous,
-      correct_option_id: type === "quiz" ? correctOptionId : undefined,
-      explanation: cleanExplanation || undefined,
-      explanation_parse_mode: cleanExplanation ? "HTML" : undefined,
-      allows_multiple_answers: type === "poll" ? allowsMultiple : false,
-      allows_adding_options: type === "poll" ? allowAddingOptions : false,
-      allows_revoting: type === "poll" ? allowRevoting : false,
-      open_period: telegramOpenPeriod,
-      close_date: telegramCloseDate,
-      reply_to_message_id: replyToMessageId,
-    });
+    try {
+      message = await telegram.sendPoll(basePollPayload);
+    } catch (pollErr: any) {
+      // If Telegram failed due to unescaped HTML tags in explanation, retry as plain text
+      if (basePollPayload.explanation_parse_mode && String(pollErr?.message || "").includes("parse entities")) {
+        const fallbackPayload = { ...basePollPayload };
+        delete fallbackPayload.explanation_parse_mode;
+        message = await telegram.sendPoll(fallbackPayload);
+      } else {
+        throw pollErr;
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to send to Telegram";
     const hint = msg.includes("bot was kicked") || msg.includes("chat not found")

@@ -56,14 +56,28 @@ export async function GET(req: Request) {
         let replyToMessageId: number | undefined;
         if (quiz.mediaUrl) {
           try {
-            const photoMsg = await telegram.sendPhoto({
-              chat_id: quiz.group.chatId,
-              message_thread_id: quiz.topicId || undefined,
-              photo: quiz.mediaUrl,
-              caption: quiz.question,
-              parse_mode: "HTML",
-            });
-            replyToMessageId = photoMsg.message_id;
+            let photoMsg;
+            if (quiz.mediaUrl.startsWith("data:")) {
+              const match = quiz.mediaUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (match) {
+                photoMsg = await telegram.sendPhotoBase64({
+                  chat_id: quiz.group.chatId,
+                  message_thread_id: quiz.topicId || undefined,
+                  photoBase64: match[2],
+                  mimeType: match[1],
+                  caption: quiz.question,
+                });
+              }
+            } else {
+              photoMsg = await telegram.sendPhoto({
+                chat_id: quiz.group.chatId,
+                message_thread_id: quiz.topicId || undefined,
+                photo: quiz.mediaUrl,
+                caption: quiz.question,
+                parse_mode: "HTML",
+              });
+            }
+            if (photoMsg) replyToMessageId = photoMsg.message_id;
           } catch (e) { console.warn(`[Cron] Photo failed for ${quiz.id}:`, e); }
         }
 
