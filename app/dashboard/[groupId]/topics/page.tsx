@@ -307,7 +307,7 @@ export default function TopicsPage() {
     <div style={{ maxWidth: 1000, margin: "0 auto", paddingBottom: "var(--space-12)" }}>
       {/* Toast Notification */}
       {toast && (
-        <div className="toast-container" style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999 }}>
+        <div className="toast-container">
           <div className={`toast toast-${toast.type}`} style={{
             display: "flex", alignItems: "center", gap: 8, padding: "12px 18px",
             background: toast.type === "success" ? "#064e3b" : toast.type === "error" ? "#7f1d1d" : "#1e293b",
@@ -482,7 +482,7 @@ export default function TopicsPage() {
           </button>
         </div>
 
-        <div style={{
+        <div className="topics-add-grid" style={{
           display: "grid",
           gridTemplateColumns: showManualLink ? "140px 1fr auto" : "1fr auto auto",
           gap: "var(--space-3)",
@@ -655,7 +655,7 @@ export default function TopicsPage() {
                     )}
 
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: "0.95rem", color: "var(--clr-text-primary)" }}>
+                      <div style={{ fontWeight: 600, fontSize: "0.95rem", color: "var(--clr-text-primary)" }} dir="auto">
                         {topic.name}
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
@@ -807,7 +807,7 @@ export default function TopicsPage() {
           display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16
         }}>
           <div className="card" style={{ maxWidth: 480, width: "100%", padding: "var(--space-6)" }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: "1.15rem", fontWeight: 700, color: "var(--clr-danger)" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: "1.15rem", fontWeight: 700, color: "var(--clr-danger)" }} dir="auto">
               🗑️ حذف موضوع &quot;{deletingTopic.name}&quot;
             </h3>
             <p style={{ fontSize: "0.88rem", color: "var(--clr-text-secondary)", lineHeight: 1.6, marginBottom: "var(--space-4)" }}>
@@ -846,6 +846,14 @@ export default function TopicsPage() {
           </div>
         </div>
       )}
+
+      <style>{`
+        @media (max-width: 640px) {
+          .topics-add-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

@@ -161,7 +161,7 @@ export default function MessagesPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: "var(--space-5)", alignItems: "start" }}>
+      <div className="messages-grid" style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: "var(--space-5)", alignItems: "start" }}>
 
         {/* ── Left: Contact Picker ── */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
@@ -170,7 +170,7 @@ export default function MessagesPage() {
               <h3 style={{ margin: 0, fontSize: "0.9rem" }}>
                 👥 Recipients
                 {selected.size > 0 && (
-                  <span style={{ marginLeft: 8, padding: "2px 8px", background: "var(--clr-brand)", color: "white", borderRadius: 10, fontSize: "0.72rem", fontWeight: 700 }}>
+                  <span style={{ marginInlineStart: 8, padding: "2px 8px", background: "var(--clr-brand)", color: "white", borderRadius: 10, fontSize: "0.72rem", fontWeight: 700 }}>
                     {selected.size}
                   </span>
                 )}
@@ -184,10 +184,10 @@ export default function MessagesPage() {
             {/* Search */}
             <div style={{ position: "relative", marginBottom: 10 }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
+                style={{ position: "absolute", insetInlineStart: 9, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
               </svg>
-              <input className="input" style={{ paddingLeft: 28, fontSize: "0.82rem" }}
+              <input className="input" style={{ paddingInlineStart: 28, fontSize: "0.82rem" }}
                 placeholder="Search by name or @username…"
                 value={contactSearch} onChange={e => setContactSearch(e.target.value)} />
             </div>
@@ -223,7 +223,7 @@ export default function MessagesPage() {
                       display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
                       background: isSel ? "var(--clr-brand-muted)" : "var(--clr-bg-elevated)",
                       border: `1px solid ${isSel ? "var(--clr-brand)" : "var(--clr-border)"}`,
-                      borderRadius: 8, cursor: "pointer", textAlign: "left", transition: "all 0.15s",
+                      borderRadius: 8, cursor: "pointer", textAlign: "start", transition: "all 0.15s",
                     }}>
                     <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--clr-bg-card)", border: `2px solid ${isSel ? "var(--clr-brand)" : "transparent"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.8rem", fontWeight: 700, flexShrink: 0, overflow: "hidden" }}>
                       {c.photoUrl ? <img src={c.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : c.firstName.charAt(0).toUpperCase()}
@@ -234,7 +234,7 @@ export default function MessagesPage() {
                       </div>
                       <div style={{ fontSize: "0.68rem", color: "var(--clr-text-muted)" }}>
                         {c.username ? `@${c.username}` : `ID: ${c.telegramId}`}
-                        <span style={{ marginLeft: 4, color: c.source === "admin" ? "var(--clr-warning)" : "var(--clr-accent)", fontWeight: 500 }}>
+                        <span style={{ marginInlineStart: 4, color: c.source === "admin" ? "var(--clr-warning)" : "var(--clr-accent)", fontWeight: 500 }}>
                           · {c.source === "admin" ? "admin" : "student"}
                         </span>
                       </div>
@@ -328,7 +328,7 @@ export default function MessagesPage() {
                     value={text} onChange={e => setText(e.target.value)}
                     style={{ resize: "vertical", fontFamily: "var(--font-mono, monospace)", fontSize: "0.85rem" }} />
                 )}
-                <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", textAlign: "right" }}>{text.length} chars</div>
+                <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", textAlign: "end" }}>{text.length} chars</div>
               </div>
             )}
 
@@ -339,7 +339,7 @@ export default function MessagesPage() {
                   <label className="input-label">
                     {msgType === "photo" ? "🖼️" : msgType === "document" ? "📄" : msgType === "audio" ? "🎵" : "🎬"} {" "}
                     {msgType.charAt(0).toUpperCase() + msgType.slice(1)} URL
-                    <span style={{ fontWeight: 400, color: "var(--clr-text-muted)", marginLeft: 6 }}>
+                    <span style={{ fontWeight: 400, color: "var(--clr-text-muted)", marginInlineStart: 6 }}>
                       (public HTTPS link)
                     </span>
                   </label>
@@ -507,6 +507,14 @@ export default function MessagesPage() {
           )}
         </div>
       </div>
+
+      <style>{`
+        @media (max-width: 800px) {
+          .messages-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

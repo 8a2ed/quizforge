@@ -462,8 +462,9 @@ export default function ExamsPage() {
             >
               📥 Export CSV
             </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => { setViewResults(null); setMode("list"); }}>
-              ← Back to Exams
+            <button className="btn btn-secondary btn-sm" onClick={() => { setViewResults(null); setMode("list"); }} style={{ gap: 6 }}>
+              <span className="flip-rtl">←</span>
+              <span>Back to Exams</span>
             </button>
           </div>
         </div>
@@ -684,7 +685,7 @@ export default function ExamsPage() {
                           <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</div>
                           <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
                             {r.telegramId ? (
-                              <span style={{ color: "var(--clr-brand)", marginRight: 6 }}>
+                              <span style={{ color: "var(--clr-brand)", marginInlineEnd: 6 }}>
                                 ID: {r.telegramId}
                               </span>
                             ) : null}
@@ -695,7 +696,7 @@ export default function ExamsPage() {
                         {/* Metrics: Score + Duration */}
                         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                           {!inProgress && (
-                            <div style={{ textAlign: "right" }}>
+                            <div style={{ textAlign: "end" }}>
                               <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
                                 🎯 {r.correctCount} / {r.totalQuestions}
                               </div>
@@ -706,7 +707,7 @@ export default function ExamsPage() {
                           )}
 
                           {durationFormatted && (
-                            <div style={{ textAlign: "right" }}>
+                            <div style={{ textAlign: "end" }}>
                               <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
                                 ⏱ {durationFormatted}
                               </div>
@@ -753,8 +754,8 @@ export default function ExamsPage() {
                                 }}
                               >
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
-                                  <div style={{ fontWeight: 600, fontSize: "0.88rem", flex: 1 }}>
-                                    <span style={{ color: "var(--clr-text-muted)", marginRight: 6 }}>Q{qIdx + 1}:</span>
+                                  <div style={{ fontWeight: 600, fontSize: "0.88rem", flex: 1 }} dir="auto">
+                                    <span style={{ color: "var(--clr-text-muted)", marginInlineEnd: 6 }}>Q{qIdx + 1}:</span>
                                     {item.question}
                                   </div>
                                   <span
@@ -862,7 +863,7 @@ export default function ExamsPage() {
                             <div
                               style={{
                                 position: "absolute",
-                                left: 0,
+                                insetInlineStart: 0,
                                 top: 0,
                                 bottom: 0,
                                 width: `${pct}%`,
@@ -1160,12 +1161,12 @@ export default function ExamsPage() {
               <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 150 }}>
                   <div style={{ fontWeight: 700, fontSize: "0.95rem", marginBottom: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    {exam.title}
+                    <span dir="auto">{exam.title}</span>
                     {exam.isPublished
                       ? <span className="badge badge-success" style={{ fontSize: "0.65rem" }}>✅ Live</span>
                       : <span className="badge badge-muted" style={{ fontSize: "0.65rem" }}>Draft</span>}
                   </div>
-                  {exam.description && <p style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", margin: "0 0 6px" }}>{exam.description}</p>}
+                  {exam.description && <p dir="auto" style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", margin: "0 0 6px" }}>{exam.description}</p>}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>📊 {(exam.questions as Question[]).length} questions</span>
                     {exam.timeLimit && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>⏱ {Math.floor(exam.timeLimit / 60)}m</span>}

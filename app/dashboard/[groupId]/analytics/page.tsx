@@ -247,7 +247,7 @@ export default function AnalyticsPage() {
                 : items.map((q, i) => (
                   <div key={q.id} style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: 3 }}>
-                      <span style={{ color: "var(--clr-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }}>
+                      <span style={{ color: "var(--clr-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }} dir="auto">
                         {i + 1}. {q.question}
                       </span>
                       <span style={{ fontWeight: 700, color, flexShrink: 0 }}>{q.rate}%</span>
@@ -286,12 +286,12 @@ export default function AnalyticsPage() {
                         {i + 1}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: "0.78rem", color: "var(--clr-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 3 }}>{d.question}</div>
+                        <div style={{ fontSize: "0.78rem", color: "var(--clr-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 3 }} dir="auto">{d.question}</div>
                         <div style={{ height: 8, background: "var(--clr-bg-hover)", borderRadius: 99, overflow: "hidden" }}>
                           <div style={{ width: `${Math.round((d.answers / maxDropoff) * 100)}%`, height: "100%", background: i === dropoffIdx ? "#f87171" : "#4f7fff", borderRadius: 99, transition: "width 0.6s" }} />
                         </div>
                       </div>
-                      <span style={{ fontSize: "0.78rem", fontWeight: 700, color: i === dropoffIdx ? "#f87171" : "var(--clr-text-primary)", minWidth: 24, textAlign: "right" }}>{d.answers}</span>
+                      <span style={{ fontSize: "0.78rem", fontWeight: 700, color: i === dropoffIdx ? "#f87171" : "var(--clr-text-primary)", minWidth: 24, textAlign: "end" }}>{d.answers}</span>
                     </div>
                   ))}
                 </div>
@@ -309,11 +309,11 @@ export default function AnalyticsPage() {
               const max = Math.max(...data.responseRateByTopic.map(x => x.avgResponses), 1);
               return (
                 <div key={t.topic} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", minWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.topic}</span>
+                  <span style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", minWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} dir="auto">{t.topic}</span>
                   <div style={{ flex: 1, height: 8, background: "var(--clr-bg-hover)", borderRadius: 99, overflow: "hidden" }}>
                     <div style={{ width: `${Math.round((t.avgResponses / max) * 100)}%`, height: "100%", background: COLORS[i % COLORS.length], borderRadius: 99, transition: "width 0.6s" }} />
                   </div>
-                  <span style={{ fontSize: "0.8rem", fontWeight: 700, minWidth: 28, textAlign: "right" }}>{t.avgResponses}</span>
+                  <span style={{ fontSize: "0.8rem", fontWeight: 700, minWidth: 28, textAlign: "end" }}>{t.avgResponses}</span>
                 </div>
               );
             })}

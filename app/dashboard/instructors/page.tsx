@@ -246,10 +246,10 @@ export default function InstructorsPage() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--clr-border)" }}>
-                    <th style={{ textAlign: "left", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</th>
-                    <th style={{ textAlign: "left", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Username</th>
-                    <th style={{ textAlign: "left", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Created</th>
-                    <th style={{ textAlign: "right", padding: "var(--space-3) var(--space-4)" }}></th>
+                    <th style={{ textAlign: "start", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</th>
+                    <th style={{ textAlign: "start", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Username</th>
+                    <th style={{ textAlign: "start", padding: "var(--space-3) var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.8rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Created</th>
+                    <th style={{ textAlign: "end", padding: "var(--space-3) var(--space-4)" }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -264,7 +264,7 @@ export default function InstructorsPage() {
                       <td style={{ padding: "var(--space-4)", color: "var(--clr-text-muted)", fontSize: "0.85rem" }}>
                         {new Date(inst.createdAt).toLocaleDateString()}
                       </td>
-                      <td style={{ padding: "var(--space-4)", textAlign: "right" }}>
+                      <td style={{ padding: "var(--space-4)", textAlign: "end" }}>
                         <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
                           <button
                             className="btn btn-secondary btn-sm"

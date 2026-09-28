@@ -126,7 +126,7 @@ export default function SettingsPage() {
                 Test Connection
               </button>
               {testResult && (
-                <div style={{ fontSize: "0.875rem", color: testResult.startsWith("✅") ? "var(--clr-success)" : "var(--clr-danger)", textAlign: "right" }}>
+                <div style={{ fontSize: "0.875rem", color: testResult.startsWith("✅") ? "var(--clr-success)" : "var(--clr-danger)", textAlign: "end" }}>
                   {testResult}
                 </div>
               )}

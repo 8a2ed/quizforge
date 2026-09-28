@@ -2,6 +2,7 @@
 
 import { useEffect, useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useDirection } from "@/lib/useDirection";
 
 const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME || "agridmu_bot";
 
@@ -21,6 +22,7 @@ declare global {
 
 export default function LoginPage() {
   const router = useRouter();
+  const { isRtl, toggleDirection } = useDirection();
   const [isDev, setIsDev] = useState(false);
   const [tab, setTab] = useState<"telegram" | "credentials">("telegram");
   const [credUser, setCredUser] = useState("");
@@ -144,6 +146,26 @@ export default function LoginPage() {
 
       {/* Card */}
       <div className="login-card">
+        {/* Top bar with language switcher */}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "var(--space-4)" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={toggleDirection}
+            title={isRtl ? "Switch to English" : "التبديل إلى العربية"}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "var(--radius-full)",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              gap: 6,
+            }}
+          >
+            <span style={{ fontSize: "0.95rem" }}>🌐</span>
+            <span>{isRtl ? "English" : "العربية"}</span>
+          </button>
+        </div>
+
         {/* Logo */}
         <div className="login-logo">
           <div className="logo-mark" style={{ width: 56, height: 56, borderRadius: 14 }}>
@@ -160,19 +182,27 @@ export default function LoginPage() {
           <div>
             <div className="logo-text" style={{ fontSize: "1.75rem" }}>QuizForge</div>
             <p style={{ color: "var(--clr-text-muted)", fontSize: "0.8rem", marginTop: 2 }}>
-              Telegram Quiz Dashboard
+              {isRtl ? "لوحة التحكم الذكية لكويزات تيليجرام" : "Telegram Quiz Dashboard"}
             </p>
           </div>
         </div>
 
         {/* Feature pills */}
         <div className="login-features">
-          {[
-            { icon: "🎯", label: "Multi-group quiz management" },
-            { icon: "📊", label: "Real-time analytics & insights" },
-            { icon: "⚡", label: "Instant Telegram delivery" },
-            { icon: "👥", label: "Team admin collaboration" },
-          ].map((f) => (
+          {(isRtl
+            ? [
+                { icon: "🎯", label: "إدارة كويزات لمجموعات وقنوات متعددة" },
+                { icon: "📊", label: "تحليلات فورية ومفصلة للأداء" },
+                { icon: "⚡", label: "إرسال لحظي ومباشر عبر تيليجرام" },
+                { icon: "👥", label: "إشراف وصلاحيات مرنة للفريق" },
+              ]
+            : [
+                { icon: "🎯", label: "Multi-group quiz management" },
+                { icon: "📊", label: "Real-time analytics & insights" },
+                { icon: "⚡", label: "Instant Telegram delivery" },
+                { icon: "👥", label: "Team admin collaboration" },
+              ]
+          ).map((f) => (
             <div key={f.label} className="login-feature">
               <span>{f.icon}</span>
               <span>{f.label}</span>
@@ -191,7 +221,7 @@ export default function LoginPage() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.941z"/>
             </svg>
-            Telegram
+            {isRtl ? "تيليجرام" : "Telegram"}
           </button>
           <button
             className={`login-tab ${tab === "credentials" ? "active" : ""}`}
@@ -201,7 +231,7 @@ export default function LoginPage() {
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            Instructor Login
+            {isRtl ? "دخول المعلم" : "Instructor Login"}
           </button>
         </div>
 
@@ -211,17 +241,17 @@ export default function LoginPage() {
             {miniAppLoading ? (
               <div style={{ padding: "var(--space-6)", color: "var(--clr-text-secondary)" }}>
                 <div className="spinner" style={{ margin: "0 auto var(--space-4)" }} />
-                <p style={{ fontSize: "0.9rem" }}>Authenticating via Telegram…</p>
+                <p style={{ fontSize: "0.9rem" }}>{isRtl ? "جاري المصادقة عبر تيليجرام…" : "Authenticating via Telegram…"}</p>
               </div>
             ) : (
               <>
                 {miniAppError && (
-                  <div className="alert alert-error" style={{ marginBottom: "var(--space-4)", textAlign: "left" }}>
+                  <div className="alert alert-error" style={{ marginBottom: "var(--space-4)", textAlign: "start" }}>
                     {miniAppError}
                   </div>
                 )}
                 <p style={{ color: "var(--clr-text-secondary)", marginBottom: "var(--space-5)", fontSize: "0.9rem" }}>
-                  Sign in with your Telegram account to continue
+                  {isRtl ? "سجّل الدخول بحساب تيليجرام للمتابعة إلى لوحة التحكم" : "Sign in with your Telegram account to continue"}
                 </p>
                 <div id="tg-widget" className="tg-widget-container" />
                 {isDev && (
@@ -233,11 +263,11 @@ export default function LoginPage() {
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                     </svg>
-                    Developer Admin Login
+                    {isRtl ? "دخول المطور للتجربة" : "Developer Admin Login"}
                   </a>
                 )}
                 <p style={{ color: "var(--clr-text-muted)", fontSize: "0.75rem", marginTop: "var(--space-4)" }}>
-                  Your identity is verified server-side via HMAC-SHA256 · No password needed
+                  {isRtl ? "يتم التحقق من هويتك بأمان عبر خوارزمية HMAC-SHA256 المشفرة · بدون كلمة مرور" : "Your identity is verified server-side via HMAC-SHA256 · No password needed"}
                 </p>
               </>
             )}
@@ -248,15 +278,15 @@ export default function LoginPage() {
         {tab === "credentials" && (
           <form onSubmit={handleCredLogin} style={{ marginTop: "var(--space-5)" }}>
             <p style={{ color: "var(--clr-text-secondary)", marginBottom: "var(--space-5)", fontSize: "0.9rem", textAlign: "center" }}>
-              Sign in with your instructor credentials
+              {isRtl ? "سجّل الدخول باستخدام اسم المستخدم وكلمة المرور الخاصة بك" : "Sign in with your instructor credentials"}
             </p>
 
             <div className="form-group">
-              <label className="form-label">Username</label>
+              <label className="form-label">{isRtl ? "اسم المستخدم" : "Username"}</label>
               <input
                 type="text"
                 className="form-input"
-                placeholder="your.username"
+                placeholder={isRtl ? "اسم.المستخدم" : "your.username"}
                 value={credUser}
                 onChange={e => setCredUser(e.target.value)}
                 required
@@ -266,7 +296,7 @@ export default function LoginPage() {
             </div>
 
             <div className="form-group" style={{ marginTop: "var(--space-4)" }}>
-              <label className="form-label">Password</label>
+              <label className="form-label">{isRtl ? "كلمة المرور" : "Password"}</label>
               <input
                 type="password"
                 className="form-input"
@@ -300,11 +330,11 @@ export default function LoginPage() {
               style={{ width: "100%", marginTop: "var(--space-5)", justifyContent: "center" }}
               id="cred-login-btn"
             >
-              {credLoading ? "Signing in…" : "Sign In"}
+              {credLoading ? (isRtl ? "جاري الدخول…" : "Signing in…") : (isRtl ? "تسجيل الدخول" : "Sign In")}
             </button>
 
             <p style={{ color: "var(--clr-text-muted)", fontSize: "0.75rem", marginTop: "var(--space-4)", textAlign: "center" }}>
-              Contact your administrator if you don&apos;t have credentials
+              {isRtl ? "تواصل مع مدير المجموعة إذا لم تكن تمتلك بيانات دخول" : "Contact your administrator if you don't have credentials"}
             </p>
           </form>
         )}
@@ -355,6 +385,15 @@ export default function LoginPage() {
           animation:fadeUp 0.5s var(--ease-out) both;
           position:relative;z-index:1;
         }
+        @media (max-width: 480px) {
+          .login-card {
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+          }
+          .login-page {
+            padding: var(--space-4);
+          }
+        }
         .login-card::before {
           content: "";
           position: absolute;
@@ -376,6 +415,9 @@ export default function LoginPage() {
           background:rgba(255,255,255,0.05);
           border-color: rgba(255, 255, 255, 0.09);
           transform: translateX(2px);
+        }
+        [dir="rtl"] .login-feature:hover {
+          transform: translateX(-2px);
         }
         .tg-widget-container { display:flex;justify-content:center;min-height:50px;align-items:center; }
 

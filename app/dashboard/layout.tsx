@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useDirection } from "../../lib/useDirection";
 
 function Icon({ path }: { path: string }) {
   return (
@@ -35,9 +36,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const [user, setUser] = useState<{ firstName: string; username?: string; photoUrl?: string } | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { isRtl, toggleDirection } = useDirection();
 
   // Extract groupId from path — e.g. /dashboard/abc123/history → abc123
-  const groupId = pathname.match(/\/dashboard\/([^/]+)/)?.[1];
+  // Exclude 'instructors' which is a top-level route under /dashboard
+  const match = pathname.match(/\/dashboard\/([^/]+)/)?.[1];
+  const groupId = match === "instructors" ? undefined : match;
 
   // Lock body scroll when mobile sidebar is open
   useEffect(() => {
@@ -64,59 +68,59 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     ? user.firstName.charAt(0).toUpperCase() + (user.firstName.split(" ")[1]?.charAt(0).toUpperCase() || "")
     : "?";
 
-  // Sidebar nav items (organized by domain)
+  // Sidebar nav items (organized by domain) with bilingual labels
   const navSections = groupId
     ? [
         {
-          label: "Dashboard",
+          label: isRtl ? "لوحة التحكم" : "Dashboard",
           items: [
-            { href: `/dashboard/${groupId}`,          icon: ICONS.home,     label: "Overview"    },
-            { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,     label: "Create Quiz" },
-            { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,     label: "Bulk Import" },
+            { href: `/dashboard/${groupId}`,          icon: ICONS.home,     label: isRtl ? "نظرة عامة" : "Overview" },
+            { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,     label: isRtl ? "إنشاء كويز" : "Create Quiz" },
+            { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,     label: isRtl ? "استيراد مجمع" : "Bulk Import" },
           ],
         },
         {
-          label: "Assessments & Content",
+          label: isRtl ? "التقييمات والمحتوى" : "Assessments & Content",
           items: [
-            { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: "Exams"       },
-            { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: "Library"     },
-            { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: "History"     },
-            { href: `/dashboard/${groupId}/scheduled`, icon: ICONS.scheduled, label: "Scheduled"   },
-            { href: `/dashboard/${groupId}/messages`,  icon: ICONS.messages,  label: "Messages"    },
+            { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: isRtl ? "الاختبارات" : "Exams" },
+            { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: isRtl ? "بنك الأسئلة" : "Library" },
+            { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: isRtl ? "سجل الكويزات" : "History" },
+            { href: `/dashboard/${groupId}/scheduled`, icon: ICONS.scheduled, label: isRtl ? "المجدولة" : "Scheduled" },
+            { href: `/dashboard/${groupId}/messages`,  icon: ICONS.messages,  label: isRtl ? "الرسائل" : "Messages" },
           ],
         },
         {
-          label: "Management & Insights",
+          label: isRtl ? "الإدارة والتحليلات" : "Management & Insights",
           items: [
-            { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: "Analytics"  },
-            { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: "Topics"     },
-            { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: "Admins"     },
-            { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: "Settings"   },
+            { href: `/dashboard/${groupId}/analytics`, icon: ICONS.analytics, label: isRtl ? "التحليلات" : "Analytics" },
+            { href: `/dashboard/${groupId}/topics`,    icon: ICONS.topics,    label: isRtl ? "المواضيع والتوبيكس" : "Topics" },
+            { href: `/dashboard/${groupId}/admins`,    icon: ICONS.admins,    label: isRtl ? "المشرفين" : "Admins" },
+            { href: `/dashboard/${groupId}/settings`,  icon: ICONS.settings,  label: isRtl ? "الإعدادات" : "Settings" },
           ],
         },
       ]
     : [
         {
-          label: "Navigation",
+          label: isRtl ? "التنقل الأساسي" : "Navigation",
           items: [
-            { href: "/dashboard",             icon: ICONS.groups,      label: "My Groups"   },
-            { href: "/dashboard/instructors", icon: ICONS.instructors, label: "Instructors" },
+            { href: "/dashboard",             icon: ICONS.groups,      label: isRtl ? "مجموعاتي" : "My Groups" },
+            { href: "/dashboard/instructors", icon: ICONS.instructors, label: isRtl ? "المعلمين" : "Instructors" },
           ],
         },
       ];
 
-  // Bottom tab items — show group tabs when inside a group, else show My Groups
+  // Bottom tab items
   const bottomTabs = groupId
     ? [
-        { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: "Overview" },
-        { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: "Create"   },
-        { href: `/dashboard/${groupId}/exams`,    icon: ICONS.exams,   label: "Exams"    },
-        { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: "Library"  },
-        { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: "History"  },
+        { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: isRtl ? "الرئيسية" : "Overview" },
+        { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: isRtl ? "إنشاء" : "Create"   },
+        { href: `/dashboard/${groupId}/exams`,    icon: ICONS.exams,   label: isRtl ? "اختبارات" : "Exams"    },
+        { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: isRtl ? "المكتبة" : "Library"  },
+        { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: isRtl ? "السجل" : "History"  },
       ]
     : [
-        { href: "/dashboard",             icon: ICONS.groups,      label: "My Groups"   },
-        { href: "/dashboard/instructors", icon: ICONS.instructors, label: "Instructors" },
+        { href: "/dashboard",             icon: ICONS.groups,      label: isRtl ? "مجموعاتي" : "My Groups" },
+        { href: "/dashboard/instructors", icon: ICONS.instructors, label: isRtl ? "المعلمين" : "Instructors" },
       ];
 
   return (
@@ -124,12 +128,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 49, backdropFilter: "blur(6px)" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 65, backdropFilter: "blur(8px)" }}
           onClick={() => setMobileOpen(false)}
         />
       )}
 
-      {/* Sidebar — slides in on mobile */}
+      {/* Sidebar — slides in smoothly on mobile */}
       <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
         <div className="sidebar-logo">
           <div className="logo-mark">
@@ -137,10 +141,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
             <span className="logo-text">QuizForge</span>
             <span className="badge badge-brand" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>PRO</span>
           </div>
+          {mobileOpen && (
+            <button
+              className="btn btn-ghost btn-icon show-mobile"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Close menu"
+              style={{ width: 32, height: 32 }}
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <nav className="sidebar-nav">
@@ -152,7 +166,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               style={{ marginBottom: 4 }}
             >
               <Icon path={ICONS.groups} />
-              ← All Groups
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span className="flip-rtl" style={{ display: "inline-block" }}>←</span>
+                <span>{isRtl ? "كافة المجموعات" : "All Groups"}</span>
+              </span>
             </Link>
           )}
 
@@ -167,7 +184,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   onClick={() => setMobileOpen(false)}
                 >
                   <Icon path={item.icon} />
-                  {item.label}
+                  <span>{item.label}</span>
                 </Link>
               ))}
             </div>
@@ -178,7 +195,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         <div className="sidebar-footer">
           {user && (
-            <div className="user-card" onClick={handleLogout} title="Click to logout">
+            <div className="user-card" onClick={handleLogout} title={isRtl ? "تسجيل الخروج" : "Click to logout"}>
               <div className="avatar">
                 {user.photoUrl ? (
                   <img src={user.photoUrl} alt={user.firstName} />
@@ -191,7 +208,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   <div className="user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {user.firstName}
                   </div>
-                  <span className="status-dot-online" title="Online" />
+                  <span className="status-dot-online" title={isRtl ? "متصل" : "Online"} />
                 </div>
                 {user.username && (
                   <div className="user-handle">@{user.username}</div>
@@ -212,8 +229,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <button
               className="btn btn-ghost btn-icon show-mobile"
               onClick={() => setMobileOpen(true)}
-              aria-label="Open menu"
-              title="Open menu"
+              aria-label={isRtl ? "القائمة" : "Open menu"}
+              title={isRtl ? "القائمة" : "Open menu"}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="3" y1="12" x2="21" y2="12" />
@@ -223,26 +240,54 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </button>
 
             {groupId && (
-              <Link href="/dashboard" className="btn btn-ghost btn-sm hide-mobile">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <Link href="/dashboard" className="btn btn-ghost btn-sm hide-mobile" style={{ gap: 6 }}>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="flip-rtl"
+                >
                   <path d="M15 18l-6-6 6-6"/>
                 </svg>
-                All Groups
+                <span>{isRtl ? "كل المجموعات" : "All Groups"}</span>
               </Link>
             )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+            {/* Language / Direction Toggle */}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm lang-toggle-btn"
+              onClick={toggleDirection}
+              title={isRtl ? "Switch to English" : "التبديل إلى العربية"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 12px",
+                borderRadius: "var(--radius-full)",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+              }}
+            >
+              <span style={{ fontSize: "1rem", lineHeight: 1 }}>🌐</span>
+              <span>{isRtl ? "English" : "العربية"}</span>
+            </button>
+
             {groupId && (
               <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary btn-sm">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M12 5v14M5 12h14"/>
                 </svg>
-                New Quiz
+                <span>{isRtl ? "كويز جديد" : "New Quiz"}</span>
               </Link>
             )}
             {user && (
-              <div className="avatar sm hide-mobile">
+              <div className="avatar sm hide-mobile" title={user.firstName}>
                 {user.photoUrl ? (
                   <img src={user.photoUrl} alt={user.firstName} />
                 ) : (
@@ -260,7 +305,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
 
       {/* Bottom Tab Bar — mobile only via CSS, always rendered */}
-      <nav className="bottom-tab-bar">
+      <nav className="bottom-tab-bar" aria-label="Mobile Navigation">
         {bottomTabs.map((tab) => (
           <Link
             key={tab.href}

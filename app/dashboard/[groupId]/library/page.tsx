@@ -582,7 +582,7 @@ export default function LibraryPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {collections.map(c => (
                   <button key={c.id} onClick={() => addSelectedToCollection(c.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--clr-bg-elevated)", border: "1px solid var(--clr-border)", borderRadius: 10, cursor: "pointer", textAlign: "left" }}
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--clr-bg-elevated)", border: "1px solid var(--clr-border)", borderRadius: 10, cursor: "pointer", textAlign: "start" }}
                     onMouseEnter={e => (e.currentTarget.style.borderColor = c.color)}
                     onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--clr-border)")}>
                     <span style={{ width: 32, height: 32, borderRadius: 8, background: c.color + "33", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.1rem", flexShrink: 0 }}>{c.emoji}</span>
@@ -621,7 +621,7 @@ export default function LibraryPage() {
           </div>
           <p style={{ marginTop: 4 }}>
             {templates.length} template{templates.length !== 1 ? "s" : ""}
-            {sentIds.size > 0 && <span style={{ color: "var(--clr-success)", marginLeft: 10 }}>· {sentIds.size} sent this session</span>}
+            {sentIds.size > 0 && <span style={{ color: "var(--clr-success)", marginInlineStart: 10 }}>· {sentIds.size} sent this session</span>}
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -655,11 +655,11 @@ export default function LibraryPage() {
           <div key={c.id} style={{ display: "flex", flexShrink: 0, position: "relative" }}>
             <button onClick={() => setActiveCollection(c.id)}
               className="btn btn-ghost btn-sm"
-              style={{ border: `1px solid ${activeCollection === c.id ? c.color : "var(--clr-border)"}`, color: activeCollection === c.id ? c.color : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap", paddingRight: 28 }}>
+              style={{ border: `1px solid ${activeCollection === c.id ? c.color : "var(--clr-border)"}`, color: activeCollection === c.id ? c.color : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap", paddingInlineEnd: 28 }}>
               {c.emoji} {c.name} ({c.quizCount})
             </button>
             {activeCollection === c.id && (
-              <div style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
+              <div style={{ position: "absolute", insetInlineEnd: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
                 <button onClick={e => { e.stopPropagation(); setEditColl(c); setCollForm({ name: c.name, emoji: c.emoji, color: c.color }); }}
                   style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.65rem", padding: "2px 3px", color: "var(--clr-text-muted)", lineHeight: 1 }} title="Rename">✏️</button>
                 <button onClick={e => { e.stopPropagation(); deleteCollection(c); }}
@@ -689,7 +689,7 @@ export default function LibraryPage() {
               </div>
               <div style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)", marginTop: 4 }}>
                 {progress.sent} sent · {progress.failed} failed · {progress.total - progress.sent - progress.failed} remaining
-                {progress.active && <span style={{ marginLeft: 8 }}>· ETA {fmtTime(remaining)}</span>}
+                {progress.active && <span style={{ marginInlineStart: 8 }}>· ETA {fmtTime(remaining)}</span>}
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -747,8 +747,8 @@ export default function LibraryPage() {
       <div className="card animate-fade-up animate-delay-1" style={{ marginBottom: "var(--space-5)", padding: "var(--space-4)" }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ position: "relative", flex: "1 1 160px", minWidth: 0 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input className="input" style={{ paddingLeft: 32 }} placeholder="Search questions…" value={search} onChange={e => setSearch(e.target.value)} />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", insetInlineStart: 10, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input className="input" style={{ paddingInlineStart: 32 }} placeholder="Search questions…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <select className="select" style={{ flex: "0 1 170px", minWidth: 0 }} value={sendTopicId} onChange={e => setSendTopicId(e.target.value ? Number(e.target.value) : "")}>
             <option value="">📌 Default: General</option>
@@ -954,12 +954,12 @@ export default function LibraryPage() {
                                     style={{
                                       width: "100%",
                                       borderColor: isDupe || isOver ? "var(--clr-danger)" : undefined,
-                                      paddingRight: opt.length > 70 ? 45 : undefined,
+                                      paddingInlineEnd: opt.length > 70 ? 45 : undefined,
                                     }}
                                     onChange={e => updateOpt(i, e.target.value)}
                                   />
                                   {opt.length > 70 && (
-                                    <span style={{ position: "absolute", right: 8, fontSize: "0.68rem", color: isOver ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
+                                    <span style={{ position: "absolute", insetInlineEnd: 8, fontSize: "0.68rem", color: isOver ? "var(--clr-danger)" : "var(--clr-text-muted)" }}>
                                       {opt.length}/100
                                     </span>
                                   )}
@@ -1218,7 +1218,7 @@ export default function LibraryPage() {
                 ) : (
                   /* View mode */
                   <>
-                    <div style={{ fontWeight: 500, marginBottom: 10, lineHeight: 1.5, wordBreak: "break-word", fontSize: "0.92rem" }}>{t.question}</div>
+                    <div style={{ fontWeight: 500, marginBottom: 10, lineHeight: 1.5, wordBreak: "break-word", fontSize: "0.92rem" }} dir="auto">{t.question}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                       {t.options.map((o, i) => (
                         <div key={i} style={{
@@ -1238,13 +1238,13 @@ export default function LibraryPage() {
                           }}>
                             {String.fromCharCode(65 + i)}
                           </span>
-                          <span style={{ flex: 1 }}>{o}</span>
+                          <span style={{ flex: 1 }} dir="auto">{o}</span>
                           {t.correctOptionId === i && <span style={{ fontSize: "0.72rem" }}>✓</span>}
                         </div>
                       ))}
                     </div>
                     {t.explanation && (
-                      <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "8px 12px", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-sm)", borderLeft: "3px solid var(--clr-brand)" }}>
+                      <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "8px 12px", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-sm)", borderInlineStart: "3px solid var(--clr-brand)" }} dir="auto">
                         💡 {t.explanation}
                       </div>
                     )}
@@ -1278,7 +1278,7 @@ export default function LibraryPage() {
                           </span>
                         );
                       })}
-                      <span style={{ marginLeft: "auto" }} title={new Date(t.createdAt).toLocaleString()}>🕐 {timeAgo(t.createdAt)}</span>
+                      <span style={{ marginInlineStart: "auto" }} title={new Date(t.createdAt).toLocaleString()}>🕐 {timeAgo(t.createdAt)}</span>
                     </div>
                   </>
                 )}
@@ -1290,39 +1290,22 @@ export default function LibraryPage() {
 
       {/* ── Floating selection bar ── */}
       {visibleSelected.length > 0 && !progress?.active && (
-        <div style={{
-          position: "fixed",
-          bottom: 24,
-          left: "50%",
-          transform: "translateX(-50%)",
-          zIndex: 900,
-          background: "var(--clr-bg-card)",
-          border: "1px solid var(--clr-brand)",
-          boxShadow: "0 16px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--clr-brand)",
-          borderRadius: "var(--radius-full)",
-          padding: "8px 16px",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          animation: "fadeUp 0.25s ease-out",
-        }}>
+        <div className="library-selection-bar">
           <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--clr-text-primary)", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-            <span style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--clr-brand)", color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 700 }}>
+            <span style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--grad-brand)", color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 700 }}>
               {visibleSelected.length}
             </span>
-            <span>selected</span>
+            <span className="hide-mobile">selected</span>
           </span>
           <div style={{ width: 1, height: 18, background: "var(--clr-border)" }} />
-          <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.8rem", padding: "4px 10px", whiteSpace: "nowrap" }} onClick={() => setShowAddToColl(true)}>
-            📁 Collection
+          <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.8rem", padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => setShowAddToColl(true)} title="Add to collection">
+            📁 <span className="hide-mobile">Collection</span>
           </button>
-          <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", fontSize: "0.8rem", padding: "4px 10px", whiteSpace: "nowrap" }} onClick={deleteSelected}>
-            🗑 Delete
+          <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", fontSize: "0.8rem", padding: "4px 8px", whiteSpace: "nowrap" }} onClick={deleteSelected} title="Delete selected">
+            🗑 <span className="hide-mobile">Delete</span>
           </button>
-          <button className="btn btn-primary btn-sm" style={{ fontSize: "0.8rem", padding: "5px 16px", borderRadius: "var(--radius-full)", whiteSpace: "nowrap" }} onClick={handleSendSelected}>
-            🚀 Send {visibleSelected.length}
+          <button className="btn btn-primary btn-sm" style={{ fontSize: "0.8rem", padding: "5px 14px", borderRadius: "var(--radius-full)", whiteSpace: "nowrap" }} onClick={handleSendSelected}>
+            🚀 Send ({visibleSelected.length})
           </button>
           <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.75rem", padding: "2px 6px", color: "var(--clr-text-muted)" }} onClick={selectNone} title="Deselect all">
             ✕

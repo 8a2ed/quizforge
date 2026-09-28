@@ -876,7 +876,7 @@ export default function BulkPage() {
   return (
     <div>
       {notification && (
-        <div style={{ position: "fixed", top: 80, right: 24, zIndex: 200, padding: "10px 18px", borderRadius: "var(--radius-md)", background: notification.type === "success" ? "var(--clr-success)" : "var(--clr-brand)", color: "#fff", fontWeight: 600, fontSize: "0.875rem", boxShadow: "var(--shadow-lg)", animation: "fade-up 0.2s ease" }}>
+        <div style={{ position: "fixed", top: 80, insetInlineEnd: 24, zIndex: 200, padding: "10px 18px", borderRadius: "var(--radius-md)", background: notification.type === "success" ? "var(--clr-success)" : "var(--clr-brand)", color: "#fff", fontWeight: 600, fontSize: "0.875rem", boxShadow: "var(--shadow-lg)", animation: "fade-up 0.2s ease", maxWidth: "calc(100vw - 32px)" }}>
           {notification.msg}
         </div>
       )}
@@ -1299,11 +1299,11 @@ export default function BulkPage() {
             {result && (
               <div style={{ padding: "var(--space-3)", borderRadius: "var(--radius-md)", marginBottom: "var(--space-4)", background: result.ok ? "var(--clr-success-muted)" : "var(--clr-danger-muted)", color: result.ok ? "var(--clr-success)" : "var(--clr-danger)", fontSize: "0.875rem" }}>
                 <b>{result.ok ? `✓ Sent ${result.processed} quizzes successfully!` : "Errors occurred:"}</b>
-                {result.errors && <ul style={{ marginTop: 6, paddingLeft: 20 }}>{result.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
+                {result.errors && <ul style={{ marginTop: 6, paddingInlineStart: 20 }}>{result.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
               </div>
             )}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", maxHeight: 580, overflowY: "auto", paddingRight: 4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", maxHeight: 580, overflowY: "auto", paddingInlineEnd: 4 }}>
               {filteredQueue.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "var(--space-6)", color: "var(--clr-text-muted)", fontSize: "0.85rem" }}>
                   🔍 لا توجد أسئلة مطابقة للبحث أو الفلتر المحدد.
@@ -1380,7 +1380,7 @@ export default function BulkPage() {
                             </button>
                           </div>
 
-                          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.78rem", cursor: "pointer", marginLeft: "auto" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.78rem", cursor: "pointer", marginInlineStart: "auto" }}>
                             <input
                               type="checkbox"
                               checked={p.isAnonymous ?? true}
@@ -1586,7 +1586,7 @@ export default function BulkPage() {
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontWeight: 500, marginBottom: 10, lineHeight: 1.4, wordBreak: "break-word" }}>{p.question}</div>
+                        <div style={{ fontWeight: 500, marginBottom: 10, lineHeight: 1.4, wordBreak: "break-word" }} dir="auto">{p.question}</div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                           {p.options.map((o, i) => (
                             <div key={i} style={{
@@ -1594,13 +1594,13 @@ export default function BulkPage() {
                               background: p.correctOptionId === i ? "var(--clr-success-muted)" : "rgba(255,255,255,0.02)",
                               border: `1px solid ${p.correctOptionId === i ? "var(--clr-success)" : "transparent"}`,
                               color: p.correctOptionId === i ? "var(--clr-success)" : "var(--clr-text-secondary)"
-                            }}>
+                            }} dir="auto">
                               <b>{String.fromCharCode(65 + i)}.</b> {o}
                             </div>
                           ))}
                         </div>
                         {p.explanation && (
-                          <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "6px 10px", background: "rgba(0,0,0,0.25)", borderRadius: 6 }}>
+                          <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "6px 10px", background: "rgba(0,0,0,0.25)", borderRadius: 6 }} dir="auto">
                             💡 {p.explanation}
                           </div>
                         )}

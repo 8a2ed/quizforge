@@ -579,9 +579,10 @@ export default function HistoryPage() {
               background: "var(--clr-bg-elevated)",
               padding: "10px 14px",
               borderRadius: "var(--radius-sm)",
-              borderLeft: "3px solid var(--clr-brand)",
+              borderInlineStart: "3px solid var(--clr-brand)",
               lineHeight: 1.6,
             }}
+            dir="auto"
           >
             💡 <strong>التوضيح والشرح للطلاب:</strong> {quiz.explanation}
           </div>
@@ -642,7 +643,7 @@ export default function HistoryPage() {
                       <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         <span style={{ fontWeight: 600 }}>{ans.firstName || "طالب"}</span>
                         {ans.username && (
-                          <span style={{ color: "var(--clr-text-muted)", marginLeft: 6 }}>
+                          <span style={{ color: "var(--clr-text-muted)", marginInlineStart: 6 }}>
                             @{ans.username}
                           </span>
                         )}
@@ -1079,7 +1080,7 @@ export default function HistoryPage() {
                 strokeWidth="2"
                 style={{
                   position: "absolute",
-                  left: 12,
+                  insetInlineStart: 12,
                   top: "50%",
                   transform: "translateY(-50%)",
                   color: "var(--clr-text-muted)",
@@ -1092,7 +1093,8 @@ export default function HistoryPage() {
               <input
                 ref={searchRef}
                 className="input"
-                style={{ paddingLeft: 38, paddingRight: searchInput ? 36 : 12 }}
+                dir="auto"
+                style={{ paddingInlineStart: 38, paddingInlineEnd: searchInput ? 36 : 12 }}
                 placeholder="ابحث في الأسئلة والخيارات والناشرين... (اضغط / للتركيز)"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -1118,7 +1120,7 @@ export default function HistoryPage() {
                   }}
                   style={{
                     position: "absolute",
-                    right: 10,
+                    insetInlineEnd: 10,
                     top: "50%",
                     transform: "translateY(-50%)",
                     background: "none",
@@ -1228,7 +1230,7 @@ export default function HistoryPage() {
                 padding: 2,
                 borderRadius: "var(--radius-md)",
                 border: "1px solid var(--clr-border)",
-                marginLeft: "auto",
+                marginInlineStart: "auto",
               }}
             >
               <button
@@ -1460,7 +1462,7 @@ export default function HistoryPage() {
                           fontSize: "0.72rem",
                         }}
                       >
-                        <span className="pulsing-dot" style={{ width: 6, height: 6, marginRight: 4 }} />
+                        <span className="pulsing-dot" style={{ width: 6, height: 6, marginInlineEnd: 4 }} />
                         {timerInfo.text}
                       </span>
                     )}
@@ -1473,7 +1475,7 @@ export default function HistoryPage() {
                   </div>
 
                   {/* Topic badge */}
-                  <div style={{ marginLeft: "auto" }}>
+                  <div style={{ marginInlineStart: "auto" }}>
                     <span
                       className="badge badge-muted"
                       style={{
@@ -1493,6 +1495,7 @@ export default function HistoryPage() {
                 {/* Question Text */}
                 <div style={{ margin: "2px 0" }}>
                   <h3
+                    dir="auto"
                     style={{
                       fontSize: "1rem",
                       fontWeight: 600,
@@ -1769,7 +1772,7 @@ export default function HistoryPage() {
                 <th>الإجابات</th>
                 <th>نسبة الدقة</th>
                 <th>التاريخ</th>
-                <th style={{ textAlign: "right" }}>إجراءات</th>
+                <th style={{ textAlign: "end" }}>إجراءات</th>
               </tr>
             </thead>
             <tbody>
@@ -1785,6 +1788,7 @@ export default function HistoryPage() {
                     >
                       <td data-label="السؤال" style={{ maxWidth: 300 }}>
                         <div
+                          dir="auto"
                           style={{
                             fontWeight: 600,
                             overflow: "hidden",
@@ -1881,7 +1885,7 @@ export default function HistoryPage() {
                         {formatDate(quiz.sentAt)}
                       </td>
 
-                      <td data-label="إجراءات" onClick={(e) => e.stopPropagation()} style={{ textAlign: "right" }}>
+                      <td data-label="إجراءات" onClick={(e) => e.stopPropagation()} style={{ textAlign: "end" }}>
                         <div style={{ display: "inline-flex", gap: 4 }}>
                           {quiz.telegramUrl && (
                             <a
@@ -2005,7 +2009,7 @@ export default function HistoryPage() {
             disabled={page <= 1}
             onClick={() => setPage((p) => p - 1)}
           >
-            ← السابق
+            <span className="flip-rtl">←</span> السابق
           </button>
 
           {Array.from({ length: pagination.pages }, (_, i) => i + 1)
@@ -2033,14 +2037,14 @@ export default function HistoryPage() {
             disabled={page >= pagination.pages}
             onClick={() => setPage((p) => p + 1)}
           >
-            التالي →
+            التالي <span className="flip-rtl">→</span>
           </button>
 
           <span
             style={{
               fontSize: "0.82rem",
               color: "var(--clr-text-muted)",
-              marginLeft: "var(--space-3)",
+              marginInlineStart: "var(--space-3)",
             }}
           >
             إجمالي {pagination.total} سؤال

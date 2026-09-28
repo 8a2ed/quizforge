@@ -1245,7 +1245,7 @@ export default function NewQuizPage() {
           <div style={{ flex: 1, fontSize: "0.82rem", lineHeight: 1.4 }}>
             <strong>Ready check:</strong> {validationErrors[0]}
             {validationErrors.length > 1 && (
-              <span style={{ opacity: 0.8, marginLeft: 6 }}>
+              <span style={{ opacity: 0.8, marginInlineStart: 6 }}>
                 (+{validationErrors.length - 1} more issue{validationErrors.length > 2 ? "s" : ""})
               </span>
             )}
@@ -1273,7 +1273,7 @@ export default function NewQuizPage() {
                 onClick={() => setType("quiz")}
               >
                 <div className="type-card-icon">{E.quiz}</div>
-                <div style={{ textAlign: "left", flex: 1 }}>
+                <div style={{ textAlign: "start", flex: 1 }}>
                   <div className="type-card-title">Quiz Mode</div>
                   <div className="type-card-desc">Has one correct answer + explanation</div>
                 </div>
@@ -1290,7 +1290,7 @@ export default function NewQuizPage() {
                 }}
               >
                 <div className="type-card-icon">{E.poll}</div>
-                <div style={{ textAlign: "left", flex: 1 }}>
+                <div style={{ textAlign: "start", flex: 1 }}>
                   <div className="type-card-title">Poll Mode</div>
                   <div className="type-card-desc">Public opinion, multiple choices & voting</div>
                 </div>
@@ -2221,7 +2221,7 @@ export default function NewQuizPage() {
 
                         {/* Status icon inside option */}
                         {hasVoted && (
-                          <span style={{ marginLeft: "auto", fontSize: "0.85rem", zIndex: 2 }}>
+                          <span style={{ marginInlineStart: "auto", fontSize: "0.85rem", zIndex: 2 }}>
                             {type === "quiz" ? (
                               isAnswerCorrect ? "✅" : isSelected ? "❌" : ""
                             ) : isSelected ? (
@@ -2488,7 +2488,7 @@ export default function NewQuizPage() {
                         fontSize: "0.88rem",
                         fontWeight: 600,
                         color: "var(--clr-text-primary)",
-                        textAlign: "left",
+                        textAlign: "start",
                       }}
                     >
                       {tmpl.question.slice(0, 120)}
@@ -2552,7 +2552,7 @@ export default function NewQuizPage() {
                     <span style={{ fontSize: "0.86rem", fontWeight: saveCollId === "" ? 600 : 400 }}>
                       No Collection (Library Root)
                     </span>
-                    {saveCollId === "" && <Check size={16} style={{ marginLeft: "auto", color: "var(--clr-brand)" }} />}
+                    {saveCollId === "" && <Check size={16} style={{ marginInlineStart: "auto", color: "var(--clr-brand)" }} />}
                   </button>
 
                   {saveCollections.map((c) => (
@@ -2572,7 +2572,7 @@ export default function NewQuizPage() {
                       <span style={{ fontSize: "0.86rem", fontWeight: saveCollId === c.id ? 600 : 400 }}>
                         {c.name}
                       </span>
-                      {saveCollId === c.id && <Check size={16} style={{ marginLeft: "auto", color: c.color }} />}
+                      {saveCollId === c.id && <Check size={16} style={{ marginInlineStart: "auto", color: c.color }} />}
                     </button>
                   ))}
                 </div>
@@ -2773,7 +2773,7 @@ export default function NewQuizPage() {
           border-radius: var(--radius-md);
           cursor: pointer;
           transition: all 0.2s ease;
-          text-align: left;
+          text-align: start;
         }
 
         .type-card-btn:hover {
@@ -2981,7 +2981,7 @@ export default function NewQuizPage() {
 
         .option-input-field {
           font-size: 0.92rem;
-          padding-right: 70px;
+          padding-inline-end: 70px;
         }
 
         .border-success {
@@ -2996,7 +2996,7 @@ export default function NewQuizPage() {
 
         .option-badge-warning {
           position: absolute;
-          right: 8px;
+          inset-inline-end: 8px;
           top: 50%;
           transform: translateY(-50%);
           font-size: 0.72rem;
@@ -3009,7 +3009,7 @@ export default function NewQuizPage() {
 
         .option-len-tag {
           position: absolute;
-          right: 8px;
+          inset-inline-end: 8px;
           top: 50%;
           transform: translateY(-50%);
           font-size: 0.7rem;
@@ -3130,7 +3130,7 @@ export default function NewQuizPage() {
         .thumb-remove-btn {
           position: absolute;
           top: 6px;
-          right: 6px;
+          inset-inline-end: 6px;
           background: rgba(0, 0, 0, 0.7);
           border: none;
           color: #ffffff;
@@ -3341,7 +3341,7 @@ export default function NewQuizPage() {
         }
 
         .tg-timestamp {
-          margin-left: auto;
+          margin-inline-start: auto;
           font-size: 0.68rem;
           color: #5c6e86;
         }
@@ -3406,7 +3406,7 @@ export default function NewQuizPage() {
           color: #dbe4f0;
           font-size: 0.86rem;
           transition: all 0.15s ease;
-          text-align: left;
+          text-align: start;
           width: 100%;
           overflow: hidden;
         }
@@ -3429,7 +3429,7 @@ export default function NewQuizPage() {
 
         .tg-vote-bar {
           position: absolute;
-          left: 0;
+          inset-inline-start: 0;
           top: 0;
           bottom: 0;
           background: rgba(42, 171, 238, 0.18);
@@ -3543,8 +3543,7 @@ export default function NewQuizPage() {
           display: none;
           position: fixed;
           bottom: 0;
-          left: 0;
-          right: 0;
+          inset-inline: 0;
           background: rgba(14, 19, 31, 0.95);
           backdrop-filter: blur(16px);
           border-top: 1px solid var(--clr-border);

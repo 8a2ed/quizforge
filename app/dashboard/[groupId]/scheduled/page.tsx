@@ -95,7 +95,7 @@ export default function ScheduledPage() {
 
                   {/* Content */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.question}</div>
+                    <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} dir="auto">{q.question}</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <span className={`badge ${q.type === "QUIZ" ? "badge-brand" : "badge-accent"}`} style={{ fontSize: "0.68rem" }}>{q.type === "QUIZ" ? "🎯 Quiz" : "📊 Poll"}</span>
                       {q.topicName && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>📂 {q.topicName}</span>}

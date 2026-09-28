@@ -177,10 +177,10 @@ export default function AdminsPage() {
         </div>
         <form onSubmit={handleInvite} style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
-            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>@</span>
+            <span style={{ position: "absolute", insetInlineStart: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>@</span>
             <input
               className="input"
-              style={{ paddingLeft: 28 }}
+              style={{ paddingInlineStart: 28 }}
               placeholder="username or first name"
               value={inviteUsername}
               onChange={e => { setInviteUsername(e.target.value); setInviteMsg(null); }}
@@ -219,10 +219,10 @@ export default function AdminsPage() {
       {admins.length > 3 && (
         <div style={{ position: "relative", marginBottom: "var(--space-4)" }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
+            style={{ position: "absolute", insetInlineStart: 12, top: "50%", transform: "translateY(-50%)", color: "var(--clr-text-muted)", pointerEvents: "none" }}>
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
-          <input className="input" style={{ paddingLeft: 34 }} placeholder="Search admins…"
+          <input className="input" style={{ paddingInlineStart: 34 }} placeholder="Search admins…"
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
       )}
@@ -300,7 +300,7 @@ export default function AdminsPage() {
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: "flex", gap: "var(--space-2)", marginLeft: "auto", flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: "var(--space-2)", marginInlineStart: "auto", flexShrink: 0 }}>
                   {isOwner ? (
                     <span style={{ fontSize: "0.75rem", color: "var(--clr-warning)", fontWeight: 600 }}>Group Owner</span>
                   ) : isPending ? (

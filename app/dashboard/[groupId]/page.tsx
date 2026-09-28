@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { relativeTime } from "@/lib/utils";
+import { useDirection } from "@/lib/useDirection";
 
 interface Quiz {
   id: string;
@@ -29,6 +30,7 @@ interface Stats {
 export default function GroupOverviewPage() {
   const params = useParams();
   const groupId = params.groupId as string;
+  const { isRtl } = useDirection();
 
   const [groupTitle, setGroupTitle] = useState("Your Group");
   const [recentQuizzes, setRecentQuizzes] = useState<Quiz[]>([]);
@@ -63,12 +65,12 @@ export default function GroupOverviewPage() {
   useEffect(() => { load(); }, [load]);
 
   const quickActions = [
-    { label: "Create Quiz", href: `/dashboard/${groupId}/quiz/new`, icon: "🎯", desc: "Send a new quiz or poll", color: "var(--clr-brand)" },
-    { label: "Bulk Loader", href: `/dashboard/${groupId}/bulk`, icon: "📦", desc: "Upload multiple quizzes", color: "var(--clr-accent)" },
-    { label: "History", href: `/dashboard/${groupId}/history`, icon: "📋", desc: "Browse all sent quizzes", color: "var(--clr-success)" },
-    { label: "Analytics", href: `/dashboard/${groupId}/analytics`, icon: "📊", desc: "Performance insights", color: "var(--clr-warning)" },
-    { label: "Topics", href: `/dashboard/${groupId}/topics`, icon: "💬", desc: "Manage forum topics", color: "#a78bfa" },
-    { label: "Admins", href: `/dashboard/${groupId}/admins`, icon: "👥", desc: "Control who has access", color: "#38bdf8" },
+    { label: isRtl ? "إنشاء كويز" : "Create Quiz", href: `/dashboard/${groupId}/quiz/new`, icon: "🎯", desc: isRtl ? "إرسال سؤال كويز أو تصويت جديد" : "Send a new quiz or poll", color: "var(--clr-brand)" },
+    { label: isRtl ? "استيراد مجمع" : "Bulk Loader", href: `/dashboard/${groupId}/bulk`, icon: "📦", desc: isRtl ? "رفع وتحميل أسئلة متعددة مجمعة" : "Upload multiple quizzes", color: "var(--clr-accent)" },
+    { label: isRtl ? "سجل الكويزات" : "History", href: `/dashboard/${groupId}/history`, icon: "📋", desc: isRtl ? "تصفح والبحث في الأسئلة المرسلة" : "Browse all sent quizzes", color: "var(--clr-success)" },
+    { label: isRtl ? "التحليلات" : "Analytics", href: `/dashboard/${groupId}/analytics`, icon: "📊", desc: isRtl ? "رؤى تفصيلية حول أداء الطلاب" : "Performance insights", color: "var(--clr-warning)" },
+    { label: isRtl ? "المواضيع والتوبيكس" : "Topics", href: `/dashboard/${groupId}/topics`, icon: "💬", desc: isRtl ? "إدارة مواضيع المنتدى والمجموعات" : "Manage forum topics", color: "#a78bfa" },
+    { label: isRtl ? "المشرفين" : "Admins", href: `/dashboard/${groupId}/admins`, icon: "👥", desc: isRtl ? "التحكم في الصلاحيات والإشراف" : "Control who has access", color: "#38bdf8" },
   ];
 
   return (
@@ -77,16 +79,16 @@ export default function GroupOverviewPage() {
       {/* Hero banner */}
       <div className="overview-hero animate-fade-up">
         <div className="overview-hero-content">
-          <div className="overview-hero-badge">📊 Dashboard</div>
-          <h1 style={{ marginBottom: "var(--space-2)", fontSize: "clamp(1.5rem, 3vw, 2rem)" }}>
+          <div className="overview-hero-badge">📊 {isRtl ? "لوحة التحكم" : "Dashboard"}</div>
+          <h1 dir="auto" style={{ marginBottom: "var(--space-2)", fontSize: "clamp(1.5rem, 3vw, 2rem)" }}>
             {groupTitle}
           </h1>
           <p style={{ color: "rgba(255,255,255,0.65)", margin: 0 }}>
-            Your quiz activity at a glance
+            {isRtl ? "نظرة عامة ومباشرة على نشاط الكويزات وتفاعل الطلاب" : "Your quiz activity at a glance"}
           </p>
         </div>
         <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary" style={{ flexShrink: 0, alignSelf: "center" }}>
-          + New Quiz
+          {isRtl ? "+ كويز جديد" : "+ New Quiz"}
         </Link>
       </div>
 
@@ -103,7 +105,7 @@ export default function GroupOverviewPage() {
             </div>
             <div className="stat-info">
               <div className="stat-value">{stats.totalQuizzes}</div>
-              <div className="stat-label">Total Quizzes</div>
+              <div className="stat-label">{isRtl ? "إجمالي الأسئلة" : "Total Quizzes"}</div>
             </div>
           </div>
           <div className="stat-card accent">
@@ -112,7 +114,7 @@ export default function GroupOverviewPage() {
             </div>
             <div className="stat-info">
               <div className="stat-value">{stats.totalAnswers}</div>
-              <div className="stat-label">Total Responses</div>
+              <div className="stat-label">{isRtl ? "إجمالي الإجابات" : "Total Responses"}</div>
             </div>
           </div>
           <div className="stat-card success">
@@ -121,7 +123,7 @@ export default function GroupOverviewPage() {
             </div>
             <div className="stat-info">
               <div className="stat-value">{stats.overallCorrectRate}%</div>
-              <div className="stat-label">Correct Rate</div>
+              <div className="stat-label">{isRtl ? "نسبة الدقة" : "Correct Rate"}</div>
             </div>
           </div>
           <div className="stat-card warning">
@@ -130,7 +132,7 @@ export default function GroupOverviewPage() {
             </div>
             <div className="stat-info">
               <div className="stat-value">{stats.thisWeek}</div>
-              <div className="stat-label">This Week</div>
+              <div className="stat-label">{isRtl ? "هذا الأسبوع" : "This Week"}</div>
             </div>
           </div>
         </div>
@@ -139,7 +141,7 @@ export default function GroupOverviewPage() {
       {/* Quick Actions */}
       <div className="animate-fade-up animate-delay-2">
         <h2 style={{ marginBottom: "var(--space-5)", fontSize: "1.05rem", color: "var(--clr-text-secondary)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
-          Quick Actions
+          {isRtl ? "إجراءات سريعة" : "Quick Actions"}
         </h2>
         <div className="grid grid-cols-3 gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
           {quickActions.map((action) => (
@@ -163,10 +165,11 @@ export default function GroupOverviewPage() {
       <div className="animate-fade-up animate-delay-3">
         <div className="section-header">
           <h2 style={{ fontSize: "1.05rem", color: "var(--clr-text-secondary)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, margin: 0 }}>
-            Recent Activity
+            {isRtl ? "النشاط الأخير" : "Recent Activity"}
           </h2>
-          <Link href={`/dashboard/${groupId}/history`} className="btn btn-ghost btn-sm">
-            View all →
+          <Link href={`/dashboard/${groupId}/history`} className="btn btn-ghost btn-sm" style={{ gap: 4 }}>
+            <span>{isRtl ? "عرض الكل" : "View all"}</span>
+            <span className="flip-rtl">→</span>
           </Link>
         </div>
 
@@ -177,10 +180,10 @@ export default function GroupOverviewPage() {
         ) : recentQuizzes.length === 0 ? (
           <div className="empty-state" style={{ padding: "var(--space-12)" }}>
             <div className="empty-state-icon" style={{ fontSize: "2rem" }}>📭</div>
-            <h3>No quizzes yet</h3>
-            <p>Create your first quiz to get started</p>
+            <h3>{isRtl ? "لا توجد أسئلة بعد" : "No quizzes yet"}</h3>
+            <p>{isRtl ? "ابدأ بإنشاء سؤالك الأول للطلاب" : "Create your first quiz to get started"}</p>
             <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary">
-              Create First Quiz
+              {isRtl ? "إنشاء أول كويز" : "Create First Quiz"}
             </Link>
           </div>
         ) : (
@@ -212,23 +215,23 @@ export default function GroupOverviewPage() {
 
                 {/* Question */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 2, fontSize: "0.9rem" }}>
+                  <div dir="auto" style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 2, fontSize: "0.9rem" }}>
                     {quiz.question}
                   </div>
                   <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    <span>by {quiz.sentBy.firstName}</span>
+                    <span>{isRtl ? "بواسطة " : "by "}{quiz.sentBy.firstName}</span>
                     {quiz.topicName && <><span>·</span><span>#{quiz.topicName}</span></>}
                     <span>·</span>
                     <span>{relativeTime(quiz.sentAt)}</span>
-                    {quiz.deletedAt && <span style={{ color: "var(--clr-danger)" }}>· deleted</span>}
-                    {quiz.pollClosed && !quiz.deletedAt && <span style={{ color: "var(--clr-text-muted)" }}>· closed</span>}
+                    {quiz.deletedAt && <span style={{ color: "var(--clr-danger)" }}>{isRtl ? "· محذوف" : "· deleted"}</span>}
+                    {quiz.pollClosed && !quiz.deletedAt && <span style={{ color: "var(--clr-text-muted)" }}>{isRtl ? "· مغلق" : "· closed"}</span>}
                   </div>
                 </div>
 
                 {/* Responses */}
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ textAlign: "end", flexShrink: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: "1.1rem", color: "var(--clr-text-primary)" }}>{quiz._count.answers}</div>
-                  <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>responses</div>
+                  <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>{isRtl ? "إجابة" : "responses"}</div>
                 </div>
 
                 {/* Correct rate donut */}

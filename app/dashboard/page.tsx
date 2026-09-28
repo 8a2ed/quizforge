@@ -243,7 +243,7 @@ export default function DashboardPage() {
                     )}
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div dir="auto" style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {group.title}
                     </div>
                     {group.username && (
@@ -253,27 +253,28 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Badges */}
-                <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
                   <span className="badge badge-brand" style={{ color: roleColor[group.role] }}>
                     {group.role}
                   </span>
                   {group.isForum && (
                     <span className="badge badge-accent">Topics</span>
                   )}
-                  <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginLeft: "auto" }}>
+                  <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginInlineStart: "auto" }}>
                     {group.quizCount} quizzes
                   </span>
                 </div>
 
                 {/* Stats */}
-                <div style={{ display: "flex", gap: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--clr-border)" }}>
+                <div style={{ display: "flex", gap: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--clr-border)", alignItems: "center" }}>
                   <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "1.25rem", color: "var(--clr-text-primary)" }}>
                     {group.quizCount}
                   </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", paddingTop: 6 }}>Quizzes sent</div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>Quizzes sent</div>
                   {!manageMode && (
-                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "flex-end" }}>
-                      <span style={{ color: "var(--clr-brand)", fontSize: "0.8rem", fontWeight: 600 }}>Open dashboard →</span>
+                    <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ color: "var(--clr-brand)", fontSize: "0.8rem", fontWeight: 600 }}>Open dashboard</span>
+                      <span className="flip-rtl" style={{ color: "var(--clr-brand)", fontSize: "0.85rem" }}>→</span>
                     </div>
                   )}
                 </div>
