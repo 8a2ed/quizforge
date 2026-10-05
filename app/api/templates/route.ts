@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const groupId = await getTemplateGroupId(user.sub);
-  if (!groupId) return NextResponse.json({ templates: [] });
+  if (!groupId) return NextResponse.json({ templates: [], sentTemplateIds: [] });
 
   const templates = await withRetry(() =>
     prisma.quiz.findMany({
@@ -73,14 +73,59 @@ export async function GET(req: NextRequest) {
     })
   );
 
+  let sentTemplateIds: string[] = [];
+  // Map from templateId -> { sentAt, count } for rich UI display
+  let sentInfo: Record<string, { sentAt: string; count: number }> = {};
+  const queryGroupId = req.nextUrl.searchParams.get("groupId");
+
+  // Normalize text for robust matching: lowercase + collapse whitespace
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+  if (queryGroupId) {
+    const sentQuizzes = await withRetry(() =>
+      prisma.quiz.findMany({
+        where: { groupId: queryGroupId, sentAt: { not: null }, deletedAt: null },
+        select: { question: true, sentAt: true },
+        orderBy: { sentAt: "desc" }, // most recent first
+      })
+    );
+
+    // Build a map: normalizedQuestion -> { sentAt, count }
+    const sentQuestionMap = new Map<string, { sentAt: Date; count: number }>();
+    for (const q of sentQuizzes) {
+      const key = normalize(q.question);
+      const existing = sentQuestionMap.get(key);
+      if (!existing) {
+        sentQuestionMap.set(key, { sentAt: q.sentAt!, count: 1 });
+      } else {
+        existing.count++;
+      }
+    }
+
+    for (const t of templates) {
+      const key = normalize(t.question);
+      const match = sentQuestionMap.get(key);
+      if (match) {
+        sentTemplateIds.push(t.id);
+        sentInfo[t.id] = {
+          sentAt: match.sentAt.toISOString(),
+          count: match.count,
+        };
+      }
+    }
+  }
+
   return NextResponse.json({
     templates: templates.map(t => ({
       ...t,
       collectionIds: t.collections.map(c => c.collectionId),
       collections: undefined,
     })),
+    sentTemplateIds,
+    sentInfo,
   });
 }
+
 
 // POST /api/templates — save a template
 export async function POST(req: NextRequest) {

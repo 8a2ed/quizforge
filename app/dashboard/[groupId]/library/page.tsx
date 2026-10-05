@@ -50,6 +50,7 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sentIds, setSentIds] = useState<Set<string>>(new Set());
+  const [sentInfo, setSentInfo] = useState<Record<string, { sentAt: string; count: number }>>({});
   const [sentFilter, setSentFilter] = useState<"sent" | "unsent">("unsent");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Partial<Template>>({});
@@ -88,14 +89,23 @@ export default function LibraryPage() {
 
   const load = useCallback(() => {
     setLoading(true);
-    fetch("/api/templates")
+    fetch(`/api/templates?groupId=${groupId}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(d => { setTemplates(d.templates || []); setLoading(false); })
+      .then(d => { 
+        setTemplates(d.templates || []); 
+        if (d.sentTemplateIds) {
+          setSentIds(new Set(d.sentTemplateIds));
+        }
+        if (d.sentInfo) {
+          setSentInfo(d.sentInfo);
+        }
+        setLoading(false); 
+      })
       .catch(e => { setLoading(false); showToast("error", `Failed to load library: ${e.message}`); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -236,7 +246,15 @@ export default function LibraryPage() {
         }
 
         if (res.ok) {
+          const now = new Date().toISOString();
           setSentIds(prev => new Set([...prev, t.id]));
+          setSentInfo(prev => ({
+            ...prev,
+            [t.id]: {
+              sentAt: now,
+              count: (prev[t.id]?.count ?? 0) + 1,
+            },
+          }));
           setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
           setProgress(prev => prev ? { ...prev, sent: prev.sent + 1, statuses: prev.statuses.map((s, j) => j === i ? "sent" : s) } : prev);
         } else {
@@ -858,7 +876,24 @@ export default function LibraryPage() {
                     </div>
                     <span className={`badge ${t.type === "QUIZ" ? "badge-brand" : "badge-accent"}`} style={{ fontSize: "0.7rem" }}>{t.type}</span>
                     <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>#{idx + 1}</span>
-                    {isSent && <span className="badge" style={{ background: "var(--clr-success-muted)", color: "var(--clr-success)", fontSize: "0.7rem" }}>✓ Sent</span>}
+                    {isSent && (() => {
+                      const info = sentInfo[t.id];
+                      const sentDate = info?.sentAt ? new Date(info.sentAt) : null;
+                      const tooltip = sentDate
+                        ? `آخر إرسال: ${sentDate.toLocaleDateString("ar-EG", { year: "numeric", month: "short", day: "numeric" })} ${sentDate.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}${info.count > 1 ? ` • أُرسل ${info.count} مرات` : ""}`
+                        : "تم الإرسال";
+                      return (
+                        <span
+                          className="badge"
+                          style={{ background: "var(--clr-success-muted)", color: "var(--clr-success)", fontSize: "0.7rem", cursor: "default", display: "inline-flex", alignItems: "center", gap: 3 }}
+                          title={tooltip}
+                        >
+                          <svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+                          تم الإرسال
+                          {info?.count > 1 && <span style={{ opacity: 0.75, fontSize: "0.65rem" }}>×{info.count}</span>}
+                        </span>
+                      );
+                    })()}
                     {t.topicName && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>📍 {t.topicName}</span>}
                     {t.collectionIds?.map(cid => {
                       const col = collections.find(c => c.id === cid);
