@@ -50,7 +50,7 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sentIds, setSentIds] = useState<Set<string>>(new Set());
-  const [showSent, setShowSent] = useState(false);
+  const [sentFilter, setSentFilter] = useState<"sent" | "unsent">("unsent");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Partial<Template>>({});
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -113,10 +113,11 @@ export default function LibraryPage() {
   // ── Derived state (memoized) ────────────────────────────────────────
   const allTags = useMemo(() => [...new Set(templates.flatMap(t => t.tags || []))].sort(), [templates]);
 
-  const filtered = useMemo(() => templates
+  const baseFiltered = useMemo(() => templates
     .filter(t => {
-      if (!showSent && sentIds.has(t.id)) return false;
-      if (activeCollection && !t.collectionIds?.includes(activeCollection)) return false;
+      const isSent = sentIds.has(t.id);
+      if (sentFilter === "sent" && !isSent) return false;
+      if (sentFilter === "unsent" && isSent) return false;
       if (tagFilter && !t.tags?.includes(tagFilter)) return false;
       if (typeFilter && t.type !== typeFilter) return false;
       if (!search) return true;
@@ -126,26 +127,40 @@ export default function LibraryPage() {
         t.tags?.some(tag => tag.toLowerCase().includes(term)) ||
         t.options?.some(opt => opt.toLowerCase().includes(term))
       );
+    }), [templates, sentFilter, sentIds, tagFilter, typeFilter, search]);
+
+  const filtered = useMemo(() => baseFiltered
+    .filter(t => {
+      if (activeCollection && !t.collectionIds?.includes(activeCollection)) return false;
+      return true;
     })
     .sort((a, b) => {
       if (sortKey === "oldest") return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       if (sortKey === "az") return a.question.localeCompare(b.question);
       if (sortKey === "type") return a.type.localeCompare(b.type);
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    }), [templates, showSent, sentIds, activeCollection, tagFilter, typeFilter, search, sortKey]);
+    }), [baseFiltered, activeCollection, sortKey]);
 
   const visibleSelected = useMemo(() => [...selected].filter(id => filtered.some(t => t.id === id)), [selected, filtered]);
 
   // ── Selection ─────────────────────────────────────────────────────
   const toggleSelect = useCallback((id: string) =>
     setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; }), []);
-  const selectAll = () => setSelected(new Set(filtered.map(t => t.id)));
-  const selectNone = () => setSelected(new Set());
+  const selectAll = () => setSelected(prev => {
+    const s = new Set(prev);
+    filtered.forEach(t => s.add(t.id));
+    return s;
+  });
+  const selectNone = () => setSelected(prev => {
+    const s = new Set(prev);
+    filtered.forEach(t => s.delete(t.id));
+    return s;
+  });
 
   // ── Export library ────────────────────────────────────────────────
   const handleExportJSON = () => {
     const toExport = visibleSelected.length > 0
-      ? templates.filter(t => selected.has(t.id))
+      ? templates.filter(t => visibleSelected.includes(t.id))
       : filtered;
     if (toExport.length === 0) {
       showToast("error", "No templates to export.");
@@ -252,7 +267,7 @@ export default function LibraryPage() {
   };
 
   const handleSendSelected = () => {
-    const toSend = templates.filter(t => selected.has(t.id));
+    const toSend = templates.filter(t => visibleSelected.includes(t.id));
     sendSequentially(toSend);
   };
 
@@ -649,14 +664,16 @@ export default function LibraryPage() {
         <button onClick={() => setActiveCollection(null)}
           className="btn btn-ghost btn-sm"
           style={{ flexShrink: 0, border: `1px solid ${!activeCollection ? "var(--clr-brand)" : "var(--clr-border)"}`, color: !activeCollection ? "var(--clr-brand)" : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-          🗂 All ({templates.length})
+          🗂 All ({baseFiltered.length})
         </button>
-        {collections.map(c => (
+        {collections.map(c => {
+          const count = baseFiltered.filter(t => t.collectionIds?.includes(c.id)).length;
+          return (
           <div key={c.id} style={{ display: "flex", flexShrink: 0, position: "relative" }}>
             <button onClick={() => setActiveCollection(c.id)}
               className="btn btn-ghost btn-sm"
               style={{ border: `1px solid ${activeCollection === c.id ? c.color : "var(--clr-border)"}`, color: activeCollection === c.id ? c.color : "var(--clr-text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap", paddingInlineEnd: 28 }}>
-              {c.emoji} {c.name} ({c.quizCount})
+              {c.emoji} {c.name} ({count})
             </button>
             {activeCollection === c.id && (
               <div style={{ position: "absolute", insetInlineEnd: 4, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 2 }}>
@@ -667,7 +684,7 @@ export default function LibraryPage() {
               </div>
             )}
           </div>
-        ))}
+        )})}
         <button onClick={() => { setShowNewColl(true); setCollForm({ name: "", emoji: "📁", color: "#6366f1" }); }}
           className="btn btn-ghost btn-sm"
           style={{ flexShrink: 0, border: "1px dashed var(--clr-border)", color: "var(--clr-text-muted)", fontSize: "0.8rem" }}>
@@ -769,13 +786,14 @@ export default function LibraryPage() {
           <button className="btn btn-ghost btn-sm" onClick={visibleSelected.length === filtered.length && filtered.length > 0 ? selectNone : selectAll}>
             {visibleSelected.length === filtered.length && filtered.length > 0 ? "Deselect All" : `Select All (${filtered.length})`}
           </button>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.84rem", cursor: "pointer", whiteSpace: "nowrap" }}>
-            <div className="toggle-switch" style={{ transform: "scale(0.85)" }}>
-              <input type="checkbox" checked={showSent} onChange={e => setShowSent(e.target.checked)} />
-              <span className="toggle-slider" />
-            </div>
-            Show sent ({sentIds.size})
-          </label>
+          <div style={{ display: "flex", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", padding: 2, flexShrink: 0 }}>
+            <button className={`btn btn-sm ${sentFilter === "unsent" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSentFilter("unsent")} style={{ height: 32, fontSize: "0.78rem", padding: "0 12px" }}>
+              Unsent
+            </button>
+            <button className={`btn btn-sm ${sentFilter === "sent" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSentFilter("sent")} style={{ height: 32, fontSize: "0.78rem", padding: "0 12px" }}>
+              Sent ({sentIds.size})
+            </button>
+          </div>
         </div>
         {(tagFilter || search || typeFilter) && (
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -805,8 +823,8 @@ export default function LibraryPage() {
       ) : filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">📚</div>
-          <h3>{search ? "No matches" : sentIds.size === templates.length && !showSent ? "All sent!" : "Library is empty"}</h3>
-          <p>{search ? `No templates match "${search}"` : sentIds.size === templates.length && !showSent ? "Toggle 'Show sent' to review sent quizzes" : "Use Bulk Import to save quizzes to your library"}</p>
+          <h3>{search ? "No matches" : sentIds.size === templates.length && sentFilter === "unsent" ? "All sent!" : "Library is empty"}</h3>
+          <p>{search ? `No templates match "${search}"` : sentIds.size === templates.length && sentFilter === "unsent" ? "Change status to 'Sent' to review sent quizzes" : "Use Bulk Import to save quizzes to your library"}</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
