@@ -3,6 +3,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import CompletionPostModal, {
+  CompletionPostConfig,
+  DEFAULT_COMPLETION_POST_CONFIG,
+} from "@/components/CompletionPostModal";
 
 interface Template {
   id: string; question: string; options: string[];
@@ -39,6 +43,7 @@ interface SendProgress {
   errors: { id: string; question: string; msg: string }[];
   startTime: number;
   statuses: ("pending" | "sending" | "sent" | "failed")[];
+  postStatus?: "idle" | "sending" | "sent" | "failed";
 }
 
 const DELAY_MS = 3200; // 3.2s between sends to respect Telegram rate limits
@@ -73,6 +78,11 @@ export default function LibraryPage() {
   const [collForm, setCollForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
   const [showAddToColl, setShowAddToColl] = useState(false);
   const [collLoading, setCollLoading] = useState(false);
+
+  // Completion Post state
+  const [groupTitle, setGroupTitle] = useState("المجموعة");
+  const [showCompletionPostModal, setShowCompletionPostModal] = useState(false);
+  const [completionPostConfig, setCompletionPostConfig] = useState<CompletionPostConfig>(DEFAULT_COMPLETION_POST_CONFIG);
 
   // Live timer tick — re-renders once per second while broadcasting
   const [, setTick] = useState(0);
@@ -111,6 +121,37 @@ export default function LibraryPage() {
   useEffect(() => {
     fetch(`/api/groups/${groupId}/topics`).then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
   }, [groupId]);
+
+  useEffect(() => {
+    fetch(`/api/groups/${groupId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.group?.title) setGroupTitle(d.group.title);
+      })
+      .catch(() => {});
+  }, [groupId]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`qf_completion_post_${groupId}`);
+      if (saved) {
+        setCompletionPostConfig(JSON.parse(saved));
+      }
+    } catch {}
+  }, [groupId]);
+
+  const handleSaveCompletionPostConfig = (newCfg: CompletionPostConfig) => {
+    setCompletionPostConfig(newCfg);
+    try {
+      localStorage.setItem(`qf_completion_post_${groupId}`, JSON.stringify(newCfg));
+    } catch {
+      // If QuotaExceededError occurs, save config without bulky base64 data to preserve text and buttons
+      try {
+        const fallbackCfg = { ...newCfg, mediaBase64: undefined };
+        localStorage.setItem(`qf_completion_post_${groupId}`, JSON.stringify(fallbackCfg));
+      } catch {}
+    }
+  };
 
   const loadCollections = useCallback(() => {
     fetch("/api/collections")
@@ -190,6 +231,8 @@ export default function LibraryPage() {
   const sendSequentially = async (toSend: Template[]) => {
     if (toSend.length === 0) return;
     cancelRef.current = false;
+    let successCount = 0;
+    let lastTopicId: number | undefined = undefined;
 
     setProgress({ active: true, total: toSend.length, sent: 0, failed: 0, errors: [], startTime: Date.now(), statuses: Array(toSend.length).fill("pending") });
 
@@ -246,6 +289,10 @@ export default function LibraryPage() {
         }
 
         if (res.ok) {
+          successCount++;
+          if (qTopicId !== undefined && qTopicId !== null && qTopicId !== "") {
+            lastTopicId = Number(qTopicId);
+          }
           const now = new Date().toISOString();
           setSentIds(prev => new Set([...prev, t.id]));
           setSentInfo(prev => ({
@@ -278,6 +325,77 @@ export default function LibraryPage() {
       // Rate-limit delay between sends
       if (i < toSend.length - 1 && !cancelRef.current) {
         await new Promise(r => setTimeout(r, DELAY_MS));
+      }
+    }
+
+    // ── Completion Post (بوست الختام) ──────────────────────────
+    // Only send completion post if broadcasting was not cancelled and at least one quiz succeeded
+    if (!cancelRef.current && completionPostConfig.enabled && successCount > 0) {
+      setProgress(prev => prev ? { ...prev, postStatus: "sending" } : prev);
+      try {
+        const targetTopicId = completionPostConfig.useCustomTopic
+          ? (completionPostConfig.topicId || undefined)
+          : (sendTopicId || lastTopicId || undefined);
+
+        const now = new Date();
+        const dateFormatted = now.toLocaleDateString("ar-EG", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
+        const timeFormatted = now.toLocaleTimeString("ar-EG", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+        const postPayload = {
+          text: completionPostConfig.text,
+          parseMode: completionPostConfig.parseMode,
+          topicId: targetTopicId,
+          mediaUrl: completionPostConfig.attachMedia && completionPostConfig.mediaType === "url" ? completionPostConfig.mediaUrl : undefined,
+          mediaBase64: completionPostConfig.attachMedia && completionPostConfig.mediaType === "file" ? completionPostConfig.mediaBase64 : undefined,
+          mediaMimeType: completionPostConfig.attachMedia && completionPostConfig.mediaType === "file" ? completionPostConfig.mediaMimeType : undefined,
+          buttons: completionPostConfig.buttonRows.map(r => r.map(b => ({ text: b.text, url: b.url }))),
+          pinMessage: completionPostConfig.pinMessage,
+          disableNotification: completionPostConfig.disableNotification,
+          variables: {
+            count: successCount,
+            successCount: successCount,
+            total: toSend.length,
+            failedCount: toSend.length - successCount,
+            groupTitle: groupTitle,
+            title: groupTitle,
+            date: dateFormatted,
+            time: timeFormatted,
+          },
+        };
+
+        const postRes = await fetch(`/api/groups/${groupId}/messages/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(postPayload),
+        });
+
+        const postData = await postRes.json();
+        if (postRes.ok) {
+          setProgress(prev => prev ? { ...prev, postStatus: "sent" } : prev);
+          showToast(
+            "success",
+            `تم إرسال بوست الختام بنجاح! ${
+              postData.pinned
+                ? "📌 وتم تثبيته."
+                : postData.pinError
+                ? "⚠️ (لم يتم التثبيت: البوت لا يملك صلاحية التثبيت)"
+                : ""
+            }`
+          );
+        } else {
+          setProgress(prev => prev ? { ...prev, postStatus: "failed" } : prev);
+          showToast("error", `فشل إرسال بوست الختام: ${postData.error || "خطأ غير معروف"}`);
+        }
+      } catch {
+        setProgress(prev => prev ? { ...prev, postStatus: "failed" } : prev);
+        showToast("error", "حدث خطأ في الشبكة أثناء إرسال بوست الختام");
       }
     }
 
@@ -650,6 +768,21 @@ export default function LibraryPage() {
               <Link href={`/dashboard/${groupId}/analytics`} className="btn btn-ghost btn-sm" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
                 📊 Analytics
               </Link>
+              <button
+                type="button"
+                onClick={() => setShowCompletionPostModal(true)}
+                className="btn btn-ghost btn-sm"
+                style={{
+                  fontSize: "0.78rem",
+                  padding: "4px 10px",
+                  border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+                  color: completionPostConfig.enabled ? "var(--clr-brand)" : "var(--clr-text-secondary)",
+                  background: completionPostConfig.enabled ? "var(--clr-brand-muted)" : "transparent",
+                }}
+                title="إعداد وتخصيص بوست الختام التلقائي"
+              >
+                📢 بوست الختام {completionPostConfig.enabled ? "✓" : ""}
+              </button>
             </div>
           </div>
           <p style={{ marginTop: 4 }}>
@@ -660,6 +793,25 @@ export default function LibraryPage() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {visibleSelected.length > 0 && !progress?.active && (
             <>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{
+                  border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+                  color: completionPostConfig.enabled ? "var(--clr-brand)" : "var(--clr-text-secondary)",
+                  background: completionPostConfig.enabled ? "var(--clr-brand-muted)" : "transparent",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+                onClick={() => setShowCompletionPostModal(true)}
+                title="تخصيص رسالة الختام والأزرار بعد إرسال الكويزات"
+              >
+                <span>📢 بوست الختام:</span>
+                <span style={{ fontWeight: 700, color: completionPostConfig.enabled ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
+                  {completionPostConfig.enabled ? "مفعّل ✓" : "معطّل"}
+                </span>
+              </button>
               <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={() => setShowAddToColl(true)}>
                 📁 Add to Collection
               </button>
@@ -763,6 +915,46 @@ export default function LibraryPage() {
                 }} />
             ))}
           </div>
+
+          {/* Completion post progress indicator */}
+          {completionPostConfig.enabled && progress.postStatus && (
+            <div style={{
+              marginTop: 10,
+              padding: "6px 12px",
+              borderRadius: "var(--radius-sm)",
+              background: progress.postStatus === "sent"
+                ? "var(--clr-success-muted)"
+                : progress.postStatus === "failed"
+                ? "var(--clr-danger-muted)"
+                : "var(--clr-brand-muted)",
+              border: `1px solid ${
+                progress.postStatus === "sent"
+                  ? "var(--clr-success)"
+                  : progress.postStatus === "failed"
+                  ? "var(--clr-danger)"
+                  : "var(--clr-brand)"
+              }`,
+              fontSize: "0.82rem",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              color: progress.postStatus === "sent"
+                ? "var(--clr-success)"
+                : progress.postStatus === "failed"
+                ? "var(--clr-danger)"
+                : "var(--clr-brand)",
+            }}>
+              {progress.postStatus === "sending" && (
+                <span>📢 جاري إرسال بوست الختام إلى التلجرام...</span>
+              )}
+              {progress.postStatus === "sent" && (
+                <span>✓ تم إرسال بوست الختام بنجاح {completionPostConfig.pinMessage ? "📌 وتم تثبيته" : ""}</span>
+              )}
+              {progress.postStatus === "failed" && (
+                <span>⚠️ تعذر إرسال بوست الختام (تحقق من البوت أو الإعدادات)</span>
+              )}
+            </div>
+          )}
 
           {/* Errors */}
           {progress.errors.length > 0 && (
@@ -1351,6 +1543,21 @@ export default function LibraryPage() {
             <span className="hide-mobile">selected</span>
           </span>
           <div style={{ width: 1, height: 18, background: "var(--clr-border)" }} />
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{
+              fontSize: "0.8rem",
+              padding: "4px 8px",
+              whiteSpace: "nowrap",
+              color: completionPostConfig.enabled ? "var(--clr-brand)" : "var(--clr-text-muted)",
+              background: completionPostConfig.enabled ? "var(--clr-brand-muted)" : "transparent",
+              border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid transparent",
+            }}
+            onClick={() => setShowCompletionPostModal(true)}
+            title="إعدادات بوست الختام"
+          >
+            📢 <span className="hide-mobile">بوست الختام</span> {completionPostConfig.enabled ? "✓" : ""}
+          </button>
           <button className="btn btn-ghost btn-sm" style={{ fontSize: "0.8rem", padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => setShowAddToColl(true)} title="Add to collection">
             📁 <span className="hide-mobile">Collection</span>
           </button>
@@ -1365,6 +1572,20 @@ export default function LibraryPage() {
           </button>
         </div>
       )}
+
+      {/* ── Completion Post Modal ── */}
+      <CompletionPostModal
+        isOpen={showCompletionPostModal}
+        onClose={() => setShowCompletionPostModal(false)}
+        groupId={groupId}
+        groupTitle={groupTitle}
+        topics={topics}
+        selectedTopicId={sendTopicId}
+        selectedCount={visibleSelected.length}
+        config={completionPostConfig}
+        onSaveConfig={handleSaveCompletionPostConfig}
+        showToast={showToast}
+      />
     </div>
   );
 }

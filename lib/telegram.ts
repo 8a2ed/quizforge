@@ -134,6 +134,7 @@ export interface SendPhotoParams {
   parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
   reply_to_message_id?: number;
   reply_markup?: Record<string, unknown>;
+  disable_notification?: boolean;
 }
 
 export interface TelegramPhotoMessage {
@@ -233,16 +234,22 @@ export const telegram = {
     photoBase64: string;
     mimeType?: string;
     caption?: string;
+    parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+    reply_markup?: Record<string, unknown>;
+    disable_notification?: boolean;
   }): Promise<TelegramPhotoMessage> {
     const mimeType = params.mimeType || "image/jpeg";
-    const dataUrl = `data:${mimeType};base64,${params.photoBase64}`;
-    const blobRes = await fetch(dataUrl);
-    const blob = await blobRes.blob();
+    const cleanBase64 = params.photoBase64.replace(/^data:[^;]+;base64,/, "").trim();
+    const buffer = Buffer.from(cleanBase64, "base64");
+    const blob = new Blob([buffer], { type: mimeType });
 
     const fd = new FormData();
     fd.append("chat_id", String(params.chat_id));
     if (params.message_thread_id) fd.append("message_thread_id", String(params.message_thread_id));
     if (params.caption) fd.append("caption", params.caption);
+    if (params.parse_mode) fd.append("parse_mode", params.parse_mode);
+    if (params.disable_notification) fd.append("disable_notification", "true");
+    if (params.reply_markup) fd.append("reply_markup", JSON.stringify(params.reply_markup));
     fd.append("photo", blob, "photo.jpg");
 
     const controller = new AbortController();
