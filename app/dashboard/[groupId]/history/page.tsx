@@ -350,23 +350,23 @@ export default function HistoryPage() {
     }
 
     const headers = [
-      "السؤال (Question)",
-      "النوع (Type)",
-      "الخصوصية (Privacy)",
-      "اختيار متعدد (Multiple)",
-      "الحالة (Status)",
-      "الموضوع (Topic)",
-      "عدد المشاركين (Responses)",
-      "نسبة الصحة (Accuracy)",
-      "الإجابة الصحيحة (Correct Answer)",
-      "الخيارات (Options)",
-      "الشرح (Explanation)",
-      "المرسل (Sent By)",
-      "تاريخ الإرسال (Sent At)",
-      "مدة الإجابة بالثواني (Timer)",
-      "الوسوم (Tags)",
-      "رقم الرسالة في تيليجرام (Message ID)",
-      "رابط تيليجرام المباشر (Telegram URL)",
+      "السؤال / Question",
+      "النوع / Type",
+      "الخيارات / Options",
+      "الإجابة الصحيحة / Correct Answer",
+      "الموضوع / Topic",
+      "تاريخ ووقت الإرسال / Sent Date/Time",
+      "إجمالي الأصوات / Total Votes",
+      "نسبة الدقة / Accuracy %",
+      "الحالة / Status",
+      "الخصوصية / Privacy",
+      "اختيار متعدد / Multiple Choice",
+      "الشرح والتوضيح / Explanation",
+      "المرسل / Sent By",
+      "مدة الإجابة بالثواني / Timer (s)",
+      "الوسوم / Tags",
+      "رقم الرسالة في تيليجرام / Message ID",
+      "رابط تيليجرام المباشر / Telegram URL",
     ];
 
     const rows = quizzes.map((q) => {
@@ -375,20 +375,42 @@ export default function HistoryPage() {
           ? q.options[q.correctOptionId]
           : "N/A";
 
+      const formattedDate = q.sentAt
+        ? new Date(q.sentAt).toLocaleString("ar-EG", {
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "N/A";
+
+      const statusText = q.deletedAt
+        ? "محذوف / Deleted"
+        : q.pollClosed
+        ? "مغلق / Closed"
+        : "نشط / Active";
+
+      const accuracyText = q.correctRate !== null ? `${q.correctRate}%` : "N/A";
+
+      const optionsFormatted = q.options
+        .map((opt, i) => `${String.fromCharCode(65 + i)}: ${opt}`)
+        .join(" | ");
+
       return [
-        `"${q.question.replace(/"/g, '""')}"`,
+        `"${(q.question || "").replace(/"/g, '""')}"`,
         q.type,
-        q.isAnonymous ? "Anonymous" : "Public",
-        q.allowsMultiple ? "Yes" : "No",
-        q.deletedAt ? "Deleted" : q.pollClosed ? "Closed" : "Active",
-        `"${(q.topicName || "General").replace(/"/g, '""')}"`,
-        q._count.answers,
-        q.correctRate !== null ? `${q.correctRate}%` : "N/A",
+        `"${optionsFormatted.replace(/"/g, '""')}"`,
         `"${correctText.replace(/"/g, '""')}"`,
-        `"${q.options.map((opt, i) => `${String.fromCharCode(65 + i)}: ${opt}`).join(" | ").replace(/"/g, '""')}"`,
+        `"${(q.topicName || "عام / General").replace(/"/g, '""')}"`,
+        `"${formattedDate}"`,
+        q._count?.answers ?? 0,
+        `"${accuracyText}"`,
+        `"${statusText}"`,
+        q.isAnonymous ? "مجهول / Anonymous" : "علني / Public",
+        q.allowsMultiple ? "نعم / Yes" : "لا / No",
         `"${(q.explanation || "").replace(/"/g, '""')}"`,
-        `"${q.sentBy.firstName}${q.sentBy.username ? ` (@${q.sentBy.username})` : ""}"`,
-        q.sentAt,
+        `"${(q.sentBy?.firstName || "")}${q.sentBy?.username ? ` (@${q.sentBy.username})` : ""}"`,
         q.openPeriod || "",
         `"${(q.tags || []).join(", ")}"`,
         q.messageId || "",
@@ -398,7 +420,7 @@ export default function HistoryPage() {
 
     const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
 
-    // Add \uFEFF BOM so Arabic opens properly in Microsoft Excel
+    // Add \uFEFF BOM so Arabic opens properly in Microsoft Excel without mojibake
     const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -406,7 +428,7 @@ export default function HistoryPage() {
     a.download = `quizforge-history-${groupId}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast("success", "تم تصدير ملف CSV بنجاح وبترميز UTF-8 سليم");
+    showToast("success", "تم تصدير سجل الكويزات بنجاح إلى ملف Excel / CSV بترميز UTF-8 سليم ✓");
   };
 
   // Helper to format remaining timer
@@ -819,12 +841,13 @@ export default function HistoryPage() {
             className="btn btn-secondary btn-sm"
             onClick={exportCSV}
             disabled={quizzes.length === 0}
-            title="تصدير تقرير إكسل مع ترميز UTF-8 سليم"
+            title="تصدير تقرير وسجل الكويزات إلى إكسل مع ترميز UTF-8 سليم"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
             </svg>
-            تصدير CSV
+            📥 تصدير السجل إلى Excel
           </button>
 
           <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary btn-sm">

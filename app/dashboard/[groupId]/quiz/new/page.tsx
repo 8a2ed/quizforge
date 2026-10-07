@@ -216,6 +216,7 @@ export default function NewQuizPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imagePreviewUrlRef = useRef<string>("");
   const isInitializedRef = useRef<boolean>(false);
+  const defaultsLoadedRef = useRef<boolean>(false);
   const optionInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // ── Toast Helper ────────────────────────────────────────────────────────────
@@ -377,6 +378,7 @@ export default function NewQuizPage() {
   ]);
 
   const restoreLocalDraft = useCallback(() => {
+    defaultsLoadedRef.current = true;
     try {
       const saved = localStorage.getItem(draftStorageKey);
       if (!saved) return;
@@ -444,6 +446,48 @@ export default function NewQuizPage() {
   useEffect(() => {
     loadTopics();
   }, [loadTopics]);
+
+  // ── Load BotConfig Defaults ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!groupId) return;
+    const hasExplicitDraft = searchParams.get("draft") || searchParams.get("fromLibrary");
+    if (hasExplicitDraft) return;
+
+    fetch(`/api/groups/${groupId}/settings`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.config && !defaultsLoadedRef.current) {
+          defaultsLoadedRef.current = true;
+          const cfg = d.config;
+          // Apply defaults only if question and options are still unpopulated
+          setQuestion((prevQ) => {
+            if (prevQ.trim() === "") {
+              if (typeof cfg.defaultAnonymous === "boolean") {
+                setIsAnonymous(cfg.defaultAnonymous);
+              }
+              if (cfg.defaultType) {
+                setType(String(cfg.defaultType).toLowerCase() === "poll" ? "poll" : "quiz");
+              }
+              if (typeof cfg.defaultOpenPeriod === "number") {
+                if (cfg.defaultOpenPeriod > 0) {
+                  setOpenPeriod(cfg.defaultOpenPeriod);
+                  setShowDuration(true);
+                } else {
+                  setShowDuration(false);
+                }
+              }
+              if (typeof cfg.allowMultiple === "boolean") {
+                setAllowsMultiple(cfg.allowMultiple);
+              }
+            }
+            return prevQ;
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load group settings for defaults", err);
+      });
+  }, [groupId, searchParams]);
 
   const handleAddManualTopic = async () => {
     if (!manualTopicId || !manualTopicName.trim()) return;

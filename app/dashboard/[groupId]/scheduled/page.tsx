@@ -23,17 +23,42 @@ export default function ScheduledPage() {
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [editTime, setEditTime] = useState("");
+  const [sendingId, setSendingId] = useState<string | null>(null);
 
   const showToast = (type: string, msg: string) => { setToast({ type, msg }); setTimeout(() => setToast(null), 3500); };
 
-  const load = useCallback(() => {
-    setLoading(true);
+  const load = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
     fetch(`/api/groups/${groupId}/scheduled`)
       .then(r => r.json()).then(d => { setQuizzes(d.quizzes || []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [groupId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleSendNow = async (id: string) => {
+    if (!confirm("هل ترغب في إرسال هذا السؤال المجدول إلى تيليجرام فوراً؟\nSend this scheduled quiz to Telegram right now?")) return;
+    setSendingId(id);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/scheduled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("success", "🚀 تم إرسال السؤال المجدول إلى تيليجرام فوراً! / Quiz sent now!");
+        setQuizzes(p => p.filter(q => q.id !== id));
+        load(true);
+      } else {
+        showToast("error", data.error || "فشل إرسال السؤال فوراً / Failed to send now");
+      }
+    } catch (err: any) {
+      showToast("error", err.message || "Network error");
+    } finally {
+      setSendingId(null);
+    }
+  };
 
   const handleCancel = async (id: string) => {
     if (!confirm("Cancel this scheduled quiz?")) return;
@@ -67,7 +92,7 @@ export default function ScheduledPage() {
 
       <div className="section-header animate-fade-up">
         <div><h1>Scheduled Quizzes</h1><p>{quizzes.length} pending</p></div>
-        <button className="btn btn-secondary" onClick={load} disabled={loading}>↻ Refresh</button>
+        <button className="btn btn-secondary" onClick={() => load()} disabled={loading}>↻ Refresh</button>
       </div>
 
       {loading ? (
@@ -114,7 +139,17 @@ export default function ScheduledPage() {
                   </div>
 
                   {/* Actions */}
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      title="إرسال الآن / Send Now"
+                      disabled={Boolean(sendingId)}
+                      onClick={() => handleSendNow(q.id)}
+                      style={{ fontSize: "0.78rem", gap: 4, padding: "4px 10px", display: "inline-flex", alignItems: "center" }}
+                    >
+                      <span>🚀</span>
+                      <span>{sendingId === q.id ? "جاري الإرسال..." : "إرسال الآن"}</span>
+                    </button>
                     <button className="btn btn-secondary btn-sm" title="Reschedule"
                       onClick={() => { setEditId(editId === q.id ? null : q.id); setEditTime(q.scheduledAt.slice(0, 16)); }}>
                       ✏️

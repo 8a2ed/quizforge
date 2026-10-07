@@ -113,6 +113,7 @@ export default function ExamsPage() {
   const [studentSort, setStudentSort] = useState<"newest" | "highest" | "lowest" | "fastest" | "slowest">("newest");
   const [expandedStudentIds, setExpandedStudentIds] = useState<Set<string>>(new Set());
   const [savingQuestionIdx, setSavingQuestionIdx] = useState<number | null>(null);
+  const [resettingResultId, setResettingResultId] = useState<string | null>(null);
 
   // Form state
   const [title, setTitle] = useState("");
@@ -146,6 +147,51 @@ export default function ExamsPage() {
     fetch(`/api/groups/${groupId}/topics`)
       .then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
   }, [groupId]);
+
+  // Check if draft exists from library selection
+  useEffect(() => {
+    try {
+      const isFromLibrary = typeof window !== "undefined" && (
+        new URLSearchParams(window.location.search).get("fromLibrary") === "1" ||
+        !!sessionStorage.getItem("exam-draft-from-library")
+      );
+      if (!isFromLibrary) return;
+
+      const stored = sessionStorage.getItem("exam-draft-from-library");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const formattedQuestions: Question[] = parsed.map((q: any) => {
+            const rawOpts = Array.isArray(q.options) && q.options.length > 0
+              ? q.options.map((o: any) => String(o ?? "").trim())
+              : ["", ""];
+            const cleanOpts = rawOpts.length >= 2 ? rawOpts : [...rawOpts, ...Array(2 - rawOpts.length).fill("")];
+            const safeCorrect = (typeof q.correctOptionId === "number" && q.correctOptionId >= 0 && q.correctOptionId < cleanOpts.length)
+              ? q.correctOptionId
+              : 0;
+            return {
+              question: String(q.question || "").trim(),
+              options: cleanOpts,
+              correctOptionId: safeCorrect,
+              explanation: q.explanation ? String(q.explanation).trim() : undefined,
+            };
+          });
+
+          setQuestions(formattedQuestions);
+          setTitle(`امتحان جديد (${formattedQuestions.length} أسئلة)`);
+          setMode("create");
+          showToast("success", `تم استيراد ${formattedQuestions.length} سؤال من المكتبة بنجاح! جاهز لإنشاء الامتحان.`);
+          sessionStorage.removeItem("exam-draft-from-library");
+
+          if (window.history?.replaceState) {
+            window.history.replaceState({}, "", window.location.pathname);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load draft from library:", e);
+    }
+  }, []);
 
   // Reset form
   const resetForm = () => {
@@ -299,6 +345,32 @@ export default function ExamsPage() {
       }
     } catch (e: any) {
       showToast("error", e.message || "Failed to load results");
+    }
+  };
+
+  const handleResetAttempt = async (resultId: string, studentName: string) => {
+    if (!confirm(`هل أنت متأكد من إعادة تعيين محاولة الطالب "${studentName}"؟ سيتم حذف نتيجته والسماح له بإعادة الاختبار في تيليجرام.`)) {
+      return;
+    }
+    setResettingResultId(resultId);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/exams/${viewResults?.exam.id}/results?resultId=${resultId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("success", "تم إعادة تعيين محاولة الطالب بنجاح / Attempt reset successfully");
+        if (viewResults) {
+          loadResults(viewResults.exam);
+        }
+        load();
+      } else {
+        showToast("error", data.error || "فشل في إعادة تعيين المحاولة");
+      }
+    } catch (err: any) {
+      showToast("error", err.message || "Network error");
+    } finally {
+      setResettingResultId(null);
     }
   };
 
@@ -721,6 +793,18 @@ export default function ExamsPage() {
                           <span className={`badge ${inProgress ? "badge-muted" : r.passed ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.75rem", padding: "4px 10px" }}>
                             {inProgress ? "⏱ In Progress" : r.passed ? "✓ Passed" : "✗ Failed"}
                           </span>
+
+                          {/* Reset Attempt Action */}
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ fontSize: "0.76rem", border: "1px solid rgba(239, 68, 68, 0.4)", color: "var(--clr-danger)", padding: "4px 10px", gap: 4, display: "inline-flex", alignItems: "center" }}
+                            disabled={resettingResultId === r.id}
+                            onClick={() => handleResetAttempt(r.id, r.name)}
+                            title="إعادة تعيين المحاولة / Reset Attempt"
+                          >
+                            <span>{resettingResultId === r.id ? "⏳" : "🔄"}</span>
+                            <span>{resettingResultId === r.id ? "جاري التعيين..." : "إعادة تعيين المحاولة / Reset Attempt"}</span>
+                          </button>
 
                           {/* Accordion Toggle */}
                           {!inProgress && r.details && r.details.length > 0 && (

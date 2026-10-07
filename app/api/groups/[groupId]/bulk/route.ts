@@ -234,22 +234,36 @@ export async function POST(
           }
 
           // --- Send immediately via Telegram ---
-          const message = await telegram.sendPoll({
+          let message;
+          const wantsHtmlExplanation = Boolean(cleanExplanation && /<[a-z][\s\S]*>/i.test(cleanExplanation));
+          const basePollPayload = {
             chat_id: auth.membership.group.chatId,
             message_thread_id: validatedTopicId ? validatedTopicId : undefined,
             question,
             options: options.map((text: string) => ({ text })),
-            type: type === "QUIZ" ? "quiz" : "regular",
+            type: type === "QUIZ" ? ("quiz" as const) : ("regular" as const),
             is_anonymous: isAnonymous,
             correct_option_id: correctOptionId !== null ? correctOptionId : undefined,
             explanation: cleanExplanation || undefined,
-            explanation_parse_mode: cleanExplanation ? "HTML" : undefined,
+            explanation_parse_mode: wantsHtmlExplanation ? ("HTML" as const) : undefined,
             allows_multiple_answers: type === "POLL" ? Boolean(q.allowsMultiple) : false,
             allows_adding_options: type === "POLL" ? Boolean(q.allowAddingOptions) : false,
             allows_revoting: type === "POLL" ? Boolean(q.allowRevoting) : false,
             open_period: telegramOpenPeriod,
             close_date: telegramCloseDate,
-          });
+          };
+
+          try {
+            message = await telegram.sendPoll(basePollPayload);
+          } catch (pollErr: any) {
+            if (basePollPayload.explanation_parse_mode && String(pollErr?.message || "").includes("parse entities")) {
+              const fallbackPayload = { ...basePollPayload };
+              delete fallbackPayload.explanation_parse_mode;
+              message = await telegram.sendPoll(fallbackPayload);
+            } else {
+              throw pollErr;
+            }
+          }
 
           // Persist to DB
           const quiz = await withRetry(() =>

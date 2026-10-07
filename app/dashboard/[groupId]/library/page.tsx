@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import CompletionPostModal, {
   CompletionPostConfig,
@@ -50,6 +50,7 @@ const DELAY_MS = 3200; // 3.2s between sends to respect Telegram rate limits
 
 export default function LibraryPage() {
   const { groupId } = useParams<{ groupId: string }>();
+  const router = useRouter();
 
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
@@ -207,6 +208,24 @@ export default function LibraryPage() {
     filtered.forEach(t => s.delete(t.id));
     return s;
   });
+
+  // ── Create Exam from Selected Questions ──────────────────────────
+  const handleCreateExamFromSelected = () => {
+    const selectedTemplates = templates.filter(t => visibleSelected.includes(t.id));
+    if (selectedTemplates.length === 0) return;
+    const examQuestions = selectedTemplates.map(t => ({
+      question: t.question,
+      options: Array.isArray(t.options) && t.options.length > 0 ? t.options : ["", ""],
+      correctOptionId: t.correctOptionId ?? 0,
+      explanation: t.explanation || "",
+    }));
+    try {
+      sessionStorage.setItem("exam-draft-from-library", JSON.stringify(examQuestions));
+    } catch (err) {
+      console.error("Failed to save exam draft in sessionStorage", err);
+    }
+    router.push(`/dashboard/${groupId}/exams?fromLibrary=1`);
+  };
 
   // ── Export library ────────────────────────────────────────────────
   const handleExportJSON = () => {
@@ -811,6 +830,25 @@ export default function LibraryPage() {
                 <span style={{ fontWeight: 700, color: completionPostConfig.enabled ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
                   {completionPostConfig.enabled ? "مفعّل ✓" : "معطّل"}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{
+                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                  color: "#ffffff",
+                  border: "none",
+                  fontWeight: 600,
+                  boxShadow: "0 2px 8px rgba(99, 102, 241, 0.35)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  cursor: "pointer",
+                }}
+                onClick={handleCreateExamFromSelected}
+                title="تحويل الأسئلة المحددة إلى امتحان فوري متكامل"
+              >
+                <span>📝 تحويل إلى امتحان / Create Exam ({visibleSelected.length})</span>
               </button>
               <button className="btn btn-ghost btn-sm" style={{ border: "1px solid var(--clr-border)" }} onClick={() => setShowAddToColl(true)}>
                 📁 Add to Collection
@@ -1543,6 +1581,28 @@ export default function LibraryPage() {
             <span className="hide-mobile">selected</span>
           </span>
           <div style={{ width: 1, height: 18, background: "var(--clr-border)" }} />
+          <button
+            type="button"
+            className="btn btn-sm"
+            style={{
+              background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              color: "#ffffff",
+              border: "none",
+              fontWeight: 600,
+              fontSize: "0.8rem",
+              padding: "4px 10px",
+              boxShadow: "0 2px 8px rgba(99, 102, 241, 0.35)",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              whiteSpace: "nowrap",
+              cursor: "pointer",
+            }}
+            onClick={handleCreateExamFromSelected}
+            title="تحويل الأسئلة المحددة إلى امتحان فوري متكامل"
+          >
+            <span>📝 <span className="hide-mobile">تحويل إلى</span> امتحان ({visibleSelected.length})</span>
+          </button>
           <button
             className="btn btn-ghost btn-sm"
             style={{

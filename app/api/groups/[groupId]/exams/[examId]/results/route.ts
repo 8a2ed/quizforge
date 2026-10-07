@@ -197,3 +197,64 @@ export async function GET(
     results: studentResults,
   });
 }
+
+// DELETE /api/groups/[groupId]/exams/[examId]/results
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ groupId: string; examId: string }> }
+) {
+  const { groupId, examId } = await params;
+  const auth = await authorize(req, groupId);
+  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { searchParams } = new URL(req.url);
+  let resultId = searchParams.get("resultId");
+  if (!resultId) {
+    try {
+      const body = await req.json();
+      resultId = body?.resultId;
+    } catch {
+      // ignore JSON parse error if body was empty
+    }
+  }
+
+  if (!resultId) {
+    return NextResponse.json({ error: "resultId is required" }, { status: 400 });
+  }
+
+  const exam = await withRetry(() =>
+    prisma.exam.findFirst({
+      where: { id: examId, groupId },
+    })
+  );
+  if (!exam) return NextResponse.json({ error: "Exam not found" }, { status: 404 });
+
+  const result = await withRetry(() =>
+    prisma.examResult.findFirst({
+      where: { id: resultId, examId },
+    })
+  );
+  if (!result) return NextResponse.json({ error: "Result not found" }, { status: 404 });
+
+  await withRetry(() =>
+    prisma.examResult.delete({
+      where: { id: resultId },
+    })
+  );
+
+  // Clean up any in-progress attempt records and in-memory session for a full fresh retake
+  if (result.telegramId) {
+    await withRetry(() =>
+      prisma.examResult.deleteMany({
+        where: { examId, telegramId: result.telegramId, score: -1 },
+      })
+    ).catch(() => {});
+
+    if (globalThis.__examSessions) {
+      globalThis.__examSessions.delete(`${result.telegramId}:${examId}`);
+    }
+  }
+
+  return NextResponse.json({ ok: true, message: "Attempt reset successfully" });
+}
+

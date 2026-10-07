@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -9,6 +9,12 @@ import {
   Settings2, Copy, AlertCircle, Trash2, Sparkles,
   PlusCircle, ChevronDown, ChevronUp
 } from "lucide-react";
+import * as XLSX from "xlsx";
+import * as mammoth from "mammoth";
+import CompletionPostModal, {
+  CompletionPostConfig,
+  DEFAULT_COMPLETION_POST_CONFIG,
+} from "@/components/CompletionPostModal";
 
 const uid = () => Math.random().toString(36).substr(2, 9);
 
@@ -95,12 +101,44 @@ function validate(p: Partial<QuizPreview>): string[] {
 
 function resolveCorrectOption(raw: string | undefined | null, options: string[]): number | null {
   if (!raw || options.length === 0) return null;
-  const str = String(raw).trim().replace(/^["'\[\(\]\)]+|["'\[\(\]\)]+$/g, "").trim();
+  let str = String(raw).trim().replace(/^["'\[\(\]\)\.\:\-]+|["'\[\(\]\)\.\:\-]+$/g, "").trim();
   if (!str) return null;
 
+  // Exact match against options first (e.g. if the answer is the literal text of an option)
+  const cleanStr = str.toLowerCase();
+  let matchIdx = options.findIndex(o => o.trim().toLowerCase() === cleanStr);
+  if (matchIdx !== -1) return matchIdx;
+
+  // Strip prefixes like "الخيار", "خيار", "Option", "Choice", "Answer", "Ans", "الإجابة"
+  const stripped = str
+    .replace(/^(?:الخيار|خيار|option|choice|answer|ans|الجواب|الإجابة|الاجابة)\s*[:.\-]?\s*/i, "")
+    .trim()
+    .replace(/^["'\[\(\]\)\.\:\-]+|["'\[\(\]\)\.\:\-]+$/g, "")
+    .trim();
+  if (stripped) {
+    str = stripped;
+  }
+
+  // Check Eastern Arabic numerals (١, ٢, ٣...)
   const easternDigits: Record<string, number> = { "١": 0, "٢": 1, "٣": 2, "٤": 3, "٥": 4, "٦": 5, "٧": 6, "٨": 7, "٩": 8, "١٠": 9 };
   if (str in easternDigits && easternDigits[str] < options.length) return easternDigits[str];
 
+  // Arabic ordinals (الأول, الثاني, الثالث, الرابع, الخامس...)
+  const arabicOrdinals: Record<string, number> = {
+    "الاول": 0, "الأول": 0, "اول": 0, "أول": 0,
+    "الثاني": 1, "ثاني": 1,
+    "الثالث": 2, "ثالث": 2,
+    "الرابع": 3, "رابع": 3,
+    "الخامس": 4, "خامس": 4,
+    "السادس": 5, "سادس": 5,
+    "السابع": 6, "سابع": 6,
+    "الثامن": 7, "ثامن": 7,
+    "التاسع": 8, "تاسع": 8,
+    "العاشر": 9, "عاشر": 9,
+  };
+  if (str in arabicOrdinals && arabicOrdinals[str] < options.length) return arabicOrdinals[str];
+
+  // Arabic alphabet letter matching (Abjadi and Hijai)
   const arabicAbjadi = ["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح", "ط", "ي"];
   const arabicHijai = ["أ", "ب", "ت", "ث", "ج", "ح", "خ", "د", "ذ", "ر"];
   const normalizedChar = str.replace(/^[إآا]/, "أ");
@@ -110,26 +148,26 @@ function resolveCorrectOption(raw: string | undefined | null, options: string[])
   idx = arabicHijai.indexOf(normalizedChar);
   if (idx !== -1 && idx < options.length) return idx;
 
+  // English letters A-J
   if (/^[a-jA-J]$/.test(str)) {
     const eIdx = str.toUpperCase().charCodeAt(0) - 65;
     if (eIdx < options.length) return eIdx;
   }
 
-  const cleanStr = str.toLowerCase();
-  let matchIdx = options.findIndex(o => o.trim().toLowerCase() === cleanStr);
-  if (matchIdx !== -1) return matchIdx;
+  // Western numerals 1-10 (1-based index preferred)
+  const n = Number(str);
+  if (!isNaN(n) && Number.isInteger(n)) {
+    if (n >= 1 && n <= options.length) return n - 1;
+    if (n >= 0 && n < options.length) return n;
+  }
 
+  // Partial option text match (starts with or contained in)
   matchIdx = options.findIndex(o => {
     const optClean = o.trim().toLowerCase();
     return optClean.startsWith(cleanStr) || cleanStr.startsWith(optClean);
   });
   if (matchIdx !== -1) return matchIdx;
 
-  const n = Number(str);
-  if (!isNaN(n) && Number.isInteger(n)) {
-    if (n >= 1 && n <= options.length) return n - 1;
-    if (n >= 0 && n < options.length) return n;
-  }
   return null;
 }
 
@@ -249,7 +287,303 @@ function parseSmartText(text: string, topicsList: Topic[] = [], collectionsList:
   return items;
 }
 
-function parseCSV(text: string): QuizPreview[] {
+function parseTabularData(
+  rawRows: any[][],
+  topicsList: Topic[] = [],
+  collectionsList: Collection[] = []
+): QuizPreview[] {
+  if (!rawRows || rawRows.length === 0) return [];
+
+  // Normalize rows into strings and remove empty rows
+  const rows: string[][] = rawRows
+    .map(r => (Array.isArray(r) ? r : []).map(c => String(c ?? "").trim()))
+    .filter(r => r.some(c => c.length > 0));
+
+  if (rows.length === 0) return [];
+
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[\u064B-\u065F\s_:\-\.\(\)\[\]\/\\]/g, "")
+      .replace(/[إأآ]/g, "ا");
+
+  // Check row 0 (or row 1) for header keywords
+  let headerRowIdx = -1;
+  let qCol = -1;
+  let ansCol = -1;
+  let expCol = -1;
+  let topicCol = -1;
+  let catCol = -1;
+  let tagsCol = -1;
+  let combinedOptsCol = -1;
+  const optCols: number[] = [];
+
+  for (let rIdx = 0; rIdx < Math.min(3, rows.length); rIdx++) {
+    const candidate = rows[rIdx];
+    const foundQ = candidate.findIndex(c => {
+      const n = norm(c);
+      return (
+        n === "سؤال" ||
+        n === "السؤال" ||
+        n === "نصالسؤال" ||
+        n.includes("question") ||
+        n === "q"
+      );
+    });
+
+    if (foundQ !== -1) {
+      headerRowIdx = rIdx;
+      qCol = foundQ;
+
+      candidate.forEach((colName, cIdx) => {
+        if (cIdx === qCol) return;
+        const n = norm(colName);
+
+        // Answer
+        if (
+          ansCol === -1 &&
+          (n === "إجابة" ||
+            n === "الإجابة" ||
+            n === "الاجابة" ||
+            n === "اجابة" ||
+            n === "الجواب" ||
+            n === "جواب" ||
+            n === "حل" ||
+            n === "الحل" ||
+            n === "صحيح" ||
+            n.includes("answer") ||
+            n.includes("correct") ||
+            n === "key" ||
+            n === "ans")
+        ) {
+          ansCol = cIdx;
+          return;
+        }
+
+        // Explanation
+        if (
+          expCol === -1 &&
+          (n === "شرح" ||
+            n === "الشرح" ||
+            n === "تفسير" ||
+            n === "التفسير" ||
+            n === "ملاحظة" ||
+            n === "ملاحظات" ||
+            n === "سبب" ||
+            n.includes("explanation") ||
+            n.includes("reason") ||
+            n === "notes")
+        ) {
+          expCol = cIdx;
+          return;
+        }
+
+        // Topic
+        if (
+          topicCol === -1 &&
+          (n === "موضوع" || n === "الموضوع" || n === "توبيك" || n === "توبك" || n === "topic")
+        ) {
+          topicCol = cIdx;
+          return;
+        }
+
+        // Category / Collection
+        if (
+          catCol === -1 &&
+          (n === "تصنيف" ||
+            n === "التصنيف" ||
+            n === "قسم" ||
+            n === "القسم" ||
+            n === "مجموعة" ||
+            n.includes("category") ||
+            n.includes("collection"))
+        ) {
+          catCol = cIdx;
+          return;
+        }
+
+        // Tags
+        if (
+          tagsCol === -1 &&
+          (n === "وسوم" || n === "الوسوم" || n === "هاشتاق" || n === "تاق" || n.includes("tag"))
+        ) {
+          tagsCol = cIdx;
+          return;
+        }
+
+        // Combined options
+        if (
+          combinedOptsCol === -1 &&
+          (n === "خيارات" || n === "الخيارات" || n === "options" || n === "choices")
+        ) {
+          combinedOptsCol = cIdx;
+          return;
+        }
+
+        // Individual options
+        if (
+          n.includes("خيار") ||
+          n.includes("اختيار") ||
+          n.includes("option") ||
+          n.includes("choice") ||
+          /^[a-j]$/.test(n) ||
+          /^[أ-ي]$/.test(n) ||
+          /^[1-9]$/.test(n)
+        ) {
+          optCols.push(cIdx);
+          return;
+        }
+      });
+      break;
+    }
+  }
+
+  const items: QuizPreview[] = [];
+
+  // Case A: Header row found
+  if (headerRowIdx !== -1) {
+    const dataRows = rows.slice(headerRowIdx + 1);
+
+    for (const cols of dataRows) {
+      const question = cols[qCol]?.replace(/^"|"$/g, "").trim();
+      if (!question) continue;
+
+      let options: string[] = [];
+      const correctAnswerStr = ansCol !== -1 ? cols[ansCol]?.replace(/^"|"$/g, "").trim() : "";
+      const explanation = expCol !== -1 ? cols[expCol]?.replace(/^"|"$/g, "").trim() || undefined : undefined;
+      const topicNameStr = topicCol !== -1 ? cols[topicCol]?.replace(/^"|"$/g, "").trim() : "";
+      const categoryStr = catCol !== -1 ? cols[catCol]?.replace(/^"|"$/g, "").trim() : "";
+      const tagsList = tagsCol !== -1 ? cols[tagsCol]?.split(/[,#\s]+/).map(t => t.trim()).filter(Boolean) : [];
+
+      if (combinedOptsCol !== -1 && cols[combinedOptsCol]) {
+        const rawOpts = cols[combinedOptsCol].split(/\r?\n|\||؛/).map(o => o.trim()).filter(Boolean);
+        options = rawOpts.map(o => o.replace(/^[a-jA-Jأ-ي1-9][\.\)\:\-]\s*/, "").trim());
+      } else if (optCols.length > 0) {
+        options = optCols.map(idx => cols[idx]?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+      } else {
+        const candidateCols = cols.filter((_, idx) => idx !== qCol && idx !== ansCol && idx !== expCol && idx !== topicCol && idx !== catCol && idx !== tagsCol);
+        options = candidateCols.map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+      }
+
+      let inlineCorrect: number | null = null;
+      options = options.map((opt, oIdx) => {
+        const markerRegex = /[\(\[]?\s*(?:صح|صحيح|الصح|الإجابة الصحيحة|الاجابة الصحيحة|correct|true|right|answer|✓|✔|★|\[x\])\s*[\)\]]?$/i;
+        const prefixRegex = /^(?:✓|✔|★|\[x\])\s*/i;
+        if (markerRegex.test(opt) || prefixRegex.test(opt)) {
+          inlineCorrect = oIdx;
+          return opt.replace(markerRegex, "").replace(prefixRegex, "").trim();
+        }
+        return opt;
+      });
+
+      let correctOptionId: number | null = null;
+      if (inlineCorrect !== null) {
+        correctOptionId = inlineCorrect;
+      } else if (correctAnswerStr) {
+        correctOptionId = resolveCorrectOption(correctAnswerStr, options);
+      }
+
+      let topicId: number | undefined;
+      let topicName: string | undefined;
+      if (topicNameStr && topicsList.length > 0) {
+        const match = topicsList.find(t => t.name.toLowerCase().includes(topicNameStr.toLowerCase()) || topicNameStr.toLowerCase().includes(t.name.toLowerCase()));
+        if (match) { topicId = match.message_thread_id; topicName = match.name; }
+        else topicName = topicNameStr;
+      } else if (topicNameStr) {
+        topicName = topicNameStr;
+      }
+
+      let collectionId: string | undefined;
+      let collectionName: string | undefined;
+      let collectionIds: string[] | undefined;
+      if (categoryStr && collectionsList.length > 0) {
+        const match = collectionsList.find(c => c.name.toLowerCase().includes(categoryStr.toLowerCase()) || categoryStr.toLowerCase().includes(c.name.toLowerCase()));
+        if (match) { collectionId = match.id; collectionName = `${match.emoji} ${match.name}`; collectionIds = [match.id]; }
+        else collectionName = categoryStr;
+      } else if (categoryStr) {
+        collectionName = categoryStr;
+      }
+
+      const partial: Partial<QuizPreview> = {
+        question,
+        options,
+        correctOptionId,
+        explanation,
+        type: correctOptionId !== null ? "quiz" : "poll",
+        topicId,
+        topicName,
+        collectionId,
+        collectionName,
+        collectionIds,
+        tags: tagsList && tagsList.length > 0 ? tagsList : undefined,
+        isAnonymous: true,
+      };
+
+      items.push({ id: uid(), ...partial, errors: validate(partial) } as QuizPreview);
+    }
+
+    return items;
+  }
+
+  // Case B: No header row detected (headless table or positional format)
+  const startIdx = (rows[0]?.[0]?.toLowerCase().includes("question") || rows[0]?.[0]?.includes("سؤال")) ? 1 : 0;
+  for (let i = startIdx; i < rows.length; i++) {
+    const cols = rows[i];
+    if (cols.length < 3) continue;
+    const question = cols[0]?.replace(/^"|"$/g, "").trim();
+    if (!question) continue;
+
+    let correctOptionId: number | null = null;
+    let explanation: string | undefined = undefined;
+    let options: string[] = [];
+
+    if (cols.length >= 6) {
+      const possibleAns = cols[5]?.replace(/^"|"$/g, "").trim();
+      const testOpts = [cols[1], cols[2], cols[3], cols[4]].map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+      const resolved = resolveCorrectOption(possibleAns, testOpts);
+      if (resolved !== null) {
+        options = testOpts;
+        correctOptionId = resolved;
+        explanation = cols[6]?.replace(/^"|"$/g, "").trim() || undefined;
+      }
+    }
+
+    if (options.length === 0) {
+      let foundCol = -1;
+      let resolvedOpt: number | null = null;
+      let candidateOptions: string[] = [];
+      for (let cIdx = cols.length - 1; cIdx >= 2; cIdx--) {
+        const candidateAns = cols[cIdx]?.replace(/^"|"$/g, "").trim();
+        const candOpts = cols.slice(1, cIdx).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+        if (candOpts.length >= 2) {
+          const res = resolveCorrectOption(candidateAns, candOpts);
+          if (res !== null) { foundCol = cIdx; resolvedOpt = res; candidateOptions = candOpts; break; }
+        }
+      }
+      if (foundCol !== -1) {
+        options = candidateOptions;
+        correctOptionId = resolvedOpt;
+        explanation = cols.slice(foundCol + 1).join(" ").replace(/^"|"$/g, "").trim() || undefined;
+      } else {
+        options = cols.slice(1).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
+      }
+    }
+
+    const partial = {
+      question,
+      options,
+      correctOptionId,
+      explanation: explanation || undefined,
+      type: correctOptionId !== null ? ("quiz" as const) : ("poll" as const),
+      isAnonymous: true,
+    };
+    items.push({ id: uid(), ...partial, errors: validate(partial) } as QuizPreview);
+  }
+
+  return items;
+}
+
+function parseCSV(text: string, topicsList: Topic[] = [], collectionsList: Collection[] = []): QuizPreview[] {
   const clean = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const rows: string[][] = [];
   let currentRow: string[] = [];
@@ -275,50 +609,7 @@ function parseCSV(text: string): QuizPreview[] {
     if (currentRow.some(c => c.length > 0)) rows.push(currentRow);
   }
 
-  if (rows.length < 2) return [];
-  const items: QuizPreview[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    const cols = rows[i];
-    if (cols.length < 3) continue;
-    const question = cols[0]?.replace(/^"|"$/g, "").trim();
-    if (!question) continue;
-
-    let correctOptionId: number | null = null;
-    let explanation: string | undefined = undefined;
-    let options: string[] = [];
-
-    if (cols.length >= 6) {
-      const possibleAns = cols[5]?.replace(/^"|"$/g, "").trim();
-      const testOpts = [cols[1], cols[2], cols[3], cols[4]].map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
-      const resolved = resolveCorrectOption(possibleAns, testOpts);
-      if (resolved !== null) {
-        options = testOpts; correctOptionId = resolved;
-        explanation = cols[6]?.replace(/^"|"$/g, "").trim() || undefined;
-      }
-    }
-
-    if (options.length === 0) {
-      let foundCol = -1;
-      let resolvedOpt: number | null = null;
-      let candidateOptions: string[] = [];
-      for (let cIdx = cols.length - 1; cIdx >= 2; cIdx--) {
-        const candidateAns = cols[cIdx]?.replace(/^"|"$/g, "").trim();
-        const candOpts = cols.slice(1, cIdx).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
-        if (candOpts.length >= 2) {
-          const res = resolveCorrectOption(candidateAns, candOpts);
-          if (res !== null) { foundCol = cIdx; resolvedOpt = res; candidateOptions = candOpts; break; }
-        }
-      }
-      if (foundCol !== -1) {
-        options = candidateOptions; correctOptionId = resolvedOpt;
-        explanation = cols.slice(foundCol + 1).join(" ").replace(/^"|"$/g, "").trim() || undefined;
-      } else options = cols.slice(1).map(o => o?.replace(/^"|"$/g, "").trim()).filter(Boolean);
-    }
-
-    const partial = { question, options, correctOptionId, explanation: explanation || undefined, type: correctOptionId !== null ? "quiz" as const : "poll" as const };
-    items.push({ id: uid(), ...partial, errors: validate(partial) });
-  }
-  return items;
+  return parseTabularData(rows, topicsList, collectionsList);
 }
 
 export default function BulkPage() {
@@ -326,11 +617,21 @@ export default function BulkPage() {
   const [mode, setMode] = useState<"smart" | "file">("smart");
   const [rawText, setRawText] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [queue, setQueue] = useState<QuizPreview[]>([]);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; processed?: number; errors?: string[] } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "info" | "error"; msg: string } | null>(null);
+  const [progress, setProgress] = useState<{
+    total: number;
+    current: number;
+    successCount: number;
+    failCount: number;
+    currentQuestion: string;
+    isSending: boolean;
+  } | null>(null);
+  const abortRef = useRef<boolean>(false);
 
   const [activeTemplateTab, setActiveTemplateTab] = useState<string>("ar-standard");
   const [showTemplates, setShowTemplates] = useState<boolean>(true);
@@ -349,10 +650,45 @@ export default function BulkPage() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
 
+  // Completion Post state
+  const [groupTitle, setGroupTitle] = useState("المجموعة");
+  const [showCompletionPostModal, setShowCompletionPostModal] = useState(false);
+  const [completionPostConfig, setCompletionPostConfig] = useState<CompletionPostConfig>(DEFAULT_COMPLETION_POST_CONFIG);
+
   useEffect(() => {
     fetch(`/api/groups/${groupId}/topics`).then(r => r.json()).then(d => setTopics(d.topics || [])).catch(() => {});
     fetch("/api/collections").then(r => r.json()).then(d => setCollections(d.collections || [])).catch(() => {});
   }, [groupId]);
+
+  useEffect(() => {
+    fetch(`/api/groups/${groupId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.group?.title) setGroupTitle(d.group.title);
+      })
+      .catch(() => {});
+  }, [groupId]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`qf_completion_post_${groupId}`);
+      if (saved) {
+        setCompletionPostConfig(JSON.parse(saved));
+      }
+    } catch {}
+  }, [groupId]);
+
+  const handleSaveCompletionPostConfig = (newCfg: CompletionPostConfig) => {
+    setCompletionPostConfig(newCfg);
+    try {
+      localStorage.setItem(`qf_completion_post_${groupId}`, JSON.stringify(newCfg));
+    } catch {
+      try {
+        const fallbackCfg = { ...newCfg, mediaBase64: undefined };
+        localStorage.setItem(`qf_completion_post_${groupId}`, JSON.stringify(fallbackCfg));
+      } catch {}
+    }
+  };
 
   const notify = (type: "success" | "info" | "error", msg: string) => {
     setNotification({ type, msg });
@@ -367,7 +703,6 @@ export default function BulkPage() {
   const addToQueue = (items: QuizPreview[]) => {
     if (items.length === 0) return;
     setQueue(prev => [...prev, ...items]);
-    notify("success", `تمت إضافة ${items.length} سؤال`);
   };
 
   const handleExtract = () => {
@@ -381,42 +716,338 @@ export default function BulkPage() {
       collectionName: item.collectionName ?? (globalCollectionName || undefined),
       collectionIds: item.collectionIds ?? (globalCollectionId ? [globalCollectionId] : undefined),
     })));
+    notify("success", `تمت إضافة ${items.length} سؤال إلى القائمة`);
     setRawText("");
   };
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  const processFile = async (f: File) => {
     setFile(f);
-    const text = await f.text();
+
     try {
-      let items: QuizPreview[];
-      if (f.name.endsWith(".json")) {
+      let items: QuizPreview[] = [];
+      const fileNameLower = f.name.toLowerCase();
+
+      if (fileNameLower.endsWith(".json")) {
+        const text = await f.text();
         const json = JSON.parse(text);
-        const raw = Array.isArray(json) ? json : json.quizzes || [];
-        items = raw.map((item: QuizPreview) => {
-          const type = item.correctOptionId !== undefined && item.correctOptionId !== null ? "quiz" : "poll";
-          return { ...item, id: uid(), type, errors: validate({ ...item, type }) };
+        const raw = Array.isArray(json) ? json : json.quizzes || json.templates || [];
+        items = raw.map((item: any) => {
+          const type: "quiz" | "poll" = item.correctOptionId !== undefined && item.correctOptionId !== null ? "quiz" : "poll";
+          const partial = {
+            question: item.question || "",
+            options: Array.isArray(item.options) ? item.options : [],
+            correctOptionId: item.correctOptionId ?? null,
+            explanation: item.explanation || undefined,
+            type,
+            topicId: item.topicId,
+            topicName: item.topicName,
+            collectionId: item.collectionId,
+            collectionName: item.collectionName,
+            collectionIds: item.collectionIds,
+            tags: item.tags,
+            isAnonymous: item.isAnonymous ?? true,
+          };
+          return { id: uid(), ...partial, errors: validate(partial) } as QuizPreview;
         });
-      } else { items = parseCSV(text); }
-      addToQueue(items);
-      e.target.value = ""; setFile(null);
-    } catch { notify("error", "Failed to parse file."); }
+      } else if (fileNameLower.endsWith(".xlsx") || fileNameLower.endsWith(".xls")) {
+        const buffer = await f.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: "array" });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new Error("الملف فارغ أو لا يحتوي على صفحات عمل.");
+        }
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          if (!worksheet) continue;
+          const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const sheetItems = parseTabularData(rawRows, topics, collections);
+          if (sheetItems.length > 0) {
+            items.push(...sheetItems);
+          }
+        }
+      } else if (fileNameLower.endsWith(".docx")) {
+        const buffer = await f.arrayBuffer();
+        const { value: docText } = await mammoth.extractRawText({ arrayBuffer: buffer });
+        items = parseSmartText(docText, topics, collections);
+      } else if (fileNameLower.endsWith(".csv")) {
+        const text = await f.text();
+        const workbook = XLSX.read(text, { type: "string" });
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          if (!worksheet) continue;
+          const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const sheetItems = parseTabularData(rawRows, topics, collections);
+          if (sheetItems.length > 0) {
+            items.push(...sheetItems);
+          }
+        }
+        if (items.length === 0) {
+          items = parseCSV(text, topics, collections);
+        }
+      } else if (fileNameLower.endsWith(".txt")) {
+        const text = await f.text();
+        items = parseSmartText(text, topics, collections);
+        if (items.length === 0) {
+          try {
+            const workbook = XLSX.read(text, { type: "string" });
+            const sheetName = workbook.SheetNames[0];
+            if (sheetName) {
+              const worksheet = workbook.Sheets[sheetName];
+              const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+              items = parseTabularData(rawRows, topics, collections);
+            }
+          } catch {}
+        }
+      } else {
+        notify("error", "صيغة الملف غير مدعومة. يرجى اختيار ملف Excel (.xlsx) أو Word (.docx) أو CSV أو TXT أو JSON.");
+        setFile(null);
+        return;
+      }
+
+      if (items.length === 0) {
+        notify("info", "لم يتم العثور على أي أسئلة صالحة داخل الملف.");
+      } else {
+        addToQueue(items.map(item => ({
+          ...item,
+          topicId: item.topicId ?? (globalTopicId === "" ? undefined : (globalTopicId as number)),
+          topicName: item.topicName ?? (globalTopicName || undefined),
+          collectionId: item.collectionId ?? (globalCollectionId || undefined),
+          collectionName: item.collectionName ?? (globalCollectionName || undefined),
+          collectionIds: item.collectionIds ?? (globalCollectionId ? [globalCollectionId] : undefined),
+        })));
+        notify("success", `تم استخراج ${items.length} سؤال من الملف بنجاح!`);
+      }
+      setFile(null);
+    } catch (err: any) {
+      console.error("File parsing error:", err);
+      notify("error", `فشل استخراج الأسئلة من الملف: ${err.message || "خطأ غير متوقع"}`);
+      setFile(null);
+    }
+  };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) {
+      processFile(f);
+      e.target.value = "";
+    }
   };
 
   const handleSend = async (action: "send" | "save") => {
     if (queue.length === 0) return;
-    setUploading(true); setResult(null);
-    try {
-      const res = await fetch(`/api/groups/${groupId}/bulk`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, collectionId: globalCollectionId || undefined, collectionIds: globalCollectionId ? [globalCollectionId] : undefined, quizzes: queue })
+
+    if (action === "save") {
+      setUploading(true);
+      setResult(null);
+      try {
+        const res = await fetch(`/api/groups/${groupId}/bulk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "save",
+            collectionId: globalCollectionId || undefined,
+            collectionIds: globalCollectionId ? [globalCollectionId] : undefined,
+            quizzes: queue,
+          }),
+        });
+        const data = await res.json();
+        setResult({
+          ok: res.ok,
+          processed: data.processed,
+          errors: data.errors || (!res.ok ? [data.error] : undefined),
+        });
+        if (res.ok) {
+          notify("success", `تم حفظ ${data.processed || queue.length} سؤال في المكتبة بنجاح!`);
+          setQueue([]);
+        } else {
+          notify("error", data.error || "فشل حفظ الأسئلة");
+        }
+      } catch {
+        setResult({ ok: false, errors: ["Network error saving quizzes"] });
+        notify("error", "حدث خطأ في الشبكة أثناء الحفظ");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
+    // ── Progressive Client-Orchestrated Dispatch for "send" ──
+    const validQuizzes = queue.filter((q) => !q.errors?.length);
+    if (validQuizzes.length === 0) {
+      notify("error", "لا توجد أسئلة صالحة للإرسال. يرجى مراجعة الأخطاء أولاً.");
+      return;
+    }
+
+    setUploading(true);
+    setResult(null);
+    abortRef.current = false;
+
+    let successCount = 0;
+    let failCount = 0;
+    const accumulatedErrors: string[] = [];
+
+    setProgress({
+      total: validQuizzes.length,
+      current: 0,
+      successCount: 0,
+      failCount: 0,
+      currentQuestion: "",
+      isSending: true,
+    });
+
+    for (let i = 0; i < validQuizzes.length; i++) {
+      if (abortRef.current) {
+        accumulatedErrors.push("تم إيقاف الإرسال بواسطة المستخدم / Dispatch cancelled by user");
+        break;
+      }
+
+      const q = validQuizzes[i];
+      setProgress({
+        total: validQuizzes.length,
+        current: i + 1,
+        successCount,
+        failCount,
+        currentQuestion: q.question.slice(0, 50),
+        isSending: true,
       });
-      const data = await res.json();
-      setResult({ ok: res.ok, processed: data.processed, errors: data.errors || (!res.ok ? [data.error] : undefined) });
-      if (res.ok) setQueue([]);
-    } catch { setResult({ ok: false, errors: ["Network error"] }); }
-    finally { setUploading(false); }
+
+      try {
+        let res = await fetch(`/api/groups/${groupId}/bulk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "send",
+            collectionId: globalCollectionId || undefined,
+            collectionIds: globalCollectionId ? [globalCollectionId] : undefined,
+            quizzes: [q],
+          }),
+        });
+        let data = await res.json();
+
+        // Handle Telegram 429 Rate Limiting with intelligent backoff
+        if (!res.ok || (data.errors && data.errors.length > 0)) {
+          const rawErr = String(data.errors?.[0] || data.error || "");
+          if (rawErr.includes("429") || rawErr.toLowerCase().includes("too many requests") || rawErr.toLowerCase().includes("retry after")) {
+            const retryMatch = rawErr.match(/retry after (\d+)/i);
+            const waitSec = retryMatch ? Math.min(10, Math.max(2, parseInt(retryMatch[1], 10))) : 4;
+            await new Promise((r) => setTimeout(r, waitSec * 1000));
+
+            if (!abortRef.current) {
+              res = await fetch(`/api/groups/${groupId}/bulk`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "send",
+                  collectionId: globalCollectionId || undefined,
+                  collectionIds: globalCollectionId ? [globalCollectionId] : undefined,
+                  quizzes: [q],
+                }),
+              });
+              data = await res.json();
+            }
+          }
+        }
+
+        if (res.ok && data.processed > 0) {
+          successCount++;
+          // Remove from local queue so sent items don't linger
+          setQueue((prev) => prev.filter((item) => item.id !== q.id));
+        } else {
+          failCount++;
+          const errDesc = data.errors?.[0] || data.error || `فشل إرسال السؤال #${i + 1}`;
+          accumulatedErrors.push(`سؤال "${q.question.slice(0, 30)}...": ${errDesc}`);
+        }
+      } catch {
+        failCount++;
+        accumulatedErrors.push(`سؤال "${q.question.slice(0, 30)}...": خطأ في الاتصال بالشبكة`);
+      }
+
+      // Safe throttle pause between quizzes (750ms) to respect Telegram API rate limits
+      if (i < validQuizzes.length - 1 && !abortRef.current) {
+        await new Promise((r) => setTimeout(r, 750));
+      }
+    }
+
+    setProgress(null);
+    setUploading(false);
+
+    setResult({
+      ok: failCount === 0 && successCount > 0,
+      processed: successCount,
+      errors: accumulatedErrors.length > 0 ? accumulatedErrors : undefined,
+    });
+
+    if (successCount > 0 && failCount === 0) {
+      notify("success", `🚀 تم إرسال جميع الأسئلة (${successCount}) بنجاح إلى تيليجرام!`);
+    } else if (successCount > 0) {
+      notify("info", `تم إرسال ${successCount} سؤال بنجاح، مع تعذر إرسال ${failCount} سؤال.`);
+    } else {
+      notify("error", "فشل إرسال الأسئلة إلى تيليجرام.");
+    }
+
+    // ── Automatic Completion Post (بوست الختام) ───────────────────
+    if (!abortRef.current && completionPostConfig.enabled && successCount > 0) {
+      try {
+        const targetTopicId = completionPostConfig.useCustomTopic
+          ? (completionPostConfig.topicId || undefined)
+          : (globalTopicId || undefined);
+
+        const now = new Date();
+        const dateFormatted = now.toLocaleDateString("ar-EG", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
+        const timeFormatted = now.toLocaleTimeString("ar-EG", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+
+        const postPayload = {
+          text: completionPostConfig.text,
+          parseMode: completionPostConfig.parseMode,
+          topicId: targetTopicId,
+          mediaUrl: completionPostConfig.attachMedia && completionPostConfig.mediaType === "url" ? completionPostConfig.mediaUrl : undefined,
+          mediaBase64: completionPostConfig.attachMedia && completionPostConfig.mediaType === "file" ? completionPostConfig.mediaBase64 : undefined,
+          mediaMimeType: completionPostConfig.attachMedia && completionPostConfig.mediaType === "file" ? completionPostConfig.mediaMimeType : undefined,
+          buttons: completionPostConfig.buttonRows.map(r => r.map(b => ({ text: b.text, url: b.url }))),
+          pinMessage: completionPostConfig.pinMessage,
+          disableNotification: completionPostConfig.disableNotification,
+          variables: {
+            count: successCount,
+            successCount: successCount,
+            total: validQuizzes.length,
+            failedCount: validQuizzes.length - successCount,
+            groupTitle: groupTitle,
+            title: groupTitle,
+            date: dateFormatted,
+            time: timeFormatted,
+          },
+        };
+
+        const postRes = await fetch(`/api/groups/${groupId}/messages/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(postPayload),
+        });
+        const postData = await postRes.json();
+        if (postRes.ok) {
+          notify(
+            "success",
+            `تم إرسال بوست الختام بنجاح! ${
+              postData.pinned
+                ? "📌 وتم تثبيته."
+                : postData.pinError
+                ? "⚠️ (لم يتم التثبيت: البوت لا يملك صلاحية التثبيت)"
+                : ""
+            }`
+          );
+        } else {
+          notify("error", `فشل إرسال بوست الختام: ${postData.error || "خطأ غير معروف"}`);
+        }
+      } catch {
+        notify("error", "حدث خطأ في الشبكة أثناء إرسال بوست الختام");
+      }
+    }
   };
 
   const filteredQueue = useMemo(() => queue.filter(item => {
@@ -453,7 +1084,27 @@ export default function BulkPage() {
           </h1>
           <p style={{ color: "var(--clr-text-muted)", margin: 0, fontSize: "0.95rem" }}>Paste, extract, configure topics, and mass-deploy quizzes effortlessly.</p>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => setShowCompletionPostModal(true)}
+            className="btn btn-ghost"
+            style={{
+              border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+              color: completionPostConfig.enabled ? "var(--clr-brand)" : "var(--clr-text-secondary)",
+              background: completionPostConfig.enabled ? "var(--clr-brand-muted)" : "transparent",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: "0.85rem",
+            }}
+            title="إعداد وتخصيص بوست الختام التلقائي بعد إرسال الدفعة"
+          >
+            <span>📢 بوست الختام</span>
+            <span style={{ fontWeight: 700, color: completionPostConfig.enabled ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
+              {completionPostConfig.enabled ? "✓ مفعّل" : "معطّل"}
+            </span>
+          </button>
           <Link href={`/dashboard/${groupId}/library`} className="btn btn-ghost"><LayoutList size={16} /> Library</Link>
           <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-ghost"><PlusCircle size={16} /> New Quiz</Link>
         </div>
@@ -508,11 +1159,114 @@ export default function BulkPage() {
         )}
         
         {mode === "file" && (
-          <div style={{ padding: "3rem", border: "2px dashed var(--clr-border)", borderRadius: "12px", textAlign: "center" }}>
-            <UploadCloud size={48} style={{ color: "var(--clr-text-muted)", margin: "0 auto 1rem" }} />
-            <input type="file" accept=".csv,.json,.txt" onChange={handleFile} style={{ display: "none" }} id="bulk-upload" />
-            <label htmlFor="bulk-upload" className="btn btn-primary" style={{ cursor: "pointer", display: "inline-flex" }}>Select File</label>
-            <p style={{ marginTop: "1rem", color: "var(--clr-text-muted)", fontSize: "0.9rem" }}>{file ? `✓ ${file.name}` : "CSV, JSON, or TXT (Appends to existing queue)"}</p>
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(true);
+            }}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+              const droppedFiles = e.dataTransfer.files;
+              if (droppedFiles && droppedFiles.length > 0) {
+                processFile(droppedFiles[0]);
+              }
+            }}
+            style={{
+              padding: "2.5rem 1.5rem",
+              border: isDragging ? "2px dashed var(--clr-brand)" : "2px dashed var(--clr-border)",
+              borderRadius: "14px",
+              textAlign: "center",
+              background: isDragging ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.03)",
+              boxShadow: isDragging ? "0 0 24px rgba(99, 102, 241, 0.25)" : "none",
+              transition: "all 0.2s ease",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "1rem",
+            }}
+          >
+            <div
+              style={{
+                width: 60,
+                height: 60,
+                borderRadius: "50%",
+                background: "var(--clr-brand-muted)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--clr-brand)",
+                transform: isDragging ? "scale(1.1)" : "scale(1)",
+                transition: "transform 0.2s ease",
+              }}
+            >
+              <UploadCloud size={30} />
+            </div>
+
+            <div>
+              <h3 style={{ margin: "0 0 6px 0", fontSize: "1.15rem" }}>
+                رفع واستيراد ملف الأسئلة • Smart File Upload
+              </h3>
+              <p style={{ margin: 0, color: "var(--clr-text-secondary)", fontSize: "0.88rem", maxWidth: 540 }}>
+                يدعم جداول Excel وملفات CSV ومستندات Word والنصوص المهيكلة مع السحب والإفلات والكشف التلقائي عن الأعمدة والخيارات والإجابات الصحيحة.
+              </p>
+            </div>
+
+            {/* Supported file type badges */}
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" }}>
+              <span className="badge badge-brand" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📊 Excel (.xlsx, .xls)
+              </span>
+              <span className="badge badge-accent" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📄 CSV (.csv)
+              </span>
+              <span className="badge badge-brand" style={{ fontSize: "0.78rem", padding: "4px 10px", background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6", borderColor: "rgba(59, 130, 246, 0.3)" }}>
+                📘 Word (.docx)
+              </span>
+              <span className="badge badge-muted" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📝 Text (.txt)
+              </span>
+              <span className="badge badge-muted" style={{ fontSize: "0.78rem", padding: "4px 10px" }}>
+                📦 JSON (.json)
+              </span>
+            </div>
+
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,.docx,.txt,.json"
+              onChange={handleFile}
+              style={{ display: "none" }}
+              id="bulk-upload"
+            />
+            <label
+              htmlFor="bulk-upload"
+              className="btn btn-primary"
+              style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 22px" }}
+            >
+              <UploadCloud size={18} />
+              <span>اختر ملف من جهازك / Select File</span>
+            </label>
+
+            <p style={{ margin: 0, color: "var(--clr-text-muted)", fontSize: "0.82rem" }}>
+              {isDragging
+                ? "📂 أفلت الملف الآن ليتم تحليله واستيراده فوراً!"
+                : file
+                ? `✓ جاري قراءة الملف: ${file.name}`
+                : "يمكنك سحب وإفلات الملف هنا مباشرة أو النقر على الزر أعلاه"}
+            </p>
           </div>
         )}
       </div>
@@ -557,7 +1311,104 @@ export default function BulkPage() {
         </motion.div>
       )}
 
-      {queue.length > 0 && (
+      {/* Result Summary Banner (shown even if queue becomes empty) */}
+      {result && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={{
+            padding: "1.2rem 1.5rem",
+            borderRadius: "14px",
+            background: result.ok ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+            border: `1px solid ${result.ok ? "var(--clr-success)" : "var(--clr-danger)"}`,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            flexWrap: "wrap",
+            gap: "12px",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "1rem", color: result.ok ? "var(--clr-success)" : "var(--clr-danger)" }}>
+              {result.ok ? `✅ اكتملت العملية بنجاح! تم معالجة ${result.processed || 0} سؤال.` : `⚠️ اكتملت العملية مع وجود تنبيهات:`}
+            </div>
+            {result.errors && result.errors.length > 0 && (
+              <ul style={{ margin: "8px 0 0 0", paddingInlineStart: "20px", fontSize: "0.84rem", color: "var(--clr-text-secondary)" }}>
+                {result.errors.map((err, i) => (
+                  <li key={i}>{err}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setResult(null)}>✕ إغلاق</button>
+        </motion.div>
+      )}
+
+      {/* Live Progressive Dispatch Progress Indicator (rendered independently of queue state) */}
+      {progress && progress.isSending && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          style={{
+            padding: "1.25rem",
+            borderRadius: "14px",
+            background: "linear-gradient(135deg, rgba(79, 127, 255, 0.12), rgba(124, 58, 237, 0.12))",
+            border: "1px solid var(--clr-brand)",
+            marginBottom: "1.25rem",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span style={{ fontSize: "1.4rem" }}>🚀</span>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "1rem" }}>
+                  جاري إرسال الأسئلة تدريجياً إلى تيليجرام... ({progress.current} / {progress.total})
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", marginTop: "2px" }}>
+                  {progress.currentQuestion ? `السؤال الحالي: "${progress.currentQuestion}..."` : "بدء الإرسال..."}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+              <span style={{ fontSize: "0.85rem", color: "var(--clr-success)", fontWeight: 600 }}>
+                ✓ {progress.successCount} تم إرساله
+              </span>
+              {progress.failCount > 0 && (
+                <span style={{ fontSize: "0.85rem", color: "var(--clr-danger)", fontWeight: 600 }}>
+                  ✗ {progress.failCount} تعذر إرساله
+                </span>
+              )}
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ color: "var(--clr-danger)", border: "1px solid rgba(239, 68, 68, 0.3)" }}
+                onClick={() => { abortRef.current = true; }}
+              >
+                🛑 إيقاف الإرسال
+              </button>
+            </div>
+          </div>
+
+          {/* Progress Bar Track & Fill */}
+          <div style={{ height: "8px", borderRadius: "999px", background: "rgba(255,255,255,0.1)", overflow: "hidden", marginTop: "10px" }}>
+            <div
+              style={{
+                height: "100%",
+                borderRadius: "999px",
+                background: "linear-gradient(90deg, var(--clr-brand) 0%, #a855f7 100%)",
+                width: `${Math.round((progress.current / Math.max(1, progress.total)) * 100)}%`,
+                transition: "width 0.3s ease",
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--clr-text-muted)", marginTop: "4px" }}>
+            <span>النسبة: {Math.round((progress.current / Math.max(1, progress.total)) * 100)}%</span>
+            <span>متبقي: {Math.max(0, progress.total - progress.current)}</span>
+          </div>
+        </motion.div>
+      )}
+
+      {(queue.length > 0 || uploading) && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ padding: "1.5rem", border: "1px solid var(--clr-brand)", borderRadius: "16px", background: "var(--clr-bg-surface)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "1rem" }}>
             <div>
@@ -566,10 +1417,31 @@ export default function BulkPage() {
                 {queue.filter(q => !q.errors?.length).length} valid • {queue.filter(q => q.errors?.length).length} errors
               </p>
             </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{
+                  border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+                  color: completionPostConfig.enabled ? "var(--clr-brand)" : "var(--clr-text-secondary)",
+                  background: completionPostConfig.enabled ? "var(--clr-brand-muted)" : "transparent",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+                onClick={() => setShowCompletionPostModal(true)}
+                title="تخصيص بوست الختام التلقائي بعد إرسال الكويزات"
+              >
+                <span>📢 بوست الختام:</span>
+                <span style={{ fontWeight: 700, color: completionPostConfig.enabled ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
+                  {completionPostConfig.enabled ? "مفعّل ✓" : "معطّل"}
+                </span>
+              </button>
               <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={() => setQueue([])}>Clear</button>
               <button className="btn btn-secondary" onClick={() => handleSend("save")} disabled={uploading}>📁 Save</button>
-              <button className="btn btn-primary" onClick={() => handleSend("send")} disabled={uploading || queue.filter(q => !q.errors?.length).length === 0}>🚀 Send ({queue.filter(q => !q.errors?.length).length})</button>
+              <button className="btn btn-primary" onClick={() => handleSend("send")} disabled={uploading || queue.filter(q => !q.errors?.length).length === 0}>
+                {uploading && progress ? `🚀 جارٍ الإرسال (${progress.current}/${progress.total})` : `🚀 Send (${queue.filter(q => !q.errors?.length).length})`}
+              </button>
             </div>
           </div>
           
@@ -633,6 +1505,19 @@ export default function BulkPage() {
           </div>
         </motion.div>
       )}
+
+      <CompletionPostModal
+        isOpen={showCompletionPostModal}
+        onClose={() => setShowCompletionPostModal(false)}
+        groupId={groupId}
+        groupTitle={groupTitle}
+        topics={topics}
+        selectedTopicId={globalTopicId}
+        selectedCount={queue.filter(q => !q.errors?.length).length}
+        config={completionPostConfig}
+        onSaveConfig={handleSaveCompletionPostConfig}
+        showToast={(type, msg) => notify(type, msg)}
+      />
     </div>
   );
 }

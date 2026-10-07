@@ -143,9 +143,10 @@ export async function GET(req: Request) {
       }
     }
 
-    // ── 2. Deletion checker (runs on recently-sent non-deleted quizzes) ────────
-    // Check quizzes sent in last 7 days that aren't marked deleted — try stopPoll
-    // If Telegram says "message not found" → quiz was deleted from Telegram
+    // ── 2. Poll expiration & closure checker ────────────────────────────────
+    // Runs on active quizzes sent in the last 7 days that have an openPeriod.
+    // CRITICAL: We NEVER call stopPoll on active polls whose openPeriod has not elapsed,
+    // nor on open-ended polls (openPeriod null/0) that are still active, as stopPoll forcefully closes them.
     const recentQuizzes = await prisma.quiz.findMany({
       where: {
         sentAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), not: null },
@@ -153,12 +154,22 @@ export async function GET(req: Request) {
         pollClosed: false,
         messageId: { not: null },
         pollId: { not: null },
+        openPeriod: { not: null, gt: 0 },
       },
       include: { group: true },
-      take: 30, // limit per cron run
+      orderBy: { sentAt: "asc" },
+      take: 50, // limit per cron run
     });
 
     for (const quiz of recentQuizzes) {
+      if (!quiz.sentAt || !quiz.openPeriod || quiz.openPeriod <= 0) continue;
+
+      const expiresAtMs = quiz.sentAt.getTime() + quiz.openPeriod * 1000;
+      if (Date.now() < expiresAtMs) {
+        // Poll is still active; openPeriod has not elapsed yet!
+        continue;
+      }
+
       try {
         const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/stopPoll`, {
           method: "POST",
@@ -167,13 +178,15 @@ export async function GET(req: Request) {
         });
         const data = await res.json();
         if (!data.ok) {
-          const desc: string = data.description || "";
+          const desc: string = (data.description || "").toLowerCase();
           if (desc.includes("message not found") || desc.includes("message to stop poll not found")) {
-            await prisma.quiz.update({ where: { id: quiz.id }, data: { deletedAt: new Date() } });
+            await prisma.quiz.update({ where: { id: quiz.id }, data: { deletedAt: new Date(), pollClosed: true } });
             deletionChecks.push(quiz.id);
-          } else if (data.ok) {
-            // Poll was still open — it's now closed; mark it
+          } else if (desc.includes("already closed") || desc.includes("already stopped")) {
             await prisma.quiz.update({ where: { id: quiz.id }, data: { pollClosed: true } });
+          } else {
+            // Other Telegram error (e.g. chat not found, bot removed): mark closed so it doesn't loop forever
+            await prisma.quiz.update({ where: { id: quiz.id }, data: { pollClosed: true } }).catch(() => {});
           }
         } else {
           // stopPoll succeeded → mark closed
