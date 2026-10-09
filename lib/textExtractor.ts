@@ -102,7 +102,8 @@ export function splitIntoSections(cleanedText: string): ExtractedSection[] {
     const words = cleanedText.split(/\s+/).filter(Boolean);
     if (words.length > 750) {
       const chunks: ExtractedSection[] = [];
-      const chunkSize = 500;
+      // Scale chunkSize dynamically so large textbooks (e.g. 10k-100k words) don't create thousands of section objects
+      const chunkSize = Math.max(500, Math.ceil(words.length / 50));
       for (let i = 0; i < words.length; i += chunkSize) {
         const chunkWords = words.slice(i, i + chunkSize);
         const sectionNum = Math.floor(i / chunkSize) + 1;
@@ -127,7 +128,7 @@ export function splitIntoSections(cleanedText: string): ExtractedSection[] {
     ];
   }
 
-  return parts.map((part, index) => {
+  const sectionsList = parts.map((part, index) => {
     // Extract first line as title
     const firstLineEnd = part.indexOf("\n");
     let title = firstLineEnd !== -1 ? part.slice(0, firstLineEnd).trim() : part.slice(0, 50).trim();
@@ -143,6 +144,30 @@ export function splitIntoSections(cleanedText: string): ExtractedSection[] {
       wordCount: words.length,
     };
   });
+
+  // If heading-based parts exceed 50, merge smaller adjacent sections to keep JSON lightweight
+  if (parts.length > 50) {
+    const targetSize = Math.ceil(parts.length / 40);
+    const merged: ExtractedSection[] = [];
+    for (let i = 0; i < parts.length; i += targetSize) {
+      const slice = parts.slice(i, i + targetSize);
+      const firstLineEnd = slice[0].indexOf("\n");
+      let title = firstLineEnd !== -1 ? slice[0].slice(0, firstLineEnd).trim() : slice[0].slice(0, 50).trim();
+      title = title.replace(/^[#*\-•]+\s*/, "").trim();
+      if (title.length > 70) title = title.slice(0, 67) + "...";
+      const combinedContent = slice.join("\n\n");
+      const wordCount = combinedContent.split(/\s+/).filter(Boolean).length;
+      merged.push({
+        id: `sec-${merged.length + 1}`,
+        title: title || `القسم ${merged.length + 1}`,
+        content: combinedContent,
+        wordCount,
+      });
+    }
+    return merged;
+  }
+
+  return sectionsList;
 }
 
 /**
@@ -230,45 +255,56 @@ export async function extractTextFromBuffer(
       raw = digitalText;
     } else {
       // PDF has insufficient/no digital text (scanned book, handwriting) or digital parsing failed or forceOcr was requested
-      const hasApiKey = !!(options?.apiKey?.trim() || process.env.GEMINI_API_KEY?.trim());
-      if (hasApiKey) {
-        console.log(
-          "[TextExtractor] Scanned / handwritten PDF detected or forceOcr enabled. Invoking NotebookLM Gemini Multimodal OCR..."
-        );
-        try {
-          const ocrResult = await extractDocumentTextWithGemini({
-            buffer,
-            mimeType: "application/pdf",
-            apiKey: options?.apiKey,
-            model: options?.model,
-            documentTitle: options?.fileName,
-          });
-          const cleanedOcr = cleanText(ocrResult.text);
-          const ocrWords = cleanedOcr.split(/\s+/).filter(Boolean);
-          if (ocrWords.length >= digitalWords.length || options?.forceOcr || isSparseText) {
-            raw = ocrResult.text;
-            ocrUsed = true;
-          } else {
-            raw = digitalText;
-          }
-        } catch (ocrErr) {
-          console.error("[TextExtractor] Gemini PDF OCR fallback failed:", ocrErr);
-          if (digitalText && digitalText.trim().length > 0) {
-            raw = digitalText;
-          } else {
-            throw ocrErr;
-          }
-        }
-      } else {
-        if (options?.forceOcr) {
+      if (buffer.length > 14 * 1024 * 1024) {
+        // If file buffer is > 14MB, base64 encoding exceeds Google Gemini's 20MB inline HTTP body limit (413 Request Entity Too Large)
+        if (digitalText && digitalText.trim().length > 0) {
+          raw = digitalText;
+        } else {
           throw new Error(
-            "لم يتم العثور على مفتاح Google Gemini API Key. يرجى إدخال المفتاح في تبويب 'إعدادات الذكاء الاصطناعي' أو إضافته في ملف البيئة (GEMINI_API_KEY) لتفعيل ميزة التعرف البصري على الصور والمستندات (OCR)."
+            `حجم الملف (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى للمعالجة البصرية المباشرة بالذكاء الاصطناعي (14 ميجابايت) وهو مستند ممسوح ضوئياً بدون نصوص رقمية جاهزة. يرجى ضغط ملف الـ PDF أو تصديره بنصوص رقمية واضحة والمحاولة مرة أخرى.`
           );
         }
-        if (digitalError) {
-          throw digitalError;
+      } else {
+        const hasApiKey = !!(options?.apiKey?.trim() || process.env.GEMINI_API_KEY?.trim());
+        if (hasApiKey) {
+          console.log(
+            "[TextExtractor] Scanned / handwritten PDF detected or forceOcr enabled. Invoking NotebookLM Gemini Multimodal OCR..."
+          );
+          try {
+            const ocrResult = await extractDocumentTextWithGemini({
+              buffer,
+              mimeType: "application/pdf",
+              apiKey: options?.apiKey,
+              model: options?.model,
+              documentTitle: options?.fileName,
+            });
+            const cleanedOcr = cleanText(ocrResult.text);
+            const ocrWords = cleanedOcr.split(/\s+/).filter(Boolean);
+            if (ocrWords.length >= digitalWords.length || options?.forceOcr || isSparseText) {
+              raw = ocrResult.text;
+              ocrUsed = true;
+            } else {
+              raw = digitalText;
+            }
+          } catch (ocrErr) {
+            console.error("[TextExtractor] Gemini PDF OCR fallback failed:", ocrErr);
+            if (digitalText && digitalText.trim().length > 0) {
+              raw = digitalText;
+            } else {
+              throw ocrErr;
+            }
+          }
+        } else {
+          if (options?.forceOcr) {
+            throw new Error(
+              "لم يتم العثور على مفتاح Google Gemini API Key. يرجى إدخال المفتاح في تبويب 'إعدادات الذكاء الاصطناعي' أو إضافته في ملف البيئة (GEMINI_API_KEY) لتفعيل ميزة التعرف البصري على الصور والمستندات (OCR)."
+            );
+          }
+          if (digitalError) {
+            throw digitalError;
+          }
+          raw = digitalText;
         }
-        raw = digitalText;
       }
     }
   } else if (fileType === "docx") {

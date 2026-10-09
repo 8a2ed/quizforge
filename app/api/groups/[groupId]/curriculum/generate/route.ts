@@ -10,6 +10,9 @@ import {
 } from "@/lib/aiStorage";
 import { generateCurriculumQuestions, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
+export const maxDuration = 120;
+export const dynamic = "force-dynamic";
+
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
 async function getAuthorizedUser(req: NextRequest, groupId: string) {
@@ -104,7 +107,8 @@ export async function POST(
 
     // Load AI settings for this group
     const settings = await getGroupAISettings(groupId);
-    const apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY;
+    const clientApiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const apiKey = clientApiKey || settings.geminiApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -115,6 +119,13 @@ export async function POST(
         },
         { status: 400 }
       );
+    }
+
+    // If client supplied a valid key and group had none, auto-persist it
+    if (clientApiKey && clientApiKey.length > 8 && !clientApiKey.includes("••••") && !settings.geminiApiKey) {
+      try {
+        await updateGroupAISettings(groupId, { geminiApiKey: clientApiKey });
+      } catch {}
     }
 
     // Call Gemini with strict Zero-Hallucination prompt

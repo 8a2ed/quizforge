@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 import { extractTextFromBuffer } from "@/lib/textExtractor";
-import { getMaterials, saveMaterial, getGroupAISettings, CurriculumMaterial } from "@/lib/aiStorage";
+import { getMaterials, saveMaterial, getGroupAISettings, updateGroupAISettings, CurriculumMaterial } from "@/lib/aiStorage";
+
+export const maxDuration = 120;
+export const dynamic = "force-dynamic";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -83,6 +86,7 @@ export async function POST(
   let customText = "";
   let topics: string[] = [];
   let forceOcr = false;
+  let clientApiKey = "";
 
   if (contentType.includes("multipart/form-data")) {
     const formData = await req.formData();
@@ -92,6 +96,7 @@ export async function POST(
     grade = (formData.get("grade") as string) || "";
     const rawTopics = (formData.get("topics") as string) || "";
     topics = rawTopics.split(",").map((t) => t.trim()).filter(Boolean);
+    clientApiKey = ((formData.get("apiKey") as string) || "").trim();
 
     if (!file) {
       return NextResponse.json({ error: "لم يتم تحديد أي ملف للرفع" }, { status: 400 });
@@ -141,6 +146,7 @@ export async function POST(
     fileName = body.fileName || "custom_curriculum.txt";
     fileType = "manual";
     topics = Array.isArray(body.topics) ? body.topics : [];
+    clientApiKey = (body.apiKey || "").trim();
 
     if (!customText) {
       return NextResponse.json({ error: "نص المنهج الدراسي مطلوب" }, { status: 400 });
@@ -154,14 +160,21 @@ export async function POST(
   }
 
   try {
-    let apiKey = "";
+    let apiKey = clientApiKey;
     let aiModel = "gemini-3.8-flash";
     try {
       const aiSettings = await getGroupAISettings(groupId);
-      apiKey = aiSettings.geminiApiKey || process.env.GEMINI_API_KEY || "";
+      if (!apiKey) apiKey = aiSettings.geminiApiKey || process.env.GEMINI_API_KEY || "";
       if (aiSettings.defaultModel) aiModel = aiSettings.defaultModel;
     } catch {
-      apiKey = process.env.GEMINI_API_KEY || "";
+      if (!apiKey) apiKey = process.env.GEMINI_API_KEY || "";
+    }
+
+    // Auto-persist valid clientApiKey if group had none
+    if (clientApiKey && clientApiKey.length > 8 && !clientApiKey.includes("••••")) {
+      try {
+        await updateGroupAISettings(groupId, { geminiApiKey: clientApiKey });
+      } catch {}
     }
 
     const extraction = await extractTextFromBuffer(buffer, fileType, {

@@ -98,10 +98,8 @@ const MATERIALS_FILE = path.join(DATA_DIR, "materials.json");
 const LOGS_FILE = path.join(DATA_DIR, "generation_logs.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
-// In-memory cache with atomic file sync
-let materialsCache: CurriculumMaterial[] | null = null;
-let logsCache: GenerationLog[] | null = null;
-let settingsCache: Record<string, AISettings> | null = null;
+// Sequential write lock to avoid concurrent write collisions on Windows
+let writeLock: Promise<void> = Promise.resolve();
 
 async function ensureDataDir() {
   try {
@@ -111,29 +109,67 @@ async function ensureDataDir() {
 
 async function safeReadJson<T>(filePath: string, fallback: T): Promise<T> {
   await ensureDataDir();
-  try {
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data) as T;
-  } catch {
-    return fallback;
+  // Attempt to read with retry in case of transient Windows file lock (EBUSY/EPERM)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await fs.readFile(filePath, "utf-8");
+      if (!data || !data.trim()) return fallback;
+      return JSON.parse(data) as T;
+    } catch (err: any) {
+      if (err?.code === "ENOENT") {
+        return fallback;
+      }
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 60 * (attempt + 1)));
+      }
+    }
   }
+
+  // Backup fallback: if reading primary file failed, attempt reading .bak file
+  try {
+    const bakPath = `${filePath}.bak`;
+    const bakData = await fs.readFile(bakPath, "utf-8");
+    if (bakData && bakData.trim()) {
+      return JSON.parse(bakData) as T;
+    }
+  } catch {}
+
+  return fallback;
 }
 
 async function safeWriteJson<T>(filePath: string, data: T): Promise<void> {
   await ensureDataDir();
-  const tempPath = `${filePath}.tmp.${Date.now()}`;
-  try {
-    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
-    await fs.rename(tempPath, filePath);
-  } catch {
-    // Windows file locking fallback
+  const serialized = JSON.stringify(data, null, 2);
+
+  const writeOperation = async () => {
+    // Keep a .bak backup of the existing valid file before modifying
     try {
-      await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-      await fs.unlink(tempPath).catch(() => {});
+      await fs.copyFile(filePath, `${filePath}.bak`);
+    } catch {}
+
+    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2, 6)}`;
+    try {
+      await fs.writeFile(tempPath, serialized, "utf-8");
+      try {
+        await fs.rename(tempPath, filePath);
+      } catch {
+        // Windows file locking fallback: copyFile atomically overwrites then clean up temp
+        await fs.copyFile(tempPath, filePath);
+        await fs.unlink(tempPath).catch(() => {});
+      }
     } catch (writeErr) {
-      console.error("[safeWriteJson error]", writeErr);
+      console.error("[safeWriteJson error, attempting direct write fallback]", writeErr);
+      try {
+        await fs.writeFile(filePath, serialized, "utf-8");
+        await fs.unlink(tempPath).catch(() => {});
+      } catch (directErr) {
+        console.error("[safeWriteJson direct write failed]", directErr);
+      }
     }
-  }
+  };
+
+  writeLock = writeLock.then(writeOperation, writeOperation);
+  await writeLock;
 }
 
 // ─── Default Sample Educational Materials ──────────────────────────────────────
@@ -295,30 +331,33 @@ HTTP Status Codes:
 // ─── Materials CRUD ────────────────────────────────────────────────────────────
 
 export async function getMaterials(groupId: string): Promise<CurriculumMaterial[]> {
-  if (!materialsCache) {
-    materialsCache = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  // Always read from file to avoid cross-worker / reload state desynchronization
+  let allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+
+  // Only seed sample materials on first initialization if file does not exist on disk
+  if (allMaterials.length === 0) {
+    try {
+      const stat = await fs.stat(MATERIALS_FILE).catch(() => null);
+      if (!stat || stat.size === 0) {
+        allMaterials = [...SAMPLE_MATERIALS];
+        await safeWriteJson(MATERIALS_FILE, allMaterials);
+      }
+    } catch {}
   }
 
-  // Ensure sample materials are populated and up to date
-  let needsSync = false;
+  const cleanGid = String(groupId || "").trim();
+
+  // Combine stored materials with global sample materials in memory without mutating disk
+  const combined = [...allMaterials];
   for (const sample of SAMPLE_MATERIALS) {
-    const idx = materialsCache.findIndex((m) => m.id === sample.id);
-    if (idx === -1) {
-      materialsCache.push(sample);
-      needsSync = true;
-    } else if (materialsCache[idx].cleanedText.includes("...")) {
-      materialsCache[idx] = sample;
-      needsSync = true;
+    if (!combined.some((m) => m.id === sample.id)) {
+      combined.push(sample);
     }
   }
 
-  if (needsSync) {
-    await safeWriteJson(MATERIALS_FILE, materialsCache);
-  }
-
   // Include group-specific materials and global sample materials
-  return materialsCache.filter(
-    (m) => m.groupId === groupId || m.groupId === "global"
+  return combined.filter(
+    (m) => String(m.groupId || "").trim() === cleanGid || m.groupId === "global"
   );
 }
 
@@ -331,33 +370,30 @@ export async function getMaterialById(
 }
 
 export async function saveMaterial(material: CurriculumMaterial): Promise<void> {
-  if (!materialsCache) {
-    materialsCache = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
-  }
+  const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
 
-  const existingIndex = materialsCache.findIndex((m) => m.id === material.id);
+  const existingIndex = allMaterials.findIndex((m) => m.id === material.id);
   if (existingIndex >= 0) {
-    materialsCache[existingIndex] = material;
+    allMaterials[existingIndex] = material;
   } else {
-    materialsCache.unshift(material);
+    allMaterials.unshift(material);
   }
 
-  await safeWriteJson(MATERIALS_FILE, materialsCache);
+  await safeWriteJson(MATERIALS_FILE, allMaterials);
 }
 
 export async function deleteMaterial(groupId: string, materialId: string): Promise<boolean> {
-  if (!materialsCache) {
-    materialsCache = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
-  }
+  const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  const initialLength = allMaterials.length;
+  const cleanGid = String(groupId || "").trim();
 
-  const initialLength = materialsCache.length;
-  // Disallow deleting global sample materials; only group-owned materials can be deleted
-  materialsCache = materialsCache.filter(
-    (m) => !(m.id === materialId && m.groupId === groupId)
+  // Disallow deleting global sample materials; only group-owned materials matching groupId can be deleted
+  const filtered = allMaterials.filter(
+    (m) => !(m.id === materialId && String(m.groupId || "").trim() === cleanGid && m.groupId !== "global")
   );
 
-  if (materialsCache.length !== initialLength) {
-    await safeWriteJson(MATERIALS_FILE, materialsCache);
+  if (filtered.length !== initialLength) {
+    await safeWriteJson(MATERIALS_FILE, filtered);
     return true;
   }
   return false;
@@ -366,25 +402,19 @@ export async function deleteMaterial(groupId: string, materialId: string): Promi
 // ─── AI Generation Logs & Analytics ───────────────────────────────────────────
 
 export async function recordGenerationLog(log: GenerationLog): Promise<void> {
-  if (!logsCache) {
-    logsCache = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
-  }
+  const logs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
 
-  logsCache.unshift(log);
+  logs.unshift(log);
   // Keep last 1,000 logs to maintain speed
-  if (logsCache.length > 1000) {
-    logsCache = logsCache.slice(0, 1000);
-  }
+  const trimmedLogs = logs.length > 1000 ? logs.slice(0, 1000) : logs;
 
-  await safeWriteJson(LOGS_FILE, logsCache);
+  await safeWriteJson(LOGS_FILE, trimmedLogs);
 }
 
 export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummary> {
-  if (!logsCache) {
-    logsCache = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
-  }
-
-  const groupLogs = logsCache.filter((l) => l.groupId === groupId);
+  const allLogs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
+  const cleanGid = String(groupId || "").trim();
+  const groupLogs = allLogs.filter((l) => String(l.groupId || "").trim() === cleanGid);
 
   const totalGenerations = groupLogs.length;
   const totalQuestions = groupLogs.reduce((acc, l) => acc + (l.questionCount || 0), 0);
@@ -480,23 +510,38 @@ export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummar
 
 // ─── AI Group Settings ─────────────────────────────────────────────────────────
 
+const GLOBAL_SETTINGS_KEY = "__global__";
+
 export async function getGroupAISettings(groupId: string): Promise<AISettings> {
-  if (!settingsCache) {
-    settingsCache = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
+  const cleanGid = String(groupId || "").trim();
+  const allSettings = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
+  const existing = allSettings[cleanGid];
+
+  // Global key fallback: check __global__, then any group with a saved key, then process.env
+  let globalFallbackKey = allSettings[GLOBAL_SETTINGS_KEY]?.geminiApiKey || "";
+  if (!globalFallbackKey) {
+    for (const val of Object.values(allSettings)) {
+      if (val && val.geminiApiKey && typeof val.geminiApiKey === "string" && val.geminiApiKey.trim()) {
+        globalFallbackKey = val.geminiApiKey.trim();
+        break;
+      }
+    }
+  }
+  if (!globalFallbackKey) {
+    globalFallbackKey = process.env.GEMINI_API_KEY?.trim() || "";
   }
 
-  const existing = settingsCache[groupId];
   if (existing) {
     return {
       ...existing,
-      // If no group key set, reflect if env key is available (masked)
-      geminiApiKey: existing.geminiApiKey || process.env.GEMINI_API_KEY || "",
+      // If group has key, prioritize it; otherwise fallback to global / env
+      geminiApiKey: existing.geminiApiKey || globalFallbackKey,
     };
   }
 
   const defaultSettings: AISettings = {
-    groupId,
-    geminiApiKey: process.env.GEMINI_API_KEY || "",
+    groupId: cleanGid,
+    geminiApiKey: globalFallbackKey,
     defaultModel: "gemini-3.8-flash",
     defaultDifficulty: "mixed",
     defaultCount: 5,
@@ -512,20 +557,40 @@ export async function updateGroupAISettings(
   groupId: string,
   partial: Partial<AISettings>
 ): Promise<AISettings> {
-  if (!settingsCache) {
-    settingsCache = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
+  const cleanGid = String(groupId || "").trim();
+  const allSettings = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
+  const current = await getGroupAISettings(cleanGid);
+
+  // CRITICAL RULE: Never overwrite an existing saved key if partial.geminiApiKey is empty string, masked, or undefined!
+  let resolvedKey = current.geminiApiKey || "";
+  if (partial.geminiApiKey !== undefined) {
+    const candidate = String(partial.geminiApiKey).trim();
+    if (candidate && !candidate.includes("••••")) {
+      resolvedKey = candidate;
+    }
   }
 
-  const current = await getGroupAISettings(groupId);
   const updated: AISettings = {
     ...current,
     ...partial,
-    groupId,
+    groupId: cleanGid,
+    geminiApiKey: resolvedKey,
     updatedAt: new Date().toISOString(),
   };
 
-  settingsCache[groupId] = updated;
-  await safeWriteJson(SETTINGS_FILE, settingsCache);
+  allSettings[cleanGid] = updated;
+
+  // If a valid key exists, also update the global fallback so other groups automatically inherit it
+  if (resolvedKey) {
+    allSettings[GLOBAL_SETTINGS_KEY] = {
+      ...(allSettings[GLOBAL_SETTINGS_KEY] || updated),
+      groupId: GLOBAL_SETTINGS_KEY,
+      geminiApiKey: resolvedKey,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  await safeWriteJson(SETTINGS_FILE, allSettings);
 
   return updated;
 }

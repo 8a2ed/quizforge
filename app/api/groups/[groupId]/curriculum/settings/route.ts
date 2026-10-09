@@ -3,6 +3,8 @@ import { jwtVerify } from "jose";
 import { getGroupAISettings, updateGroupAISettings } from "@/lib/aiStorage";
 import { DEFAULT_GEMINI_MODEL, normalizeModelName } from "@/lib/gemini";
 
+export const dynamic = "force-dynamic";
+
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
 async function checkAuth(req: NextRequest) {

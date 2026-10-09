@@ -220,23 +220,85 @@ export default function CurriculumPage() {
   const loadMaterials = async () => {
     try {
       const res = await fetch(`/api/groups/${groupId}/curriculum/materials`);
-      if (res.ok) {
-        const d = await res.json();
-        setMaterials(d.materials || []);
-        if (d.materials?.length > 0 && !selectedMaterialId) {
-          setSelectedMaterialId(d.materials[0].id);
+      const resText = await res.text();
+      let d: any = null;
+      try {
+        d = resText ? JSON.parse(resText) : null;
+      } catch {}
+
+      if (res.ok && d) {
+        const loaded = d.materials || [];
+        setMaterials(loaded);
+        try {
+          const lightweight = loaded.map((m: any) => ({
+            id: m.id,
+            groupId: m.groupId,
+            title: m.title,
+            subject: m.subject,
+            grade: m.grade,
+            fileName: m.fileName,
+            fileType: m.fileType,
+            fileSize: m.fileSize,
+            wordCount: m.wordCount,
+            charCount: m.charCount,
+            topics: m.topics || [],
+            sections: (m.sections || []).map((s: any) => ({ id: s.id, title: s.title, wordCount: s.wordCount })),
+            uploadedBy: m.uploadedBy,
+            ocrUsed: m.ocrUsed,
+            createdAt: m.createdAt,
+          }));
+          localStorage.setItem(`qf_materials_${groupId}`, JSON.stringify(lightweight));
+        } catch {}
+        if (loaded.length > 0) {
+          setSelectedMaterialId((prev) => {
+            if (prev && loaded.some((m: any) => m.id === prev)) return prev;
+            return loaded[0].id;
+          });
         }
+      } else {
+        // Fallback to client cache if network was delayed or error
+        try {
+          const cached = localStorage.getItem(`qf_materials_${groupId}`);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setMaterials(parsed);
+              setSelectedMaterialId((prev) => {
+                if (prev && parsed.some((m: any) => m.id === prev)) return prev;
+                return parsed[0].id;
+              });
+            }
+          }
+        } catch {}
       }
     } catch (e) {
       console.error(e);
+      try {
+        const cached = localStorage.getItem(`qf_materials_${groupId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setMaterials(parsed);
+            setSelectedMaterialId((prev) => {
+              if (prev && parsed.some((m: any) => m.id === prev)) return prev;
+              return parsed[0].id;
+            });
+          }
+        }
+      } catch {}
     }
   };
 
   const loadAnalytics = async () => {
     try {
       const res = await fetch(`/api/groups/${groupId}/curriculum/analytics`);
-      if (res.ok) {
-        const d = await res.json();
+      const resText = await res.text();
+      let d: any = null;
+      try {
+        d = resText ? JSON.parse(resText) : null;
+      } catch {}
+
+      if (res.ok && d) {
         setAnalytics(d.analytics);
       }
     } catch (e) {
@@ -247,11 +309,43 @@ export default function CurriculumPage() {
   const loadSettings = async () => {
     try {
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings`);
-      if (res.ok) {
-        const d = await res.json();
+      const resText = await res.text();
+      let d: any = null;
+      try {
+        d = resText ? JSON.parse(resText) : null;
+      } catch {}
+
+      if (res.ok && d) {
         setSettings(d.settings);
         if (d.settings?.defaultCount) setGenCount(d.settings.defaultCount);
         if (d.settings?.defaultDifficulty) setGenDifficulty(d.settings.defaultDifficulty);
+
+        const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
+        const serverKey = d.settings?.geminiApiKey;
+
+        if (serverKey && !serverKey.includes("••••")) {
+          setApiKeyInput(serverKey);
+          try { localStorage.setItem("gemini_api_key", serverKey); } catch {}
+        } else if (localKey) {
+          setApiKeyInput(localKey);
+          if (!d.settings?.hasApiKey) {
+            fetch(`/api/groups/${groupId}/curriculum/settings`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ geminiApiKey: localKey }),
+            })
+              .then(async (r) => {
+                const txt = await r.text();
+                try { return JSON.parse(txt); } catch { return null; }
+              })
+              .then((patchData) => {
+                if (patchData?.settings) {
+                  setSettings(patchData.settings);
+                }
+              })
+              .catch(() => {});
+          }
+        }
       }
     } catch (e) {
       console.error(e);
@@ -261,8 +355,13 @@ export default function CurriculumPage() {
   const loadTopics = async () => {
     try {
       const res = await fetch(`/api/groups/${groupId}/topics`);
-      if (res.ok) {
-        const d = await res.json();
+      const resText = await res.text();
+      let d: any = null;
+      try {
+        d = resText ? JSON.parse(resText) : null;
+      } catch {}
+
+      if (res.ok && d) {
         setTopics(d.topics || []);
       }
     } catch (e) {
@@ -272,6 +371,18 @@ export default function CurriculumPage() {
 
   useEffect(() => {
     setLoading(true);
+    // Optimistically load cached materials from localStorage for instant render
+    try {
+      const cached = localStorage.getItem(`qf_materials_${groupId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMaterials(parsed);
+          setSelectedMaterialId(parsed[0].id);
+        }
+      }
+    } catch {}
+
     Promise.all([loadMaterials(), loadAnalytics(), loadSettings(), loadTopics()]).finally(() => {
       setLoading(false);
     });
@@ -301,6 +412,11 @@ export default function CurriculumPage() {
         customInstructions: customInstructions.trim(),
       };
 
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
+      if (localKey) {
+        payload.apiKey = localKey;
+      }
+
       if (sourceMode === "material") {
         payload.materialId = selectedMaterialId;
         if (selectedSectionId) payload.sectionId = selectedSectionId;
@@ -315,15 +431,42 @@ export default function CurriculumPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const resText = await res.text();
+      let data: any = null;
+      try {
+        data = resText ? JSON.parse(resText) : {};
+      } catch {
+        data = null;
+      }
 
       if (!res.ok) {
-        if (data.missingKey) {
+        if (res.status === 413 || (resText && resText.toLowerCase().includes("request entity too large"))) {
+          throw new Error(
+            isRtl
+              ? "حجم المنهج أو النص المرسل كبير جداً (Request Entity Too Large). يرجى اختيار فصل أو قسم أصغر لتوليد الأسئلة."
+              : "Payload too large. Please select a smaller section."
+          );
+        }
+        if (res.status === 504 || res.status === 408 || (resText && resText.toLowerCase().includes("timeout"))) {
+          throw new Error(
+            isRtl
+              ? "استغرقت عملية التوليد وقتاً طويلاً وتجاوزت مهلة الخادم (Timeout). يرجى المحاولة مع عدد أسئلة أقل."
+              : "Generation timed out. Please try fewer questions."
+          );
+        }
+        if (data?.missingKey) {
           showToast("error", data.error);
           setActiveTab("settings");
           return;
         }
-        throw new Error(data.error || (isRtl ? "فشل توليد الأسئلة" : "Failed to generate questions"));
+        const errorMsg =
+          data?.error ||
+          (resText && resText.length < 200 && !resText.includes("<html")
+            ? resText
+            : isRtl
+            ? `فشل توليد الأسئلة (رمز الخطأ: ${res.status})`
+            : `Failed to generate questions (${res.status})`);
+        throw new Error(errorMsg);
       }
 
       const questions: ValidatedQuestion[] = data.questions || [];
@@ -450,10 +593,12 @@ export default function CurriculumPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ questions: selectedQuestions }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save");
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+      if (!res.ok) throw new Error(data?.error || "Failed to save");
 
-      showToast("success", isRtl ? `تم حفظ ${data.count} سؤال في بنك الأسئلة والمكتبة!` : `Saved ${data.count} questions to library!`);
+      showToast("success", isRtl ? `تم حفظ ${data?.count || selectedQuestions.length} سؤال في بنك الأسئلة والمكتبة!` : `Saved ${data?.count || selectedQuestions.length} questions to library!`);
     } catch (e: any) {
       showToast("error", e.message || "Failed to save");
     }
@@ -490,8 +635,10 @@ export default function CurriculumPage() {
           passingScore: examPassingScore,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create exam");
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+      if (!res.ok) throw new Error(data?.error || "Failed to create exam");
 
       setShowExamModal(false);
       showToast("success", isRtl ? "تم إنشاء الاختبار الإلكتروني بنجاح! يمكنك فتحه الآن من قسم الاختبارات." : "Exam created successfully!");
@@ -517,15 +664,17 @@ export default function CurriculumPage() {
           openPeriod: broadcastOpenPeriod,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to broadcast");
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+      if (!res.ok) throw new Error(data?.error || "Failed to broadcast");
 
       setShowBroadcastModal(false);
       showToast(
         "success",
         isRtl
-          ? `تم نشر ${data.successCount} سؤال مباشرة على تليجرام بنجاح!`
-          : `Broadcasted ${data.successCount} questions directly to Telegram!`
+          ? `تم نشر ${data?.successCount || selectedQuestions.length} سؤال مباشرة على تليجرام بنجاح!`
+          : `Broadcasted ${data?.successCount || selectedQuestions.length} questions directly to Telegram!`
       );
     } catch (e: any) {
       showToast("error", e.message || "Failed to broadcast");
@@ -556,6 +705,17 @@ export default function CurriculumPage() {
       return;
     }
 
+    // Client-side file size guard: college textbooks over 50MB should warn user early
+    if (uploadFile.size > 50 * 1024 * 1024) {
+      showToast(
+        "error",
+        isRtl
+          ? "حجم الملف كبير جداً (أكثر من 50 ميجابايت). يرجى تقليل حجم الكتاب أو ضغطه أو تقسيمه لضمان المعالجة السليمة."
+          : "File size exceeds 50MB. Please upload a smaller file."
+      );
+      return;
+    }
+
     setUploading(true);
     try {
       const formData = new FormData();
@@ -566,13 +726,48 @@ export default function CurriculumPage() {
       formData.append("topics", uploadTopics.trim());
       formData.append("forceOcr", String(forceOcr));
 
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
+      if (localKey) {
+        formData.append("apiKey", localKey);
+      }
+
       const res = await fetch(`/api/groups/${groupId}/curriculum/materials`, {
         method: "POST",
         body: formData,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
+      const resText = await res.text();
+      let data: any = null;
+      try {
+        data = resText ? JSON.parse(resText) : {};
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        if (res.status === 413 || (resText && resText.toLowerCase().includes("request entity too large"))) {
+          throw new Error(
+            isRtl
+              ? "حجم الملف كبير جداً وتجاوز الحد الأقصى المسموح به للخادم (Request Entity Too Large). يرجى ضغط الملف أو تقليل حجمه لأقل من 50 ميجابايت."
+              : "File size is too large for the server (413 Request Entity Too Large). Please upload a smaller file."
+          );
+        }
+        if (res.status === 504 || res.status === 408 || (resText && resText.toLowerCase().includes("timeout"))) {
+          throw new Error(
+            isRtl
+              ? "استغرقت معالجة واستخراج نصوص الكتاب وقتاً طويلاً وتجاوزت مهلة الخادم. يرجى تجربة تقسيم الملف أو رفعه كملف نصي."
+              : "Processing timed out. Please try a smaller file."
+          );
+        }
+        const errorMsg =
+          data?.error ||
+          (resText && resText.length < 200 && !resText.includes("<html")
+            ? resText
+            : isRtl
+            ? `فشل رفع وتحليل الكتاب (رمز الخطأ: ${res.status})`
+            : `Upload failed (${res.status})`);
+        throw new Error(errorMsg);
+      }
 
       // Reset form
       setUploadFile(null);
@@ -582,10 +777,23 @@ export default function CurriculumPage() {
       setUploadTopics("");
       setForceOcr(false);
 
+      if (data?.material) {
+        const newMat = data.material;
+        setMaterials((prev) => [newMat, ...prev.filter((m) => m.id !== newMat.id)]);
+        setSelectedMaterialId(newMat.id);
+      } else if (data?.material?.id) {
+        setSelectedMaterialId(data.material.id);
+      }
+
       await loadMaterials();
-      showToast("success", isRtl ? "تم رفع المنهج الدراسي واستخراج النصوص بنجاح!" : "Uploaded and parsed material!");
+      showToast(
+        "success",
+        isRtl
+          ? "تم رفع المنهج الدراسي واستخراج النصوص بنجاح وحفظه في المكتبة!"
+          : "Uploaded and saved material successfully!"
+      );
     } catch (e: any) {
-      showToast("error", e.message || "Upload failed");
+      showToast("error", e.message || (isRtl ? "فشل رفع الملف" : "Upload failed"));
     } finally {
       setUploading(false);
     }
@@ -624,6 +832,9 @@ export default function CurriculumPage() {
       };
       if (apiKeyInput.trim()) {
         payload.geminiApiKey = apiKeyInput.trim();
+        try {
+          localStorage.setItem("gemini_api_key", apiKeyInput.trim());
+        } catch {}
       }
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings`, {
@@ -632,11 +843,17 @@ export default function CurriculumPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save settings");
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+      if (!res.ok) throw new Error(data?.error || (isRtl ? `فشل حفظ الإعدادات (${res.status})` : "Failed to save settings"));
 
       setSettings(data.settings);
-      setApiKeyInput("");
+      if (data.settings?.geminiApiKey && !data.settings.geminiApiKey.includes("••••")) {
+        setApiKeyInput(data.settings.geminiApiKey);
+      } else if (payload.geminiApiKey) {
+        setApiKeyInput(payload.geminiApiKey);
+      }
       showToast("success", isRtl ? "تم حفظ إعدادات الذكاء الاصطناعي بنجاح!" : "AI Settings saved!");
     } catch (e: any) {
       showToast("error", e.message || "Failed to save settings");
@@ -649,35 +866,53 @@ export default function CurriculumPage() {
     setTestingKey(true);
     setTestResult(null);
     try {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
+      const keyToTest = apiKeyInput.trim() || localKey || undefined;
+
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: apiKeyInput.trim() || undefined,
+          apiKey: keyToTest,
           model: settings?.defaultModel || "gemini-3.8-flash",
         }),
       });
-      const data = await res.json();
+
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+
+      if (!res.ok && !data) {
+        throw new Error(isRtl ? `فشل فحص الاتصال (${res.status})` : "Connection check failed");
+      }
+
       setTestResult({
-        success: data.success,
-        message: data.message || (data.success ? "Connection OK" : "Failed"),
-        activeModel: data.activeModel,
-        fallbackUsed: data.fallbackUsed,
+        success: data?.success ?? false,
+        message: data?.message || (data?.success ? "Connection OK" : "Failed"),
+        activeModel: data?.activeModel,
+        fallbackUsed: data?.fallbackUsed,
       });
 
-      if (data.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
+      if (data?.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
         setAvailableModels(data.availableModels);
       }
 
-      if (data.success && data.activeModel) {
-        setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel } : null));
-        if (data.fallbackUsed) {
-          showToast(
-            "info",
-            isRtl
-              ? `تم تحديث النموذج النشط تلقائياً إلى: ${data.activeModel}`
-              : `Active model auto-updated to: ${data.activeModel}`
-          );
+      if (data?.success) {
+        if (apiKeyInput.trim()) {
+          try {
+            localStorage.setItem("gemini_api_key", apiKeyInput.trim());
+          } catch {}
+        }
+        if (data.activeModel) {
+          setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel, hasApiKey: true } : null));
+          if (data.fallbackUsed) {
+            showToast(
+              "info",
+              isRtl
+                ? `تم تحديث النموذج النشط تلقائياً إلى: ${data.activeModel}`
+                : `Active model auto-updated to: ${data.activeModel}`
+            );
+          }
         }
       }
     } catch (e: any) {
@@ -693,27 +928,36 @@ export default function CurriculumPage() {
   const handleAutoDetectModels = async () => {
     setDetectingModels(true);
     try {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
+      const keyToUse = apiKeyInput.trim() || localKey || undefined;
+
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: apiKeyInput.trim() || undefined,
+          apiKey: keyToUse,
           model: "gemini-3.8-flash",
           autoSave: true,
         }),
       });
-      const data = await res.json();
+
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+
       setTestResult({
-        success: data.success,
-        message: data.message || (data.success ? "Connection OK" : "Failed"),
-        activeModel: data.activeModel,
-        fallbackUsed: data.fallbackUsed,
+        success: data?.success ?? false,
+        message: data?.message || (data?.success ? "Connection OK" : "Failed"),
+        activeModel: data?.activeModel,
+        fallbackUsed: data?.fallbackUsed,
       });
-      if (data.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
+
+      if (data?.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
         setAvailableModels(data.availableModels);
       }
-      if (data.success && data.activeModel) {
-        setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel } : null));
+
+      if (data?.success && data?.activeModel) {
+        setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel, hasApiKey: true } : null));
         setIsCustomModel(false);
         showToast(
           "success",
@@ -722,7 +966,7 @@ export default function CurriculumPage() {
             : `Detected, set & saved active model: ${data.activeModel}`
         );
       } else {
-        showToast("error", data.message || (isRtl ? "تعذر اكتشاف النماذج" : "Failed to detect models"));
+        showToast("error", data?.message || (isRtl ? "تعذر اكتشاف النماذج" : "Failed to detect models"));
       }
     } catch (e: any) {
       setTestResult({
@@ -897,7 +1141,7 @@ export default function CurriculumPage() {
       {activeTab === "generate" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
           {/* Missing API Key Alert */}
-          {!settings?.hasApiKey && !process.env.NEXT_PUBLIC_DEV_KEY && (
+          {(!settings?.hasApiKey && !(typeof window !== "undefined" && localStorage.getItem("gemini_api_key"))) && !process.env.NEXT_PUBLIC_DEV_KEY && (
             <div
               style={{
                 background: "rgba(245, 158, 11, 0.12)",
@@ -931,6 +1175,37 @@ export default function CurriculumPage() {
               >
                 <Settings size={16} />
                 <span>{isRtl ? "فتح الإعدادات وإدخال المفتاح" : "Configure Key"}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Persistent Key Active Indicator */}
+          {(settings?.hasApiKey || (typeof window !== "undefined" && !!localStorage.getItem("gemini_api_key"))) && (
+            <div
+              style={{
+                background: "rgba(16, 185, 129, 0.08)",
+                border: "1px solid rgba(16, 185, 129, 0.35)",
+                padding: "10px 16px",
+                borderRadius: "var(--radius-md)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--clr-success)", fontSize: "0.9rem", fontWeight: 600 }}>
+                <CheckCircle2 size={18} />
+                <span>{isRtl ? "✅ مفتاح Google AI Studio محفوظ ومفعّل (جاهز لتوليد الأسئلة بدون أي أخطاء)" : "✅ Gemini API Key is saved and active"}</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setActiveTab("settings")}
+                style={{ fontSize: "0.8rem", padding: "4px 10px", gap: 6 }}
+              >
+                <Key size={14} />
+                <span>{isRtl ? "تعديل المفتاح" : "Manage Key"}</span>
               </button>
             </div>
           )}
@@ -2126,6 +2401,36 @@ export default function CurriculumPage() {
                 ? "يمكنك استخدام مفتاح مجاني تماماً من Google AI Studio لتوليد آلاف الأسئلة شهرياً بدون أي تكلفة."
                 : "Obtain a free API Key from Google AI Studio to power zero-hallucination generations."}
             </p>
+
+            {/* Persistent Key Active Indicator */}
+            {(settings?.hasApiKey || (typeof window !== "undefined" && !!localStorage.getItem("gemini_api_key"))) && (
+              <div
+                style={{
+                  background: "rgba(16, 185, 129, 0.1)",
+                  border: "1px solid rgba(16, 185, 129, 0.35)",
+                  padding: "10px 14px",
+                  borderRadius: "var(--radius-md)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: 16,
+                  color: "var(--clr-success)",
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <CheckCircle2 size={18} />
+                  <span>{isRtl ? "✅ المفتاح محفوظ ومفعّل وجاهز للاستخدام بدون الحاجة لإعادة كتابته" : "✅ Gemini API Key is saved and active"}</span>
+                </div>
+                {settings?.maskedApiKey && (
+                  <code style={{ fontSize: "0.82rem", background: "rgba(0,0,0,0.06)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace" }}>
+                    {settings.maskedApiKey}
+                  </code>
+                )}
+              </div>
+            )}
 
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input

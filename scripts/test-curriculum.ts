@@ -336,21 +336,78 @@ All questions grounded in text.
   }
   console.log(`  ✓ Analytics updated: ${analytics.totalGenerations} gen, ${analytics.totalQuestions} questions, ${analytics.activeUsersCount} active instructors`);
 
-  // Test AI Settings
+  // Test AI Settings & API Key Non-Overwrite Protection
   const settings = await getGroupAISettings(testGroupId);
   if (!settings.defaultModel) {
     throw new Error("Default AI settings missing");
   }
-  const updatedSettings = await updateGroupAISettings(testGroupId, {
+
+  // 1. Set explicit API key
+  const testApiKey = "AIzaSyTestValidKey9988";
+  await updateGroupAISettings(testGroupId, {
+    geminiApiKey: testApiKey,
     defaultModel: DEFAULT_GEMINI_MODEL,
     defaultDifficulty: "hard",
     defaultCount: 10,
     strictGrounding: true,
   });
-  if (updatedSettings.defaultDifficulty !== "hard" || updatedSettings.defaultCount !== 10 || !updatedSettings.strictGrounding) {
-    throw new Error("Settings update failed");
+
+  const settingsAfterKey = await getGroupAISettings(testGroupId);
+  if (settingsAfterKey.geminiApiKey !== testApiKey) {
+    throw new Error(`Failed to save geminiApiKey! Expected ${testApiKey}, got ${settingsAfterKey.geminiApiKey}`);
   }
-  console.log("  ✓ AI settings updated and persisted successfully");
+  console.log("  ✓ API key successfully saved and verified");
+
+  // 2. Perform partial update with empty key string — must NOT overwrite saved key!
+  const updatedWithEmptyKey = await updateGroupAISettings(testGroupId, {
+    defaultCount: 15,
+    geminiApiKey: "",
+  });
+  if (updatedWithEmptyKey.geminiApiKey !== testApiKey || updatedWithEmptyKey.defaultCount !== 15) {
+    throw new Error("Empty geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3. Perform partial update with masked key string — must NOT overwrite saved key!
+  const updatedWithMaskedKey = await updateGroupAISettings(testGroupId, {
+    defaultDifficulty: "medium",
+    geminiApiKey: "AIza••••9988",
+  });
+  if (updatedWithMaskedKey.geminiApiKey !== testApiKey) {
+    throw new Error("Masked geminiApiKey overwrote existing saved API key!");
+  }
+  console.log("  ✓ Critical protection verified: saved Gemini API Key is NEVER lost or overwritten by empty/masked inputs");
+
+  // 4. Test Global Key Fallback for other groups
+  const otherGroupId = `other-group-${Date.now()}`;
+  const otherGroupSettings = await getGroupAISettings(otherGroupId);
+  if (otherGroupSettings.geminiApiKey !== testApiKey) {
+    throw new Error(`Global key inheritance failed! Expected ${testApiKey}, got ${otherGroupSettings.geminiApiKey}`);
+  }
+  console.log("  ✓ Cross-group API key inheritance verified: new groups automatically inherit configured Google API key");
+
+  // Verify custom material is retrievable by getMaterials
+  const fetchedMaterials = await getMaterials(testGroupId);
+  const foundCustom = fetchedMaterials.find((m) => m.id === customMat.id);
+  if (!foundCustom || foundCustom.title !== customMat.title) {
+    throw new Error("Custom material was not found in getMaterials result!");
+  }
+  console.log("  ✓ Custom material reliably retrieved from storage");
+
+  // Verify repeated getMaterials calls do NOT mutate storage or lose custom material
+  await getMaterials(testGroupId);
+  await getMaterials("any-other-group");
+  const recheckedMaterials = await getMaterials(testGroupId);
+  if (!recheckedMaterials.some((m) => m.id === customMat.id)) {
+    throw new Error("Repeated getMaterials calls wiped or lost the custom material!");
+  }
+  console.log("  ✓ Non-destructive reads verified: multiple read queries preserve all custom materials without wiping");
+
+  // Verify cross-group delete protection: other group CANNOT delete customMat
+  const unauthorizedDelete = await deleteMaterial("different-group-id", customMat.id);
+  if (unauthorizedDelete) {
+    throw new Error("Different group was able to delete custom material owned by another group!");
+  }
+  console.log("  ✓ Strict group ownership verified: cross-group deletion rejected");
 
   // Cleanup test material
   const deleteCustomResult = await deleteMaterial(testGroupId, customMat.id);
