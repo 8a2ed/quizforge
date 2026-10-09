@@ -52,7 +52,7 @@ export interface GenerationLog {
 export interface AISettings {
   groupId: string;
   geminiApiKey?: string;
-  defaultModel: "gemini-2.0-flash" | "gemini-1.5-flash" | "gemini-1.5-pro";
+  defaultModel: string;
   defaultDifficulty: "mixed" | "easy" | "medium" | "hard";
   defaultCount: number;
   strictGrounding: boolean;
@@ -496,7 +496,7 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   const defaultSettings: AISettings = {
     groupId,
     geminiApiKey: process.env.GEMINI_API_KEY || "",
-    defaultModel: "gemini-2.0-flash",
+    defaultModel: "gemini-3.8-flash",
     defaultDifficulty: "mixed",
     defaultCount: 5,
     strictGrounding: true,

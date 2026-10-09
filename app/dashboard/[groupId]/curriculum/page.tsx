@@ -118,7 +118,7 @@ interface AISettings {
   geminiApiKey?: string;
   maskedApiKey?: string;
   hasApiKey: boolean;
-  defaultModel: "gemini-2.0-flash" | "gemini-1.5-flash" | "gemini-1.5-pro";
+  defaultModel: string;
   defaultDifficulty: "mixed" | "easy" | "medium" | "hard";
   defaultCount: number;
   strictGrounding: boolean;
@@ -196,8 +196,16 @@ export default function CurriculumPage() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    message: string;
+    activeModel?: string;
+    fallbackUsed?: boolean;
+  } | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; displayName?: string }>>([]);
+  const [isCustomModel, setIsCustomModel] = useState<boolean>(false);
+  const [detectingModels, setDetectingModels] = useState<boolean>(false);
 
   // Helper Toast
   const showToast = (type: "success" | "error" | "info", msg: string) => {
@@ -325,6 +333,19 @@ export default function CurriculumPage() {
         durationMs: data.durationMs,
         materialTitle: data.materialTitle,
       });
+
+      // If backend auto-upgraded the model due to deprecation fallback, sync local UI state
+      if (data.modelUsed && settings && data.modelUsed !== settings.defaultModel) {
+        setSettings((prev) => (prev ? { ...prev, defaultModel: data.modelUsed } : null));
+        if (data.fallbackUsed) {
+          showToast(
+            "info",
+            isRtl
+              ? `تم ترقية النموذج تلقائياً إلى (${data.modelUsed}) لأن النموذج القديم لم يعد مدعوماً`
+              : `Model auto-upgraded to (${data.modelUsed})`
+          );
+        }
+      }
 
       // Refresh analytics in background
       loadAnalytics();
@@ -588,7 +609,9 @@ export default function CurriculumPage() {
     setSavingSettings(true);
     try {
       const payload: any = {
-        defaultModel: settings?.defaultModel || "gemini-2.0-flash",
+        defaultModel: settings?.defaultModel
+          ? settings.defaultModel.trim().replace(/^\/?models\//, "")
+          : "gemini-3.8-flash",
         defaultDifficulty: settings?.defaultDifficulty || "mixed",
         defaultCount: settings?.defaultCount || 5,
         strictGrounding: settings?.strictGrounding ?? true,
@@ -626,14 +649,32 @@ export default function CurriculumPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: apiKeyInput.trim() || undefined,
-          model: settings?.defaultModel || "gemini-2.0-flash",
+          model: settings?.defaultModel || "gemini-3.8-flash",
         }),
       });
       const data = await res.json();
       setTestResult({
         success: data.success,
         message: data.message || (data.success ? "Connection OK" : "Failed"),
+        activeModel: data.activeModel,
+        fallbackUsed: data.fallbackUsed,
       });
+
+      if (data.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
+        setAvailableModels(data.availableModels);
+      }
+
+      if (data.success && data.activeModel) {
+        setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel } : null));
+        if (data.fallbackUsed) {
+          showToast(
+            "info",
+            isRtl
+              ? `تم تحديث النموذج النشط تلقائياً إلى: ${data.activeModel}`
+              : `Active model auto-updated to: ${data.activeModel}`
+          );
+        }
+      }
     } catch (e: any) {
       setTestResult({
         success: false,
@@ -641,6 +682,51 @@ export default function CurriculumPage() {
       });
     } finally {
       setTestingKey(false);
+    }
+  };
+
+  const handleAutoDetectModels = async () => {
+    setDetectingModels(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: apiKeyInput.trim() || undefined,
+          model: "gemini-3.8-flash",
+          autoSave: true,
+        }),
+      });
+      const data = await res.json();
+      setTestResult({
+        success: data.success,
+        message: data.message || (data.success ? "Connection OK" : "Failed"),
+        activeModel: data.activeModel,
+        fallbackUsed: data.fallbackUsed,
+      });
+      if (data.availableModels && Array.isArray(data.availableModels) && data.availableModels.length > 0) {
+        setAvailableModels(data.availableModels);
+      }
+      if (data.success && data.activeModel) {
+        setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel } : null));
+        setIsCustomModel(false);
+        showToast(
+          "success",
+          isRtl
+            ? `تم اكتشاف وتعيين وحفظ النموذج النشط بنجاح: ${data.activeModel}`
+            : `Detected, set & saved active model: ${data.activeModel}`
+        );
+      } else {
+        showToast("error", data.message || (isRtl ? "تعذر اكتشاف النماذج" : "Failed to detect models"));
+      }
+    } catch (e: any) {
+      setTestResult({
+        success: false,
+        message: e.message || "Failed to detect models",
+      });
+      showToast("error", e.message || "Failed to detect models");
+    } finally {
+      setDetectingModels(false);
     }
   };
 
@@ -733,7 +819,7 @@ export default function CurriculumPage() {
                 {isRtl ? "النموذج:" : "Engine:"}
               </span>
               <strong style={{ color: "var(--clr-text-primary)" }}>
-                {settings?.defaultModel || "gemini-2.0-flash"}
+                {settings?.defaultModel || "gemini-3.8-flash"}
               </strong>
             </div>
             <div style={{ width: 1, height: 16, background: "var(--clr-border)" }} />
@@ -1978,37 +2064,102 @@ export default function CurriculumPage() {
             {testResult && (
               <div
                 style={{
-                  padding: "8px 12px",
+                  padding: "10px 14px",
                   borderRadius: "var(--radius-md)",
                   background: testResult.success ? "rgba(16, 185, 129, 0.12)" : "rgba(244, 63, 94, 0.12)",
                   color: testResult.success ? "var(--clr-success)" : "var(--clr-danger)",
                   fontSize: "0.85rem",
                   marginBottom: 16,
                   display: "flex",
-                  alignItems: "center",
-                  gap: 8,
+                  alignItems: "flex-start",
+                  gap: 10,
+                  lineHeight: 1.5,
                 }}
               >
-                {testResult.success ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                <span>{testResult.message}</span>
+                <div style={{ marginTop: 2 }}>
+                  {testResult.success ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600 }}>
+                    {testResult.success ? (isRtl ? "تم التحقق بنجاح!" : "Connection Verified!") : (isRtl ? "فشل التحقق" : "Verification Failed")}
+                  </div>
+                  <div style={{ marginTop: 2 }}>{testResult.message}</div>
+                  {testResult.activeModel && (
+                    <div style={{ fontSize: "0.78rem", opacity: 0.9, marginTop: 4 }}>
+                      {isRtl ? "النموذج النشط المعتمد:" : "Active Model:"}{" "}
+                      <code style={{ fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(0,0,0,0.06)" }}>
+                        {testResult.activeModel}
+                      </code>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
             {/* Model Selector */}
             <div style={{ marginBottom: 16 }}>
-              <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                {isRtl ? "النموذج المفضل (Model):" : "Preferred Gemini Model:"}
-              </label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <label style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: 0 }}>
+                  {isRtl ? "النموذج المفضل (Model):" : "Preferred Gemini Model:"}
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={handleAutoDetectModels}
+                  disabled={testingKey || detectingModels}
+                  style={{
+                    padding: "3px 8px",
+                    fontSize: "0.75rem",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    height: "auto",
+                    borderRadius: "var(--radius-sm)",
+                    cursor: "pointer",
+                  }}
+                  title={isRtl ? "فحص واكتشاف النماذج المدعومة لمفتاحك" : "Discover supported models for your key"}
+                >
+                  <Sparkles size={12} />
+                  <span>
+                    {detectingModels
+                      ? (isRtl ? "جارِ الفحص..." : "Detecting...")
+                      : (isRtl ? "اكتشاف النماذج النشطة" : "Auto-detect Models")}
+                  </span>
+                </button>
+              </div>
+
               <select
                 className="select"
-                value={settings?.defaultModel || "gemini-2.0-flash"}
-                onChange={(e: any) =>
-                  setSettings((prev) => prev ? { ...prev, defaultModel: e.target.value } : null)
+                value={
+                  isCustomModel ||
+                  (settings?.defaultModel &&
+                    !["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"].includes(settings.defaultModel) &&
+                    !availableModels.some((m) => m.id === settings.defaultModel))
+                    ? "__custom__"
+                    : (settings?.defaultModel || "gemini-3.8-flash")
                 }
+                onChange={(e: any) => {
+                  const val = e.target.value;
+                  if (val === "__custom__") {
+                    setIsCustomModel(true);
+                  } else {
+                    setIsCustomModel(false);
+                    setSettings((prev) => (prev ? { ...prev, defaultModel: val } : null));
+                  }
+                }}
                 style={{ width: "100%" }}
               >
+                <option value="gemini-3.8-flash">
+                  gemini-3.8-flash ({isRtl ? "الأحدث والأسرع - موصى به" : "Latest & Fastest - Recommended"})
+                </option>
+                <option value="gemini-2.5-flash">
+                  gemini-2.5-flash ({isRtl ? "أداء متوازن وسريع" : "Fast & Balanced"})
+                </option>
+                <option value="gemini-2.5-pro">
+                  gemini-2.5-pro ({isRtl ? "تفكير تحليلي متقدم" : "Advanced Reasoning"})
+                </option>
                 <option value="gemini-2.0-flash">
-                  gemini-2.0-flash ({isRtl ? "الجيل الأحدث - فائق السرعة وأعلى دقة منطقية" : "Recommended - Fast & Accurate"})
+                  gemini-2.0-flash ({isRtl ? "الجيل السابق" : "Previous Generation"})
                 </option>
                 <option value="gemini-1.5-flash">
                   gemini-1.5-flash ({isRtl ? "سريع مع نافذة سياق 1M Token" : "Fast & Lightweight"})
@@ -2016,7 +2167,46 @@ export default function CurriculumPage() {
                 <option value="gemini-1.5-pro">
                   gemini-1.5-pro ({isRtl ? "تفكير أكاديمي متقدم للكتب الضخمة" : "Deep Academic Reasoning"})
                 </option>
+                {/* Dynamically detected extra models */}
+                {availableModels
+                  .filter((m) => !["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"].includes(m.id))
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id} {m.displayName && m.displayName !== m.id ? `(${m.displayName})` : `(${isRtl ? "مكتشف من حسابك" : "Discovered"})`}
+                    </option>
+                  ))}
+                <option value="__custom__">
+                  ✍️ {isRtl ? "إدخال نموذج مخصص يدويًا..." : "Enter custom model ID..."}
+                </option>
               </select>
+
+              {(isCustomModel ||
+                (settings?.defaultModel &&
+                  !["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"].includes(settings.defaultModel) &&
+                  !availableModels.some((m) => m.id === settings.defaultModel))) && (
+                <div style={{ marginTop: 8 }}>
+                  <input
+                    type="text"
+                    className="input"
+                    value={settings?.defaultModel || ""}
+                    placeholder="e.g. gemini-3.8-flash, gemini-exp..."
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings((prev) => (prev ? { ...prev, defaultModel: val } : null));
+                    }}
+                    onBlur={(e) => {
+                      const val = e.target.value.trim().replace(/^\/?models\//, "");
+                      setSettings((prev) => (prev ? { ...prev, defaultModel: val || "gemini-3.8-flash" } : null));
+                    }}
+                    style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem" }}
+                  />
+                  <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginTop: 4, display: "block" }}>
+                    {isRtl
+                      ? "يمكنك كتابة اسم أي نموذج تجريبي أو مخصص تدعمه واجهة Gemini API."
+                      : "Specify any custom model ID supported by your Gemini API key."}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Default Count & Difficulty Row */}

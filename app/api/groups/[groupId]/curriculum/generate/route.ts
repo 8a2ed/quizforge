@@ -4,10 +4,11 @@ import { prisma } from "@/lib/db";
 import {
   getMaterialById,
   getGroupAISettings,
+  updateGroupAISettings,
   recordGenerationLog,
   GenerationLog,
 } from "@/lib/aiStorage";
-import { generateCurriculumQuestions } from "@/lib/gemini";
+import { generateCurriculumQuestions, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -119,7 +120,7 @@ export async function POST(
     // Call Gemini with strict Zero-Hallucination prompt
     const result = await generateCurriculumQuestions({
       apiKey,
-      model: settings.defaultModel || "gemini-2.0-flash",
+      model: settings.defaultModel || DEFAULT_GEMINI_MODEL,
       textExcerpt,
       materialTitle,
       topic,
@@ -128,6 +129,15 @@ export async function POST(
       strictGrounding: settings.strictGrounding,
       systemInstruction: [settings.systemInstruction, customInstructions].filter(Boolean).join("\n"),
     });
+
+    // If fallback was used to a newer active model, auto-update the group settings
+    if (result.modelUsed && result.modelUsed !== settings.defaultModel) {
+      try {
+        await updateGroupAISettings(groupId, { defaultModel: result.modelUsed });
+      } catch (e) {
+        console.warn("[CurriculumGenerate] Auto-persisting working model warning:", e);
+      }
+    }
 
     // Record audit log and usage metrics
     const log: GenerationLog = {
@@ -162,6 +172,7 @@ export async function POST(
       durationMs: result.durationMs,
       materialTitle,
       logId: log.id,
+      fallbackUsed: result.fallbackUsed,
     });
   } catch (err: unknown) {
     console.error("[Curriculum Generate Error]", err);

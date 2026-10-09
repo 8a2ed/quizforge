@@ -10,7 +10,18 @@ import {
   updateGroupAISettings,
   CurriculumMaterial,
 } from "../lib/aiStorage";
-import { estimateTokens, extractQuestionsFromJson } from "../lib/gemini";
+import {
+  estimateTokens,
+  extractQuestionsFromJson,
+  DEFAULT_GEMINI_MODEL,
+  RECOMMENDED_GEMINI_MODELS,
+  BASE_GEMINI_MODELS,
+  normalizeModelName,
+  isModelNotFoundError,
+  fetchAvailableGeminiModels,
+  getFallbackCandidates,
+  testGeminiConnection,
+} from "../lib/gemini";
 
 async function runTests() {
   console.log("=== RUNNING ENHANCED AI CURRICULUM VERIFICATION SUITE ===");
@@ -205,7 +216,7 @@ All questions grounded in text.
     userUsername: "ahmed_teacher",
     materialTitle: customMat.title,
     questionCount: 5,
-    modelUsed: "gemini-2.0-flash",
+    modelUsed: DEFAULT_GEMINI_MODEL,
     estimatedTokens: 350,
     difficulty: "EASY",
     timestamp: new Date().toISOString(),
@@ -231,7 +242,7 @@ All questions grounded in text.
     throw new Error("Default AI settings missing");
   }
   const updatedSettings = await updateGroupAISettings(testGroupId, {
-    defaultModel: "gemini-2.0-flash",
+    defaultModel: DEFAULT_GEMINI_MODEL,
     defaultDifficulty: "hard",
     defaultCount: 10,
     strictGrounding: true,
@@ -255,6 +266,89 @@ All questions grounded in text.
     throw new Error("Token estimation failed");
   }
   console.log(`  ✓ Token estimation returned ~${tokens} tokens`);
+
+  // ── 6. Gemini Model Fallback & Discovery Helpers ──
+  console.log("\n[6] Testing Gemini 3.8-flash, Deprecation Fallback & Discovery Helpers...");
+  if (DEFAULT_GEMINI_MODEL !== "gemini-3.8-flash") {
+    throw new Error(`DEFAULT_GEMINI_MODEL expected "gemini-3.8-flash", got ${DEFAULT_GEMINI_MODEL}`);
+  }
+  if (RECOMMENDED_GEMINI_MODELS[0].id !== "gemini-3.8-flash") {
+    throw new Error(`Top recommended model must be gemini-3.8-flash`);
+  }
+  if (!BASE_GEMINI_MODELS.includes("gemini-3.8-flash") || !BASE_GEMINI_MODELS.includes("gemini-2.5-pro")) {
+    throw new Error("BASE_GEMINI_MODELS must include gemini-3.8-flash and gemini-2.5-pro");
+  }
+  console.log("  ✓ Primary default model verified as gemini-3.8-flash, modern models present");
+
+  // Normalize model name checks
+  if (normalizeModelName("models/gemini-3.8-flash") !== "gemini-3.8-flash") {
+    throw new Error("normalizeModelName failed on prefix strip");
+  }
+  if (normalizeModelName("/models/gemini-3.8-flash") !== "gemini-3.8-flash") {
+    throw new Error("normalizeModelName failed on leading slash prefix strip");
+  }
+  if (normalizeModelName("") !== "gemini-3.8-flash") {
+    throw new Error("normalizeModelName failed on empty string default fallback");
+  }
+  console.log("  ✓ Model name normalizer correctly strips prefixes and defaults to gemini-3.8-flash");
+
+  // Model not found / deprecation detector checks
+  const err404Legacy = "404: This model models/gemini-2.0-flash is no longer available. Please update your code to use models/gemini-3.8-flash for the latest features and improvements.";
+  if (!isModelNotFoundError(404, err404Legacy)) {
+    throw new Error("isModelNotFoundError failed to detect 404 deprecation message!");
+  }
+  const err404Pro = "404: models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models.";
+  if (!isModelNotFoundError(404, err404Pro)) {
+    throw new Error("isModelNotFoundError failed to detect 404 model not found message!");
+  }
+  const errDeprecated = "The model gemini-1.0-pro has been deprecated and discontinued.";
+  if (!isModelNotFoundError(400, errDeprecated)) {
+    throw new Error("isModelNotFoundError failed on deprecated notice!");
+  }
+  if (isModelNotFoundError(200, "OK")) {
+    throw new Error("isModelNotFoundError falsely triggered on 200 OK!");
+  }
+  if (isModelNotFoundError(429, "Resource has been exhausted")) {
+    throw new Error("isModelNotFoundError falsely triggered on 429 quota exhaustion!");
+  }
+  console.log("  ✓ Deprecation and 404 detection correctly identifies outdated model errors");
+
+  // Fallback candidates logic
+  const candidatesFor20 = getFallbackCandidates("gemini-2.0-flash", [
+    {
+      id: "gemini-custom-school",
+      name: "models/gemini-custom-school",
+      displayName: "Custom Model",
+      description: "",
+      supportedGenerationMethods: ["generateContent"],
+    },
+  ]);
+  if (!candidatesFor20.includes("gemini-3.8-flash")) {
+    throw new Error("Fallback candidates must prioritize gemini-3.8-flash");
+  }
+  if (!candidatesFor20.includes("gemini-custom-school")) {
+    throw new Error("Fallback candidates must include dynamic models");
+  }
+  if (candidatesFor20.includes("gemini-2.0-flash") || candidatesFor20.includes("gemini-1.5-flash")) {
+    throw new Error("Fallback candidates must NOT contain deprecated models!");
+  }
+  console.log("  ✓ Fallback candidate resolution prioritizes gemini-3.8-flash and excludes deprecated models");
+
+  // Safe empty key checks
+  const emptyKeyTest = await testGeminiConnection("");
+  if (emptyKeyTest.success) {
+    throw new Error("testGeminiConnection should fail cleanly when no API key is provided");
+  }
+  if (!Array.isArray(emptyKeyTest.availableModels) || emptyKeyTest.availableModels.length !== 0) {
+    throw new Error("testGeminiConnection must return empty availableModels on failure");
+  }
+  console.log("  ✓ testGeminiConnection safely rejects empty API key and returns empty availableModels");
+
+  const emptyModels = await fetchAvailableGeminiModels("");
+  if (!Array.isArray(emptyModels) || emptyModels.length !== 0) {
+    throw new Error("fetchAvailableGeminiModels should return empty array for empty key");
+  }
+  console.log("  ✓ fetchAvailableGeminiModels safely handles empty key without crashing");
 
   console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }

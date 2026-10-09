@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { getGroupAISettings, updateGroupAISettings } from "@/lib/aiStorage";
+import { DEFAULT_GEMINI_MODEL, normalizeModelName } from "@/lib/gemini";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -38,6 +39,7 @@ export async function GET(
   return NextResponse.json({
     settings: {
       ...settings,
+      defaultModel: settings.defaultModel || DEFAULT_GEMINI_MODEL,
       hasApiKey: !!rawKey,
       maskedApiKey: maskApiKey(rawKey),
     },
@@ -66,7 +68,7 @@ export async function PATCH(
     }
   }
 
-  if (body.defaultModel) updates.defaultModel = body.defaultModel;
+  if (body.defaultModel) updates.defaultModel = normalizeModelName(body.defaultModel);
   if (body.defaultDifficulty) updates.defaultDifficulty = body.defaultDifficulty;
   if (body.defaultCount) updates.defaultCount = Number(body.defaultCount) || 5;
   if (body.strictGrounding !== undefined) updates.strictGrounding = Boolean(body.strictGrounding);

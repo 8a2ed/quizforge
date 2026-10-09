@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-import { getGroupAISettings } from "@/lib/aiStorage";
-import { testGeminiConnection } from "@/lib/gemini";
+import { getGroupAISettings, updateGroupAISettings } from "@/lib/aiStorage";
+import { testGeminiConnection, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -29,7 +29,7 @@ export async function POST(
 
   const body = await req.json().catch(() => ({}));
   let apiKey = body.apiKey ? String(body.apiKey).trim() : "";
-  const model = body.model ? String(body.model).trim() : "gemini-2.0-flash";
+  const model = body.model ? String(body.model).trim() : DEFAULT_GEMINI_MODEL;
 
   // If user passed placeholder or empty, read from saved group settings
   if (!apiKey || apiKey.includes("••••")) {
@@ -42,11 +42,26 @@ export async function POST(
       {
         success: false,
         message: "لم يتم تقديم أي مفتاح API لفحصه. يرجى إدخال المفتاح أولاً.",
+        activeModel: model || DEFAULT_GEMINI_MODEL,
+        availableModels: [],
       },
       { status: 400 }
     );
   }
 
+  const autoSave = Boolean(body.autoSave);
   const result = await testGeminiConnection(apiKey, model);
+
+  // If connection succeeded and either autoSave was requested (e.g. from Auto-detect Models)
+  // or a fallback was used because the requested model was deprecated,
+  // automatically update the group's saved setting to the working model.
+  if (result.success && result.activeModel && (autoSave || result.fallbackUsed)) {
+    try {
+      await updateGroupAISettings(groupId, { defaultModel: result.activeModel });
+    } catch (e) {
+      console.warn("[SettingsTest] Auto-persisting working model warning:", e);
+    }
+  }
+
   return NextResponse.json(result);
 }
