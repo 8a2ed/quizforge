@@ -414,7 +414,7 @@ export async function generateCurriculumQuestions(
 
   let activeModel = requestedModel;
   let fallbackUsed = false;
-  let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey);
+  let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
 
   // If model fails with 404 or deprecation, trigger intelligent fallback
   if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
@@ -433,7 +433,7 @@ export async function generateCurriculumQuestions(
 
     for (const candidate of fallbackCandidates) {
       console.log(`[Gemini] Attempting fallback model: ${candidate}`);
-      const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey);
+      const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
       if (fallbackRes.ok && fallbackRes.text) {
         console.log(`[Gemini] Fallback succeeded with model: ${candidate}`);
         apiRes = fallbackRes;

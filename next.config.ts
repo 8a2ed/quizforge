@@ -21,6 +21,7 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "50mb",
     },
+    proxyClientMaxBodySize: "50mb",
   },
 
   // Reduce 404 noise from favicon/apple-touch in dev

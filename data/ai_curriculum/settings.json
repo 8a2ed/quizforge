@@ -137,7 +137,7 @@
     "defaultCount": 10,
     "strictGrounding": true,
     "systemInstruction": "",
-    "updatedAt": "2026-10-09T20:03:35.263Z"
+    "updatedAt": "2026-10-09T21:52:38.509Z"
   },
   "test-group-1791576214702": {
     "groupId": "test-group-1791576214702",
@@ -148,5 +148,45 @@
     "strictGrounding": true,
     "systemInstruction": "",
     "updatedAt": "2026-10-09T20:03:35.263Z"
+  },
+  "test-group-1791581071546": {
+    "groupId": "test-group-1791581071546",
+    "geminiApiKey": "AIzaSyTestValidKey9988",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "medium",
+    "defaultCount": 15,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T21:24:31.722Z"
+  },
+  "test-group-1791581922585": {
+    "groupId": "test-group-1791581922585",
+    "geminiApiKey": "AIzaSyTestValidKey9988",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "medium",
+    "defaultCount": 15,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T21:38:42.700Z"
+  },
+  "test-group-1791582126243": {
+    "groupId": "test-group-1791582126243",
+    "geminiApiKey": "AIzaSyTestValidKey9988",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "medium",
+    "defaultCount": 15,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T21:42:06.345Z"
+  },
+  "test-group-1791582758424": {
+    "groupId": "test-group-1791582758424",
+    "geminiApiKey": "AIzaSyTestValidKey9988",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "medium",
+    "defaultCount": 15,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T21:52:38.509Z"
   }
 }

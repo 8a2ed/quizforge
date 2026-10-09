@@ -24,6 +24,7 @@ export interface CurriculumMaterial {
     photoUrl?: string;
   };
   ocrUsed?: boolean;
+  digitalFallback?: boolean;
   createdAt: string;
   updatedAt: string;
 }

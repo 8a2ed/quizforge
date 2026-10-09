@@ -57,6 +57,7 @@ interface CurriculumMaterial {
     photoUrl?: string;
   };
   ocrUsed?: boolean;
+  digitalFallback?: boolean;
   createdAt: string;
 }
 
@@ -178,6 +179,8 @@ export default function CurriculumPage() {
   const [forceOcr, setForceOcr] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgressStep, setUploadProgressStep] = useState<string>("");
+  const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
   const [previewMaterial, setPreviewMaterial] = useState<CurriculumMaterial | null>(null);
 
   // ── Modals State ──
@@ -716,7 +719,17 @@ export default function CurriculumPage() {
       return;
     }
 
+    const sizeMb = (uploadFile.size / (1024 * 1024)).toFixed(1);
     setUploading(true);
+    setUploadProgressPercent(10);
+    setUploadProgressStep(
+      isRtl
+        ? `جاري رفع الكتاب (${sizeMb} ميجابايت)...`
+        : `Uploading textbook (${sizeMb} MB)...`
+    );
+
+    let progressTimer: NodeJS.Timeout | null = null;
+
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
@@ -731,12 +744,85 @@ export default function CurriculumPage() {
         formData.append("apiKey", localKey);
       }
 
-      const res = await fetch(`/api/groups/${groupId}/curriculum/materials`, {
-        method: "POST",
-        body: formData,
+      // Track live XHR upload progress
+      const res = await new Promise<{ ok: boolean; status: number; text: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/groups/${groupId}/curriculum/materials`);
+        xhr.timeout = 300000; // 5 minutes
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const fraction = event.loaded / event.total;
+            const pct = Math.min(65, Math.max(10, Math.round(fraction * 65)));
+            const uploadedMb = (event.loaded / (1024 * 1024)).toFixed(1);
+            setUploadProgressPercent(pct);
+            setUploadProgressStep(
+              isRtl
+                ? `جاري رفع الكتاب (${uploadedMb} / ${sizeMb} ميجابايت)...`
+                : `Uploading textbook (${uploadedMb} / ${sizeMb} MB)...`
+            );
+          }
+        };
+
+        xhr.upload.onload = () => {
+          setUploadProgressPercent(75);
+          setUploadProgressStep(
+            isRtl
+              ? "جاري قراءة واستخراج الفصول ونصوص الكتاب..."
+              : "Reading and extracting textbook sections and chapters..."
+          );
+
+          // Incremental feedback while server parses sections
+          let elapsedSec = 0;
+          progressTimer = setInterval(() => {
+            elapsedSec += 3;
+            if (elapsedSec >= 6 && elapsedSec < 15) {
+              setUploadProgressPercent(85);
+              setUploadProgressStep(
+                isRtl
+                  ? "جاري تنظيم الفصول والتعرف على الموضوعات التعليمية..."
+                  : "Structuring chapters and indexing topics..."
+              );
+            } else if (elapsedSec >= 15) {
+              setUploadProgressPercent(92);
+              setUploadProgressStep(
+                isRtl
+                  ? "جاري تدقيق النصوص وحفظ المنهج في المكتبة..."
+                  : "Finalizing text parsing and indexing curriculum..."
+              );
+            }
+          }, 3000);
+        };
+
+        xhr.onload = () => {
+          if (progressTimer) clearInterval(progressTimer);
+          resolve({
+            ok: xhr.status >= 200 && xhr.status < 300,
+            status: xhr.status,
+            text: xhr.responseText,
+          });
+        };
+
+        xhr.onerror = () => {
+          if (progressTimer) clearInterval(progressTimer);
+          reject(new Error(isRtl ? "فشل الاتصال بالخادم أثناء رفع الملف" : "Network connection failed during upload"));
+        };
+
+        xhr.ontimeout = () => {
+          if (progressTimer) clearInterval(progressTimer);
+          resolve({
+            ok: false,
+            status: 504,
+            text: "Request timeout after 5 minutes",
+          });
+        };
+
+        xhr.send(formData);
       });
 
-      const resText = await res.text();
+      if (progressTimer) clearInterval(progressTimer);
+
+      const resText = res.text;
       let data: any = null;
       try {
         data = resText ? JSON.parse(resText) : {};
@@ -747,16 +833,17 @@ export default function CurriculumPage() {
       if (!res.ok) {
         if (res.status === 413 || (resText && resText.toLowerCase().includes("request entity too large"))) {
           throw new Error(
-            isRtl
-              ? "حجم الملف كبير جداً وتجاوز الحد الأقصى المسموح به للخادم (Request Entity Too Large). يرجى ضغط الملف أو تقليل حجمه لأقل من 50 ميجابايت."
-              : "File size is too large for the server (413 Request Entity Too Large). Please upload a smaller file."
+            data?.error ||
+            (isRtl
+              ? `حجم الملف (${sizeMb} ميجابايت) تجاوز الحد الأقصى المسموح به للخادم (Request Entity Too Large). يُرجى التأكد من أن حجم الملف أقل من 50 ميجابايت.`
+              : `File size (${sizeMb} MB) exceeded server limits (413 Request Entity Too Large). Maximum supported size is 50MB.`)
           );
         }
         if (res.status === 504 || res.status === 408 || (resText && resText.toLowerCase().includes("timeout"))) {
           throw new Error(
             isRtl
-              ? "استغرقت معالجة واستخراج نصوص الكتاب وقتاً طويلاً وتجاوزت مهلة الخادم. يرجى تجربة تقسيم الملف أو رفعه كملف نصي."
-              : "Processing timed out. Please try a smaller file."
+              ? "استغرقت معالجة واستخراج نصوص الكتاب وقتاً طويلاً وتجاوزت مهلة الخادم (5 دقائق). يرجى تقليل حجم الملف أو تقسيمه."
+              : "Processing timed out after 5 minutes. Please try splitting the document."
           );
         }
         const errorMsg =
@@ -768,6 +855,9 @@ export default function CurriculumPage() {
             : `Upload failed (${res.status})`);
         throw new Error(errorMsg);
       }
+
+      setUploadProgressPercent(100);
+      setUploadProgressStep(isRtl ? "تمت المعالجة بنجاح!" : "Processed successfully!");
 
       // Reset form
       setUploadFile(null);
@@ -786,16 +876,26 @@ export default function CurriculumPage() {
       }
 
       await loadMaterials();
-      showToast(
-        "success",
-        isRtl
+
+      const successMsg =
+        data?.notice ||
+        data?.message ||
+        (isRtl
           ? "تم رفع المنهج الدراسي واستخراج النصوص بنجاح وحفظه في المكتبة!"
-          : "Uploaded and saved material successfully!"
-      );
+          : "Uploaded and saved material successfully!");
+      showToast("success", successMsg);
     } catch (e: any) {
+      if (progressTimer) clearInterval(progressTimer);
+      setUploadProgressPercent(0);
+      setUploadProgressStep("");
       showToast("error", e.message || (isRtl ? "فشل رفع الملف" : "Upload failed"));
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       setUploading(false);
+      setTimeout(() => {
+        setUploadProgressPercent(0);
+        setUploadProgressStep("");
+      }, 2500);
     }
   };
 
@@ -1813,7 +1913,10 @@ export default function CurriculumPage() {
                   <div>
                     <h4 style={{ margin: "0 0 4px", color: "var(--clr-text-primary)" }}>{uploadFile.name}</h4>
                     <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                      {(uploadFile.size / 1024).toFixed(1)} KB — {isRtl ? "جاهز للاستخراج والتحليل" : "Ready to parse"}
+                      {uploadFile.size > 1024 * 1024
+                        ? `${(uploadFile.size / (1024 * 1024)).toFixed(1)} MB`
+                        : `${(uploadFile.size / 1024).toFixed(1)} KB`}{" "}
+                      — {isRtl ? "جاهز للاستخراج والتحليل" : "Ready to parse"}
                     </span>
                   </div>
                 ) : (
@@ -1823,8 +1926,8 @@ export default function CurriculumPage() {
                     </h4>
                     <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: "0 0 10px" }}>
                       {isRtl
-                        ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) والصور عالية الدقة"
-                        : "Supports PDF, DOCX, TXT, and high-res images"}
+                        ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) والصور عالية الدقة (حتى 50 ميجابايت)"
+                        : "Supports PDF, DOCX, TXT, and high-res images (up to 50MB)"}
                     </p>
                     <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span
@@ -1878,8 +1981,8 @@ export default function CurriculumPage() {
                     : "✨ Force Intelligent AI Visual OCR (NotebookLM Mode)"}
                   <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-secondary)", marginTop: 2 }}>
                     {isRtl
-                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات بدقة متناهية حتى لو كان الملف يحتوي على علامات مائية أو نصوص رقمية جزئية."
-                      : "Ensures extraction of handwriting, diagrams, and tables even if file has partial digital text."}
+                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات بدقة متناهية. (إذا كان الكتاب رقمياً كبيراً ويتجاوز 14 ميجابايت، يتم تلقائياً استخراج نصوصه الرقمية الأصلية لتجنب حدود الخادم وضمان السرعة)."
+                      : "Ensures extraction of handwriting, diagrams, and tables. (If textbook exceeds 14MB and has digital text, authentic digital text is extracted automatically to bypass payload limits)."}
                   </span>
                 </label>
               </div>
@@ -1941,6 +2044,55 @@ export default function CurriculumPage() {
                 </div>
               </div>
 
+              {/* Live Upload & Extraction Progress Steps */}
+              {(uploading || uploadProgressPercent > 0) && (
+                <div
+                  style={{
+                    marginTop: "var(--space-4)",
+                    padding: "14px 18px",
+                    borderRadius: "var(--radius-md)",
+                    background: "var(--clr-bg-elevated)",
+                    border: "1px solid var(--clr-brand)",
+                    boxShadow: "var(--shadow-sm)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.9rem", fontWeight: 600 }}>
+                      {uploadProgressPercent < 100 ? (
+                        <RefreshCw size={18} className="spin" style={{ color: "var(--clr-brand)" }} />
+                      ) : (
+                        <CheckCircle2 size={18} style={{ color: "var(--clr-success)" }} />
+                      )}
+                      <span style={{ color: "var(--clr-text-primary)" }}>
+                        {uploadProgressStep || (isRtl ? "جاري معالجة الكتاب الدراسي..." : "Processing curriculum...")}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--clr-brand)", minWidth: 40, textAlign: "end" }}>
+                      {uploadProgressPercent}%
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      width: "100%",
+                      height: 8,
+                      background: "rgba(99, 102, 241, 0.15)",
+                      borderRadius: 4,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${uploadProgressPercent}%`,
+                        height: "100%",
+                        background: uploadProgressPercent === 100 ? "var(--clr-success)" : "var(--clr-brand)",
+                        borderRadius: 4,
+                        transition: "width 0.4s ease",
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
               <div style={{ marginTop: "var(--space-5)", display: "flex", justifyContent: "flex-end" }}>
                 <button
                   type="submit"
@@ -1951,7 +2103,7 @@ export default function CurriculumPage() {
                   {uploading ? (
                     <>
                       <RefreshCw size={18} className="spin" />
-                      <span>{isRtl ? "جاري الرفع واستخراج النصوص..." : "Uploading & Extracting..."}</span>
+                      <span>{uploadProgressStep || (isRtl ? "جاري الرفع واستخراج النصوص..." : "Uploading & Extracting...")}</span>
                     </>
                   ) : (
                     <>
@@ -2014,6 +2166,15 @@ export default function CurriculumPage() {
                               title={isRtl ? "تم استخراج النص بالتعرف البصري الذكي OCR" : "Transcribed via AI OCR"}
                             >
                               ✨ OCR
+                            </span>
+                          )}
+                          {m.digitalFallback && (
+                            <span
+                              className="badge badge-brand"
+                              style={{ fontSize: "0.72rem", padding: "2px 8px" }}
+                              title={isRtl ? "تم استخراج النص الرقمي المباشر فائق الدقة" : "Direct Digital Text"}
+                            >
+                              ⚡ نصوص رقمية
                             </span>
                           )}
                         </div>

@@ -158,6 +158,124 @@ async function runTests() {
   }
   console.log("  ✓ PDF forceOcr correctly bypasses digital extraction and routes directly to NotebookLM OCR");
 
+  // Test Large PDF (>14MB) with forceOcr checked (e.g. 22MB Crop Production Book)
+  // Must gracefully fall back to direct digital parsing without throwing 14MB or Request Entity Too Large error!
+  const lines = Array.from({ length: 25 }, (_, i) => "(" + Array.from({ length: 5 }, (_, j) => `Word_${i}_${j}`).join(" ") + ") '").join("\n");
+  const contentStream = "BT\n/F1 12 Tf\n50 700 Td\n" + lines + "\nET";
+  const streamLength = Buffer.byteLength(contentStream, "utf-8");
+  const pHeader = "%PDF-1.4\n";
+  const pObj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+  const pObj2 = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+  const pObj3 = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n";
+  const pObj4 = `4 0 obj\n<< /Length ${streamLength} >>\nstream\n${contentStream}\nendstream\nendobj\n`;
+  const pOff1 = Buffer.byteLength(pHeader);
+  const pOff2 = pOff1 + Buffer.byteLength(pObj1);
+  const pOff3 = pOff2 + Buffer.byteLength(pObj2);
+  const pOff4 = pOff3 + Buffer.byteLength(pObj3);
+  const pStartXref = pOff4 + Buffer.byteLength(pObj4);
+  const pPad = (n: number) => String(n).padStart(10, "0");
+  const pXref = `xref\n0 5\n0000000000 65535 f \n${pPad(pOff1)} 00000 n \n${pPad(pOff2)} 00000 n \n${pPad(pOff3)} 00000 n \n${pPad(pOff4)} 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${pStartXref}\n%%EOF`;
+  const bookPdf = Buffer.from(pHeader + pObj1 + pObj2 + pObj3 + pObj4 + pXref);
+  const largePdfWithText = Buffer.concat([bookPdf, Buffer.alloc(15 * 1024 * 1024, 0x20)]);
+  const largeResult = await extractTextFromBuffer(largePdfWithText, "pdf", { forceOcr: true });
+  if (!largeResult.cleanedText.includes("Word_0_0") || largeResult.wordCount < 100) {
+    throw new Error(`Large PDF (>14MB) failed to extract digital text! Got wordCount=${largeResult.wordCount}`);
+  }
+  if (largeResult.digitalFallback !== true || largeResult.ocrUsed !== false) {
+    throw new Error("Large PDF (>14MB) should set digitalFallback: true and ocrUsed: false!");
+  }
+  if (!largeResult.notice || !largeResult.notice.includes("تم استخراج محتوى")) {
+    throw new Error("Large PDF (>14MB) with forceOcr should include reassuring explanation notice!");
+  }
+  console.log("  ✓ Large PDF (>14MB, e.g. 22.1 MB book) with forceOcr gracefully extracts digital text and notifies user");
+
+  // Test Large PDF (>14MB) with forceOcr: false
+  const largeResultNoOcr = await extractTextFromBuffer(largePdfWithText, "pdf", { forceOcr: false });
+  if (largeResultNoOcr.wordCount < 100 || largeResultNoOcr.digitalFallback === true || largeResultNoOcr.ocrUsed === true) {
+    throw new Error("Large PDF (>14MB) without forceOcr should extract digital text directly with digitalFallback: false!");
+  }
+  console.log("  ✓ Large PDF (>14MB) without forceOcr extracts directly as primary digital text (digitalFallback=false)");
+
+  // Test Large Corrupt / Invalid PDF (>14MB)
+  // Must report PDF parse/corruption error, NOT the misleading 14MB scanned PDF ceiling!
+  let corruptLargeErrorCaught = false;
+  try {
+    const corruptLargePdf = Buffer.concat([
+      Buffer.from("%PDF-1.4\nInvalid broken corrupted binary content\n"),
+      Buffer.alloc(15 * 1024 * 1024, 0xAA),
+    ]);
+    await extractTextFromBuffer(corruptLargePdf, "pdf", { forceOcr: true });
+  } catch (err: any) {
+    corruptLargeErrorCaught = true;
+    if (err.message.includes("صور ممسوحة ضوئياً بدون نصوص رقمية")) {
+      throw new Error(`Corrupted large PDF incorrectly reported as scanned PDF instead of parse error: ${err.message}`);
+    }
+    if (!err.message.includes("تعذر قراءة ملف الـ PDF") && !err.message.includes("فشل استخراج النص")) {
+      throw new Error(`Expected descriptive corrupt PDF error, got: ${err.message}`);
+    }
+  }
+  if (!corruptLargeErrorCaught) {
+    throw new Error("Corrupt large PDF should throw parse error!");
+  }
+  console.log("  ✓ Large corrupted/invalid PDF (>14MB) correctly reports parsing error rather than misleading scanned ceiling");
+
+  // Test Normal PDF (<=14MB) with forceOcr: true when OCR API call fails (e.g. invalid key/network)
+  // Must gracefully fall back to digital text if available instead of crashing!
+  const normalFallbackResult = await extractTextFromBuffer(bookPdf, "pdf", { forceOcr: true, apiKey: "invalid_test_key" });
+  if (normalFallbackResult.wordCount < 100 || normalFallbackResult.digitalFallback !== true) {
+    throw new Error("Normal PDF with forceOcr and failed OCR API should gracefully fall back to digital text!");
+  }
+  console.log("  ✓ Normal PDF with forceOcr and failed OCR API call gracefully falls back to available digital text");
+
+  // Test Large Scanned PDF (>14MB) without digital text
+  let largeScannedErrorCaught = false;
+  try {
+    const scannedLargePdf = Buffer.concat([
+      Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\ntrailer\n<< /Size 3 /Root 1 0 R >>\n%%EOF"),
+      Buffer.alloc(15 * 1024 * 1024, 0x20),
+    ]);
+    await extractTextFromBuffer(scannedLargePdf, "pdf", { forceOcr: true });
+  } catch (err: any) {
+    largeScannedErrorCaught = true;
+    if (!err.message.includes("14 ميجابايت")) {
+      throw new Error(`Expected 14MB scanned PDF ceiling error, got: ${err.message}`);
+    }
+  }
+  if (!largeScannedErrorCaught) {
+    throw new Error("Large scanned PDF with zero digital text should clearly instruct user about 14MB limit!");
+  }
+  console.log("  ✓ Large scanned PDF (>14MB) with zero digital text cleanly rejected with helpful compression guidance");
+
+  // Test Document exceeding 50MB hard limit across file types
+  let over50MbErrorCaught = false;
+  try {
+    const over50MbPdf = Buffer.alloc(51 * 1024 * 1024, 0x20);
+    await extractTextFromBuffer(over50MbPdf, "pdf");
+  } catch (err: any) {
+    over50MbErrorCaught = true;
+    if (!err.message.includes("50 ميجابايت")) {
+      throw new Error(`Expected 50MB ceiling error, got: ${err.message}`);
+    }
+  }
+  if (!over50MbErrorCaught) {
+    throw new Error("extractTextFromBuffer should reject buffers > 50MB!");
+  }
+
+  let over50MbDocxCaught = false;
+  try {
+    const over50MbDocx = Buffer.alloc(51 * 1024 * 1024, 0x20);
+    await extractTextFromBuffer(over50MbDocx, "docx");
+  } catch (err: any) {
+    over50MbDocxCaught = true;
+    if (!err.message.includes("50 ميجابايت")) {
+      throw new Error(`Expected 50MB ceiling error on docx, got: ${err.message}`);
+    }
+  }
+  if (!over50MbDocxCaught) {
+    throw new Error("extractTextFromBuffer should reject DOCX buffers > 50MB!");
+  }
+  console.log("  ✓ 50MB hard limit safely guarded for oversize documents across all supported formats");
+
   // ── 2. Question Validator & Telegram Limits Edge Cases ──
   console.log("\n[2] Testing Question Validator & Telegram Constraints Edge Cases...");
   

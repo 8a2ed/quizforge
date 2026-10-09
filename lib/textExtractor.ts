@@ -60,6 +60,8 @@ export interface ExtractionResult {
   sections: ExtractedSection[];
   suggestedTopics: string[];
   ocrUsed?: boolean;
+  digitalFallback?: boolean;
+  notice?: string;
 }
 
 /**
@@ -204,10 +206,24 @@ export async function extractTextFromBuffer(
   fileType: SupportedFileType,
   options?: ExtractionOptions
 ): Promise<ExtractionResult> {
+  // Global hard ceiling guard: Reject files exceeding 50MB early
+  if (buffer.length > 50 * 1024 * 1024) {
+    throw new Error(
+      `حجم الملف (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح به (50 ميجابايت). يرجى تقليل حجم الكتاب أو ضغطه أو تقسيمه لضمان المعالجة السليمة.`
+    );
+  }
+
   let raw = "";
   let ocrUsed = false;
+  let digitalFallback = false;
+  let notice: string | undefined = undefined;
 
   if (fileType === "image") {
+    if (buffer.length > 14 * 1024 * 1024) {
+      throw new Error(
+        `حجم الصورة (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح به للتعرف البصري المباشر (14 ميجابايت). يرجى ضغط الصورة أو تصغير أبعادها والمحاولة مرة أخرى.`
+      );
+    }
     // Images: Scanned pages, handwritten notes, textbook photos
     let mimeType = options?.mimeType;
     if (!mimeType && options?.fileName) {
@@ -228,10 +244,16 @@ export async function extractTextFromBuffer(
     raw = ocrResult.text;
     ocrUsed = true;
   } else if (fileType === "pdf") {
+    const isLargeFile = buffer.length > 14 * 1024 * 1024;
     let digitalText = "";
     let digitalError: any = null;
 
-    if (!options?.forceOcr) {
+    // 1. Digital PDF extraction:
+    // If forceOcr is NOT requested OR if the file is large (>14MB), attempt digital PDF text extraction first.
+    // Why: Google Gemini REST API has a hard 20MB inline HTTP body ceiling (~14MB raw buffer).
+    // Authentic digital textbooks (even 20-50MB) like Crop Production Book contain rich digital text
+    // that must be parsed directly with high speed and zero timeouts instead of failing!
+    if (!options?.forceOcr || isLargeFile) {
       try {
         digitalText = await parsePdfBuffer(buffer);
       } catch (err) {
@@ -249,22 +271,38 @@ export async function extractTextFromBuffer(
       cleanedDigital.length < 150 ||
       (buffer.length > 80_000 && digitalWords.length < 60);
 
-    const hasSufficientDigitalText = !digitalError && !isSparseText && !options?.forceOcr;
+    const hasRichDigitalText = !digitalError && (digitalWords.length >= 100 || !isSparseText);
 
-    if (hasSufficientDigitalText) {
-      raw = digitalText;
-    } else {
-      // PDF has insufficient/no digital text (scanned book, handwriting) or digital parsing failed or forceOcr was requested
-      if (buffer.length > 14 * 1024 * 1024) {
-        // If file buffer is > 14MB, base64 encoding exceeds Google Gemini's 20MB inline HTTP body limit (413 Request Entity Too Large)
-        if (digitalText && digitalText.trim().length > 0) {
-          raw = digitalText;
-        } else {
-          throw new Error(
-            `حجم الملف (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى للمعالجة البصرية المباشرة بالذكاء الاصطناعي (14 ميجابايت) وهو مستند ممسوح ضوئياً بدون نصوص رقمية جاهزة. يرجى ضغط ملف الـ PDF أو تصديره بنصوص رقمية واضحة والمحاولة مرة أخرى.`
-          );
+    if (isLargeFile) {
+      // Large file (>14MB, up to 50MB):
+      if (hasRichDigitalText) {
+        raw = digitalText;
+        ocrUsed = false;
+        digitalFallback = Boolean(options?.forceOcr);
+        if (options?.forceOcr) {
+          notice = `تم استخراج محتوى وفصول الكتاب (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) بنجاح عبر محرك القراءة الرقمية المباشر، نظراً لأن حجم الكتاب يتجاوز حد المسح البصري المباشر (14 ميجابايت) واحتوائه على نصوص رقمية أصلية عالية الدقة.`;
         }
+      } else if (digitalError) {
+        // Parsing failed due to corrupt, password-protected, or encrypted PDF
+        const errMsg = digitalError instanceof Error ? digitalError.message : String(digitalError);
+        if (/password|encrypted|محمي|كلمة مرور/i.test(errMsg)) {
+          throw new Error(`ملف الـ PDF محمي بكلمة مرور. يرجى إزالة الحماية من الملف ثم إعادة رفعه.`);
+        }
+        throw new Error(`تعذر قراءة ملف الـ PDF: ${errMsg}. يرجى التأكد من سلامة وصحة الملف.`);
       } else {
+        // Large file with virtually zero digital text (pure scanned images)
+        throw new Error(
+          `حجم ملف الـ PDF (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى للمعالجة البصرية المباشرة بالذكاء الاصطناعي (14 ميجابايت)، والملف عبارة عن صور ممسوحة ضوئياً بدون نصوص رقمية جاهزة. يرجى ضغط ملف الـ PDF ليكون أقل من 14 ميجابايت لتفعيل القراءة البصرية بالذكاء الاصطناعي (OCR) أو استخدام ملف PDF يحتوي على نصوص قابلة للتحديد.`
+        );
+      }
+    } else {
+      // Normal size file (<= 14MB):
+      const hasSufficientDigitalText = !digitalError && !isSparseText && !options?.forceOcr;
+
+      if (hasSufficientDigitalText) {
+        raw = digitalText;
+      } else {
+        // PDF has insufficient/no digital text or forceOcr was requested
         const hasApiKey = !!(options?.apiKey?.trim() || process.env.GEMINI_API_KEY?.trim());
         if (hasApiKey) {
           console.log(
@@ -287,9 +325,17 @@ export async function extractTextFromBuffer(
               raw = digitalText;
             }
           } catch (ocrErr) {
-            console.error("[TextExtractor] Gemini PDF OCR fallback failed:", ocrErr);
+            console.error("[TextExtractor] Gemini PDF OCR failed:", ocrErr);
+            // Attempt direct digital text extraction fallback if not yet fetched
+            if (!digitalText) {
+              try {
+                digitalText = await parsePdfBuffer(buffer);
+              } catch {}
+            }
             if (digitalText && digitalText.trim().length > 0) {
               raw = digitalText;
+              digitalFallback = true;
+              notice = "تعذر إتمام التعرف البصري (OCR) عبر الذكاء الاصطناعي، وتم استخراج النصوص الرقمية المباشرة للمستند بنجاح بدلاً من ذلك.";
             } else {
               throw ocrErr;
             }
@@ -346,5 +392,7 @@ export async function extractTextFromBuffer(
     sections,
     suggestedTopics,
     ocrUsed,
+    digitalFallback,
+    notice,
   };
 }

@@ -4,8 +4,9 @@ import { prisma } from "@/lib/db";
 import { extractTextFromBuffer } from "@/lib/textExtractor";
 import { getMaterials, saveMaterial, getGroupAISettings, updateGroupAISettings, CurriculumMaterial } from "@/lib/aiStorage";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -159,6 +160,15 @@ export async function POST(
     return NextResponse.json({ error: "محتوى الملف فارغ" }, { status: 400 });
   }
 
+  if (buffer.length > 50 * 1024 * 1024) {
+    return NextResponse.json(
+      {
+        error: `حجم الملف (${(buffer.length / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح به للخادم (50 ميجابايت). يرجى تقليل حجم الكتاب أو ضغطه أو تقسيمه.`,
+      },
+      { status: 413 }
+    );
+  }
+
   try {
     let apiKey = clientApiKey;
     let aiModel = "gemini-3.8-flash";
@@ -215,6 +225,7 @@ export async function POST(
       topics: combinedTopics,
       sections: extraction.sections,
       ocrUsed: extraction.ocrUsed,
+      digitalFallback: extraction.digitalFallback,
       uploadedBy: {
         id: auth.userId,
         name: auth.user.firstName || "المعلم",
@@ -230,13 +241,19 @@ export async function POST(
     return NextResponse.json({
       success: true,
       material,
-      message: "تم رفع واستخراج النص من المنهج بنجاح!",
+      notice: extraction.notice,
+      digitalFallback: extraction.digitalFallback,
+      message: extraction.notice || "تم رفع واستخراج النص من المنهج بنجاح!",
     });
   } catch (err: unknown) {
     console.error("[Materials API Error]", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "فشل استخراج وتحليل الملف" },
-      { status: 500 }
-    );
+    const msg = err instanceof Error ? err.message : "فشل استخراج وتحليل الملف";
+    const status =
+      msg.includes("50 ميجابايت") ||
+      msg.includes("يتجاوز الحد الأقصى") ||
+      msg.toLowerCase().includes("too large")
+        ? 413
+        : 500;
+    return NextResponse.json({ error: msg }, { status });
   }
 }

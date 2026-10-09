@@ -10,8 +10,9 @@ import {
 } from "@/lib/aiStorage";
 import { generateCurriculumQuestions, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
