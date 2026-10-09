@@ -29,6 +29,7 @@ const ICONS = {
   scheduled:   "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   exams:       "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
   messages:    "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6",
+  sparkles:    "M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -82,6 +83,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {
           label: isRtl ? "التقييمات والمحتوى" : "Assessments & Content",
           items: [
+            { href: `/dashboard/${groupId}/curriculum`, icon: ICONS.sparkles, label: isRtl ? "توليد المناهج بالذكاء الاصطناعي" : "AI Curriculum" },
             { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: isRtl ? "الاختبارات" : "Exams" },
             { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: isRtl ? "بنك الأسئلة" : "Library" },
             { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: isRtl ? "سجل الكويزات" : "History" },

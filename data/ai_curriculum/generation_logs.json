@@ -1,0 +1,80 @@
+[
+  {
+    "id": "log-1791556842764",
+    "groupId": "test-group-1791556842672",
+    "userId": "user-1",
+    "userName": "المعلم أحمد",
+    "userUsername": "ahmed_teacher",
+    "materialTitle": "مذكرة اختبارية مؤقتة",
+    "questionCount": 5,
+    "modelUsed": "gemini-2.0-flash",
+    "estimatedTokens": 350,
+    "difficulty": "EASY",
+    "timestamp": "2026-10-09T14:40:42.764Z",
+    "success": true,
+    "questionsSummary": [
+      {
+        "question": "س1",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      },
+      {
+        "question": "س2",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      }
+    ]
+  },
+  {
+    "id": "log-1791556043371",
+    "groupId": "test-group-1791556043345",
+    "userId": "user-1",
+    "userName": "المعلم أحمد",
+    "userUsername": "ahmed_teacher",
+    "materialTitle": "مذكرة اختبارية مؤقتة",
+    "questionCount": 5,
+    "modelUsed": "gemini-2.0-flash",
+    "estimatedTokens": 350,
+    "difficulty": "EASY",
+    "timestamp": "2026-10-09T14:27:23.371Z",
+    "success": true,
+    "questionsSummary": [
+      {
+        "question": "س1",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      },
+      {
+        "question": "س2",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      }
+    ]
+  },
+  {
+    "id": "log-1791555802998",
+    "groupId": "test-group-1791555802954",
+    "userId": "user-1",
+    "userName": "المعلم أحمد",
+    "userUsername": "ahmed_teacher",
+    "materialTitle": "مذكرة اختبارية مؤقتة",
+    "questionCount": 5,
+    "modelUsed": "gemini-2.0-flash",
+    "estimatedTokens": 350,
+    "difficulty": "EASY",
+    "timestamp": "2026-10-09T14:23:22.998Z",
+    "success": true,
+    "questionsSummary": [
+      {
+        "question": "س1",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      },
+      {
+        "question": "س2",
+        "difficulty": "EASY",
+        "topic": "موضوع 1"
+      }
+    ]
+  }
+]

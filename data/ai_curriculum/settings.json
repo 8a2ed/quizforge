@@ -1,0 +1,32 @@
+{
+  "test-group-1791555802954": {
+    "groupId": "test-group-1791555802954",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-2.0-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T14:23:23.012Z"
+  },
+  "test-group-1791556043345": {
+    "groupId": "test-group-1791556043345",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-2.0-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T14:27:23.378Z"
+  },
+  "test-group-1791556842672": {
+    "groupId": "test-group-1791556842672",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-2.0-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T14:40:42.784Z"
+  }
+}
