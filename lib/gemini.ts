@@ -286,7 +286,8 @@ export function estimateTokens(text: string): number {
 async function callGeminiGenerateContent(
   model: string,
   requestBody: any,
-  apiKey: string
+  apiKey: string,
+  timeoutMs: number = 60000
 ): Promise<{ ok: boolean; status: number; text: string; errorDetails: string }> {
   const cleanModel = normalizeModelName(model);
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
@@ -296,7 +297,7 @@ async function callGeminiGenerateContent(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -311,7 +312,8 @@ async function callGeminiGenerateContent(
     }
 
     const data = await res.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const rawText = parts.map((p: any) => p.text || "").join("");
     if (!rawText && data.candidates?.[0]?.finishReason && data.candidates[0].finishReason !== "STOP") {
       return {
         ok: false,
@@ -682,5 +684,146 @@ export async function testGeminiConnection(
     activeModel: requestedModel,
     availableModels,
     fallbackUsed: false,
+  };
+}
+
+export interface DocumentOcrOptions {
+  apiKey?: string;
+  model?: string;
+  buffer: Buffer;
+  mimeType: string;
+  documentTitle?: string;
+  systemInstruction?: string;
+}
+
+export interface DocumentOcrResult {
+  text: string;
+  modelUsed: string;
+  fallbackUsed?: boolean;
+  tokensUsed: number;
+}
+
+export const NOTEBOOKLM_OCR_SYSTEM_INSTRUCTION = `
+You are an expert OCR and document understanding engine like Google's NotebookLM.
+Your mission is to transcribe and understand text, handwritten notes, tables, diagrams, equations, and section headings accurately without omissions or hallucinations.
+
+CRITICAL OCR & TRANSCRIPTION GUIDELINES:
+1. EXHAUSTIVE TRANSCRIPTION: Extract ALL textual content visible in the provided image or document. Capture printed text, handwritten notes, student annotations, margins, questions, formulas, and bullet points. Never summarize or omit information.
+2. PRESERVE STRUCTURE & FORMAT:
+   - Faithfully retain all chapter names, headings, sub-headings, and numbered sections (e.g. # الفصل الأول, ## المبحث الثاني, Unit 1, Lesson 2).
+   - Format output using clean, readable Markdown (# for headings, - or * for lists, **bold** for key terms).
+3. TABLES & DATA: Reconstruct any tables into valid Markdown table format with proper alignment.
+4. DIAGRAMS & ILLUSTRATIONS: If the document contains diagrams, flowcharts, or scientific illustrations, include a clear bracketed structural explanation (e.g., [رسم بياني: ...] or [مخطط توضيحي: ...]) followed by all associated captions, labels, and text.
+5. MATHEMATICAL & SCIENTIFIC NOTATION: Transcribe mathematical symbols, chemical formulas, and units of measurement (e.g. m/s², كجم, Σ, H₂O) with exact precision.
+6. HANDWRITING ACCURACY: Decipher Arabic and English handwriting with the highest possible fidelity. If a word is unclear or slightly cut off, transcribe the most linguistically accurate reading based on surrounding context.
+7. LANGUAGE PRESERVATION: Retain the original language of the source document (Arabic, English, French, etc.) without unsolicited translation.
+`;
+
+/**
+ * NotebookLM-grade multimodal document and handwriting OCR extraction using Google Gemini.
+ * Transcribes printed text, handwriting, tables, and diagrams with high precision.
+ */
+export async function extractDocumentTextWithGemini(
+  options: DocumentOcrOptions
+): Promise<DocumentOcrResult> {
+  const apiKey =
+    options.apiKey?.trim() ||
+    process.env.GEMINI_API_KEY?.trim() ||
+    "";
+
+  if (!apiKey) {
+    throw new Error(
+      "لم يتم العثور على مفتاح Google Gemini API Key. يرجى إدخال المفتاح في تبويب 'إعدادات الذكاء الاصطناعي' أو إضافته في ملف البيئة (GEMINI_API_KEY) لتفعيل ميزة التعرف البصري على الصور والمستندات (OCR)."
+    );
+  }
+
+  if (options.buffer.length > 20 * 1024 * 1024) {
+    throw new Error(
+      "حجم الملف يتجاوز الحد الأقصى المسموح للمعالجة البصرية المباشرة (20 ميجابايت). يرجى تقليل حجم الملف أو ضغطه والمحاولة مرة أخرى."
+    );
+  }
+
+  let cleanMime = (options.mimeType || "application/pdf").toLowerCase().trim();
+  if (cleanMime === "image/jpg" || cleanMime === "image/pjpeg") {
+    cleanMime = "image/jpeg";
+  }
+
+  const requestedModel = normalizeModelName(options.model || DEFAULT_GEMINI_MODEL);
+  const base64Data = options.buffer.toString("base64");
+
+  let prompt = `You are an expert OCR and document understanding engine like NotebookLM. Transcribe all text, handwritten notes, tables, diagrams, and section headings accurately without omissions.`;
+  if (options.documentTitle) {
+    prompt += `\nعنوان أو مرجع المستند: ${options.documentTitle}`;
+  }
+  prompt += `\nقم بنسخ وتفريغ النص كاملاً بأعلى درجات الدقة والوضوح محتفظاً بالترتيب والعناوين والجداول.`;
+
+  const requestBody = {
+    systemInstruction: {
+      parts: [{ text: options.systemInstruction || NOTEBOOKLM_OCR_SYSTEM_INSTRUCTION }],
+    },
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            inlineData: {
+              mimeType: cleanMime,
+              data: base64Data,
+            },
+          },
+          {
+            text: prompt,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 8192,
+    },
+  };
+
+  let activeModel = requestedModel;
+  let fallbackUsed = false;
+  let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
+
+  if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
+    console.warn(
+      `[Gemini OCR] Model '${requestedModel}' failed (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
+    );
+
+    let fetched: AvailableGeminiModel[] = [];
+    try {
+      fetched = await fetchAvailableGeminiModels(apiKey);
+    } catch {}
+
+    const fallbackCandidates = getFallbackCandidates(requestedModel, fetched);
+    for (const candidate of fallbackCandidates) {
+      console.log(`[Gemini OCR] Attempting fallback model: ${candidate}`);
+      const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
+      if (fallbackRes.ok && fallbackRes.text) {
+        console.log(`[Gemini OCR] Fallback succeeded with model: ${candidate}`);
+        apiRes = fallbackRes;
+        activeModel = candidate;
+        fallbackUsed = true;
+        break;
+      }
+    }
+  }
+
+  if (!apiRes.ok) {
+    throw new Error(`خطأ في استخراج النص عبر الذكاء الاصطناعي (${apiRes.status}): ${apiRes.errorDetails}`);
+  }
+
+  const text = apiRes.text.trim();
+  if (!text) {
+    throw new Error("لم يتمكن نموذج الذكاء الاصطناعي من استخراج نصوص مقروءة من الملف أو الصورة.");
+  }
+
+  return {
+    text,
+    modelUsed: activeModel,
+    fallbackUsed,
+    tokensUsed: estimateTokens(text),
   };
 }

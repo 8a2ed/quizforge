@@ -58,5 +58,35 @@
     "strictGrounding": true,
     "systemInstruction": "",
     "updatedAt": "2026-10-09T16:26:20.730Z"
+  },
+  "test-group-1791571110963": {
+    "groupId": "test-group-1791571110963",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T18:38:31.035Z"
+  },
+  "test-group-1791571899864": {
+    "groupId": "test-group-1791571899864",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T18:51:39.925Z"
+  },
+  "test-group-1791572015044": {
+    "groupId": "test-group-1791572015044",
+    "geminiApiKey": "",
+    "defaultModel": "gemini-3.8-flash",
+    "defaultDifficulty": "hard",
+    "defaultCount": 10,
+    "strictGrounding": true,
+    "systemInstruction": "",
+    "updatedAt": "2026-10-09T18:53:35.126Z"
   }
 }

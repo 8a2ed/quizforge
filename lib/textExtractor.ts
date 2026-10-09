@@ -1,7 +1,11 @@
 import mammoth from "mammoth";
+import "./domPolyfill";
+import { ensureDomPolyfills } from "./domPolyfill";
+import { extractDocumentTextWithGemini } from "./gemini";
 
 // Dynamic import or require for pdf-parse to be safe across environments
 async function parsePdfBuffer(buffer: Buffer): Promise<string> {
+  ensureDomPolyfills();
   let parserInstance: any = null;
   try {
     // pdf-parse v2 provides PDFParse class
@@ -20,7 +24,7 @@ async function parsePdfBuffer(buffer: Buffer): Promise<string> {
     }
     return "";
   } catch (err: unknown) {
-    console.error("[TextExtractor] PDF parse error:", err);
+    console.error("[TextExtractor] Digital PDF parse error:", err);
     throw new Error(
       `فشل استخراج النص من ملف الـ PDF: ${err instanceof Error ? err.message : "صيغة غير مدعومة أو ملف محمي"}`
     );
@@ -38,6 +42,16 @@ export interface ExtractedSection {
   wordCount: number;
 }
 
+export type SupportedFileType = "docx" | "pdf" | "txt" | "manual" | "image";
+
+export interface ExtractionOptions {
+  apiKey?: string;
+  model?: string;
+  fileName?: string;
+  mimeType?: string;
+  forceOcr?: boolean;
+}
+
 export interface ExtractionResult {
   rawText: string;
   cleanedText: string;
@@ -45,6 +59,7 @@ export interface ExtractionResult {
   charCount: number;
   sections: ExtractedSection[];
   suggestedTopics: string[];
+  ocrUsed?: boolean;
 }
 
 /**
@@ -116,6 +131,7 @@ export function splitIntoSections(cleanedText: string): ExtractedSection[] {
     // Extract first line as title
     const firstLineEnd = part.indexOf("\n");
     let title = firstLineEnd !== -1 ? part.slice(0, firstLineEnd).trim() : part.slice(0, 50).trim();
+    title = title.replace(/^[#*\-•]+\s*/, "").trim();
     if (title.length > 70) title = title.slice(0, 67) + "...";
     if (!title) title = `القسم ${index + 1}`;
 
@@ -156,19 +172,108 @@ export function extractSuggestedTopics(text: string): string[] {
 }
 
 /**
- * Main extractor supporting docx, pdf, and plain text buffers.
+ * Main extractor supporting docx, pdf, plain text buffers, and images (OCR).
  */
 export async function extractTextFromBuffer(
   buffer: Buffer,
-  fileType: "docx" | "pdf" | "txt" | "manual"
+  fileType: SupportedFileType,
+  options?: ExtractionOptions
 ): Promise<ExtractionResult> {
   let raw = "";
+  let ocrUsed = false;
 
-  if (fileType === "docx") {
+  if (fileType === "image") {
+    // Images: Scanned pages, handwritten notes, textbook photos
+    let mimeType = options?.mimeType;
+    if (!mimeType && options?.fileName) {
+      const ext = options.fileName.split(".").pop()?.toLowerCase();
+      if (ext === "png") mimeType = "image/png";
+      else if (ext === "webp") mimeType = "image/webp";
+      else mimeType = "image/jpeg";
+    }
+    if (!mimeType) mimeType = "image/jpeg";
+
+    const ocrResult = await extractDocumentTextWithGemini({
+      buffer,
+      mimeType,
+      apiKey: options?.apiKey,
+      model: options?.model,
+      documentTitle: options?.fileName,
+    });
+    raw = ocrResult.text;
+    ocrUsed = true;
+  } else if (fileType === "pdf") {
+    let digitalText = "";
+    let digitalError: any = null;
+
+    if (!options?.forceOcr) {
+      try {
+        digitalText = await parsePdfBuffer(buffer);
+      } catch (err) {
+        digitalError = err;
+      }
+    }
+
+    const cleanedDigital = cleanText(digitalText);
+    const digitalWords = cleanedDigital.split(/\s+/).filter(Boolean);
+    // Real digital documents typically have high text density.
+    // If text has < 30 words or < 150 chars, or if file is large (>80KB) with < 60 words,
+    // it is almost certainly a scanned document with minimal metadata or publisher header.
+    const isSparseText =
+      digitalWords.length < 30 ||
+      cleanedDigital.length < 150 ||
+      (buffer.length > 80_000 && digitalWords.length < 60);
+
+    const hasSufficientDigitalText = !digitalError && !isSparseText && !options?.forceOcr;
+
+    if (hasSufficientDigitalText) {
+      raw = digitalText;
+    } else {
+      // PDF has insufficient/no digital text (scanned book, handwriting) or digital parsing failed or forceOcr was requested
+      const hasApiKey = !!(options?.apiKey?.trim() || process.env.GEMINI_API_KEY?.trim());
+      if (hasApiKey) {
+        console.log(
+          "[TextExtractor] Scanned / handwritten PDF detected or forceOcr enabled. Invoking NotebookLM Gemini Multimodal OCR..."
+        );
+        try {
+          const ocrResult = await extractDocumentTextWithGemini({
+            buffer,
+            mimeType: "application/pdf",
+            apiKey: options?.apiKey,
+            model: options?.model,
+            documentTitle: options?.fileName,
+          });
+          const cleanedOcr = cleanText(ocrResult.text);
+          const ocrWords = cleanedOcr.split(/\s+/).filter(Boolean);
+          if (ocrWords.length >= digitalWords.length || options?.forceOcr || isSparseText) {
+            raw = ocrResult.text;
+            ocrUsed = true;
+          } else {
+            raw = digitalText;
+          }
+        } catch (ocrErr) {
+          console.error("[TextExtractor] Gemini PDF OCR fallback failed:", ocrErr);
+          if (digitalText && digitalText.trim().length > 0) {
+            raw = digitalText;
+          } else {
+            throw ocrErr;
+          }
+        }
+      } else {
+        if (options?.forceOcr) {
+          throw new Error(
+            "لم يتم العثور على مفتاح Google Gemini API Key. يرجى إدخال المفتاح في تبويب 'إعدادات الذكاء الاصطناعي' أو إضافته في ملف البيئة (GEMINI_API_KEY) لتفعيل ميزة التعرف البصري على الصور والمستندات (OCR)."
+          );
+        }
+        if (digitalError) {
+          throw digitalError;
+        }
+        raw = digitalText;
+      }
+    }
+  } else if (fileType === "docx") {
     const res = await mammoth.extractRawText({ buffer });
     raw = res.value || "";
-  } else if (fileType === "pdf") {
-    raw = await parsePdfBuffer(buffer);
   } else {
     // Plain text / manual: Detect UTF-8 vs Arabic Windows-1256 (ANSI)
     try {
@@ -204,5 +309,6 @@ export async function extractTextFromBuffer(
     charCount,
     sections,
     suggestedTopics,
+    ocrUsed,
   };
 }

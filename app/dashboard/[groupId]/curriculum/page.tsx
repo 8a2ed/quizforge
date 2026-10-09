@@ -42,7 +42,7 @@ interface CurriculumMaterial {
   subject: string;
   grade: string;
   fileName: string;
-  fileType: "pdf" | "docx" | "txt" | "manual";
+  fileType: "pdf" | "docx" | "txt" | "manual" | "image";
   fileSize: number;
   rawText: string;
   cleanedText: string;
@@ -56,6 +56,7 @@ interface CurriculumMaterial {
     username?: string;
     photoUrl?: string;
   };
+  ocrUsed?: boolean;
   createdAt: string;
 }
 
@@ -174,6 +175,8 @@ export default function CurriculumPage() {
   const [uploadSubject, setUploadSubject] = useState("");
   const [uploadGrade, setUploadGrade] = useState("");
   const [uploadTopics, setUploadTopics] = useState("");
+  const [forceOcr, setForceOcr] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [previewMaterial, setPreviewMaterial] = useState<CurriculumMaterial | null>(null);
 
@@ -561,6 +564,7 @@ export default function CurriculumPage() {
       formData.append("subject", uploadSubject.trim() || (isRtl ? "عام" : "General"));
       formData.append("grade", uploadGrade.trim());
       formData.append("topics", uploadTopics.trim());
+      formData.append("forceOcr", String(forceOcr));
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/materials`, {
         method: "POST",
@@ -576,6 +580,7 @@ export default function CurriculumPage() {
       setUploadSubject("");
       setUploadGrade("");
       setUploadTopics("");
+      setForceOcr(false);
 
       await loadMaterials();
       showToast("success", isRtl ? "تم رفع المنهج الدراسي واستخراج النصوص بنجاح!" : "Uploaded and parsed material!");
@@ -1476,27 +1481,47 @@ export default function CurriculumPage() {
           <div className="card" style={{ padding: "var(--space-6)" }}>
             <h3 style={{ fontSize: "1.15rem", marginBottom: "var(--space-4)", display: "flex", alignItems: "center", gap: 8 }}>
               <Upload size={20} color="var(--clr-brand)" />
-              <span>{isRtl ? "رفع كتاب أو مذكرة جديدة (PDF / DOCX / TXT)" : "Upload New Study Material"}</span>
+              <span>{isRtl ? "رفع كتاب أو مذكرة جديدة (PDF / DOCX / TXT / صور خط يد)" : "Upload New Study Material"}</span>
             </h3>
 
             <form onSubmit={handleUploadMaterial}>
               {/* Drag & Drop File Zone */}
               <div
                 style={{
-                  border: "2px dashed var(--clr-border-active)",
+                  border: isDragging ? "2px dashed var(--clr-brand)" : "2px dashed var(--clr-border-active)",
                   borderRadius: "var(--radius-lg)",
                   padding: "var(--space-8)",
                   textAlign: "center",
-                  background: "rgba(99, 102, 241, 0.03)",
+                  background: isDragging ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.03)",
                   cursor: "pointer",
-                  marginBottom: "var(--space-5)",
+                  marginBottom: "var(--space-4)",
+                  transition: "all 0.2s ease",
                 }}
                 onClick={() => document.getElementById("filePicker")?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) {
+                    setUploadFile(f);
+                    if (!uploadTitle) {
+                      setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
+                    }
+                  }
+                }}
               >
                 <input
                   id="filePicker"
                   type="file"
-                  accept=".pdf,.docx,.txt,.md"
+                  accept=".pdf,.docx,.txt,.md,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
                   style={{ display: "none" }}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -1521,11 +1546,67 @@ export default function CurriculumPage() {
                     <h4 style={{ margin: "0 0 6px", color: "var(--clr-text-primary)" }}>
                       {isRtl ? "اضغط هنا لاختيار ملف أو اسحبه وأفلته" : "Click to select or drag & drop"}
                     </h4>
-                    <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                      {isRtl ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) بدقة استخراج عالية" : "Supports PDF, DOCX, and TXT files"}
-                    </span>
+                    <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: "0 0 10px" }}>
+                      {isRtl
+                        ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) والصور عالية الدقة"
+                        : "Supports PDF, DOCX, TXT, and high-res images"}
+                    </p>
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: "0.82rem",
+                          padding: "5px 14px",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          background: "rgba(99, 102, 241, 0.12)",
+                          color: "var(--clr-brand)",
+                          border: "1px solid rgba(99, 102, 241, 0.3)",
+                          borderRadius: "var(--radius-full)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        📸 صور ومستندات ممسوحة / خط يد (OCR مدعوم بالذكاء الاصطناعي)
+                      </span>
+                    </div>
                   </div>
                 )}
+              </div>
+
+              {/* Force OCR Option */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginBottom: "var(--space-5)",
+                  padding: "10px 14px",
+                  borderRadius: "var(--radius-md)",
+                  background: forceOcr ? "rgba(99, 102, 241, 0.08)" : "var(--clr-bg-elevated)",
+                  border: forceOcr ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                }}
+                onClick={() => setForceOcr(!forceOcr)}
+              >
+                <input
+                  type="checkbox"
+                  id="forceOcrToggle"
+                  checked={forceOcr}
+                  onChange={(e) => setForceOcr(e.target.checked)}
+                  style={{ width: 18, height: 18, cursor: "pointer" }}
+                />
+                <label htmlFor="forceOcrToggle" style={{ fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", margin: 0, flex: 1 }}>
+                  {isRtl
+                    ? "✨ تفعيل التعرف البصري الذكي المتقدم (NotebookLM OCR) على كامل المستند"
+                    : "✨ Force Intelligent AI Visual OCR (NotebookLM Mode)"}
+                  <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-secondary)", marginTop: 2 }}>
+                    {isRtl
+                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات بدقة متناهية حتى لو كان الملف يحتوي على علامات مائية أو نصوص رقمية جزئية."
+                      : "Ensures extraction of handwriting, diagrams, and tables even if file has partial digital text."}
+                  </span>
+                </label>
               </div>
 
               {/* Metadata Inputs */}
@@ -1636,18 +1717,31 @@ export default function CurriculumPage() {
                   >
                     <div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                        <span
-                          className={`badge ${
-                            m.fileType === "pdf"
-                              ? "badge-danger"
-                              : m.fileType === "docx"
-                              ? "badge-brand"
-                              : "badge-ghost"
-                          }`}
-                          style={{ fontSize: "0.75rem", textTransform: "uppercase" }}
-                        >
-                          {m.fileType}
-                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span
+                            className={`badge ${
+                              m.fileType === "pdf"
+                                ? "badge-danger"
+                                : m.fileType === "docx"
+                                ? "badge-brand"
+                                : m.fileType === "image"
+                                ? "badge-warning"
+                                : "badge-ghost"
+                            }`}
+                            style={{ fontSize: "0.75rem", textTransform: "uppercase" }}
+                          >
+                            {m.fileType === "image" ? "📸 OCR صورة" : m.fileType}
+                          </span>
+                          {m.ocrUsed && m.fileType !== "image" && (
+                            <span
+                              className="badge badge-warning"
+                              style={{ fontSize: "0.72rem", padding: "2px 8px" }}
+                              title={isRtl ? "تم استخراج النص بالتعرف البصري الذكي OCR" : "Transcribed via AI OCR"}
+                            >
+                              ✨ OCR
+                            </span>
+                          )}
+                        </div>
                         <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>
                           {new Date(m.createdAt).toLocaleDateString()}
                         </span>

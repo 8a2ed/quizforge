@@ -1,8 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Keep Prisma out of the Edge/browser bundle — must run in Node.js only
-  serverExternalPackages: ["@prisma/client", "prisma"],
+  // Keep Prisma and PDF parsers out of the Edge/browser bundle — must run in Node.js only
+  serverExternalPackages: [
+    "@prisma/client",
+    "prisma",
+    "pdf-parse",
+    "pdfjs-dist",
+    "@napi-rs/canvas",
+  ],
 
   images: {
     remotePatterns: [

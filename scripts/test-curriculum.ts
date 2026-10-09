@@ -21,6 +21,7 @@ import {
   fetchAvailableGeminiModels,
   getFallbackCandidates,
   testGeminiConnection,
+  extractDocumentTextWithGemini,
 } from "../lib/gemini";
 
 async function runTests() {
@@ -48,7 +49,76 @@ async function runTests() {
   }
   console.log(`  ✓ splitIntoSections successfully identified ${sections.length} chapters and ordinal sections`);
 
-  // Test real PDF buffer extraction
+  const mdSections = splitIntoSections(`
+# الفصل الأول: مقدمة في المنهج
+محتوى تمهيدي.
+## الفصل الثاني: القوانين الأساسية
+محتوى القوانين.
+  `);
+  if (mdSections[0].title.startsWith("#") || mdSections[1].title.startsWith("#")) {
+    throw new Error("splitIntoSections failed to strip Markdown header hashes from titles!");
+  }
+  console.log("  ✓ splitIntoSections cleanly stripped Markdown hashes from section titles");
+
+  // Test DOMMatrix and Canvas polyfills
+  if (typeof (globalThis as any).DOMMatrix !== "function") {
+    throw new Error("DOMMatrix polyfill is not defined on globalThis!");
+  }
+  if (typeof (globalThis as any).DOMMatrixReadOnly !== "function") {
+    throw new Error("DOMMatrixReadOnly polyfill is not defined on globalThis!");
+  }
+
+  // 1. Array initialization
+  const testMatrix = new (globalThis as any).DOMMatrix([1, 0, 0, 1, 10, 20]);
+  if (!testMatrix || (testMatrix.m41 !== 10 && testMatrix.e !== 10)) {
+    throw new Error("DOMMatrix failed to instantiate or transform coordinates!");
+  }
+
+  // 2. Float32Array & Float64Array initialization (Critical for pdfjs-dist)
+  const float32Mat = new (globalThis as any).DOMMatrix(new Float32Array([1, 0, 0, 1, 55, 65]));
+  if (float32Mat.m41 !== 55 || float32Mat.e !== 55 || float32Mat.f !== 65) {
+    throw new Error(`DOMMatrix failed to initialize from Float32Array! Got e=${float32Mat.e}, f=${float32Mat.f}`);
+  }
+
+  // 3. Object-based initialization
+  const objMat = new (globalThis as any).DOMMatrix({ a: 2, b: 0, c: 0, d: 2, e: 100, f: 200 });
+  if (objMat.a !== 2 || objMat.m11 !== 2 || objMat.e !== 100 || objMat.m41 !== 100) {
+    throw new Error("DOMMatrix failed to initialize from object dictionary!");
+  }
+
+  // 4. Accessor synchronization check (a <-> m11, e <-> m41)
+  testMatrix.a = 7;
+  testMatrix.e = 88;
+  if (testMatrix.m11 !== 7 || testMatrix.m41 !== 88) {
+    throw new Error("DOMMatrix accessors (a, e) failed to synchronize with m11, m41!");
+  }
+
+  // 5. Matrix multiplication & translation
+  const translated = testMatrix.translate(10, 20);
+  if (translated.e !== 98 || translated.f !== 40) {
+    throw new Error(`DOMMatrix translate failed: expected e=98, f=40, got e=${translated.e}, f=${translated.f}`);
+  }
+
+  // 6. Path2D and roundRect check
+  if (typeof (globalThis as any).Path2D !== "function") {
+    throw new Error("Path2D polyfill is not defined on globalThis!");
+  }
+  const p2d = new (globalThis as any).Path2D();
+  if (typeof p2d.roundRect !== "function") {
+    throw new Error("Path2D.roundRect polyfill missing!");
+  }
+
+  // 7. ImageData dual-signature check (Critical for pdfjs-dist image decoding)
+  if (typeof (globalThis as any).ImageData !== "function") {
+    throw new Error("ImageData polyfill is not defined on globalThis!");
+  }
+  const imgWithData = new (globalThis as any).ImageData(new Uint8ClampedArray(400), 10, 10);
+  if (imgWithData.width !== 10 || imgWithData.height !== 10 || imgWithData.data.length !== 400) {
+    throw new Error(`ImageData failed with clamped array signature! Got width=${imgWithData.width}, len=${imgWithData.data?.length}`);
+  }
+  console.log("  ✓ DOMMatrix, DOMMatrixReadOnly, Path2D, and ImageData polyfilled seamlessly with full TypedArray and dual-signature support");
+
+  // Test real PDF buffer extraction without DOMMatrix errors
   const minimalPdf = Buffer.from(
     "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 53 >>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Physics Textbook Chapter One) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000010 00000 n \n0000000060 00000 n \n0000000117 00000 n \n0000000282 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n386\n%%EOF"
   );
@@ -56,7 +126,37 @@ async function runTests() {
   if (!pdfExtracted.cleanedText.includes("Physics Textbook")) {
     throw new Error("PDF text extraction failed on minimal valid PDF buffer!");
   }
-  console.log("  ✓ extractTextFromBuffer extracted text successfully from real PDF buffer and released worker");
+  console.log("  ✓ extractTextFromBuffer extracted text successfully from real PDF buffer without DOMMatrix errors");
+
+  // Test Multimodal Document & Handwriting OCR safety check
+  let imageOcrErrorCaught = false;
+  try {
+    await extractTextFromBuffer(Buffer.from("image_data"), "image", { apiKey: "" });
+  } catch (err: any) {
+    imageOcrErrorCaught = true;
+    if (!err.message.includes("Google Gemini API Key")) {
+      throw new Error(`Expected Gemini API key error on image OCR, got: ${err.message}`);
+    }
+  }
+  if (!imageOcrErrorCaught) {
+    throw new Error("extractTextFromBuffer on image should safely reject missing API key!");
+  }
+  console.log("  ✓ NotebookLM Gemini multimodal OCR safely validates API key for images & handwriting");
+
+  // Test forceOcr on PDF
+  let forceOcrErrorCaught = false;
+  try {
+    await extractTextFromBuffer(minimalPdf, "pdf", { forceOcr: true, apiKey: "" });
+  } catch (err: any) {
+    forceOcrErrorCaught = true;
+    if (!err.message.includes("Google Gemini API Key")) {
+      throw new Error(`Expected Gemini API key error on forceOcr, got: ${err.message}`);
+    }
+  }
+  if (!forceOcrErrorCaught) {
+    throw new Error("extractTextFromBuffer with forceOcr: true should safely route to OCR and require API key!");
+  }
+  console.log("  ✓ PDF forceOcr correctly bypasses digital extraction and routes directly to NotebookLM OCR");
 
   // ── 2. Question Validator & Telegram Limits Edge Cases ──
   console.log("\n[2] Testing Question Validator & Telegram Constraints Edge Cases...");

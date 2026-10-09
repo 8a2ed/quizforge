@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 import { extractTextFromBuffer } from "@/lib/textExtractor";
-import { getMaterials, saveMaterial, CurriculumMaterial } from "@/lib/aiStorage";
+import { getMaterials, saveMaterial, getGroupAISettings, CurriculumMaterial } from "@/lib/aiStorage";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -77,10 +77,12 @@ export async function POST(
   let subject = "";
   let grade = "";
   let fileName = "";
-  let fileType: "pdf" | "docx" | "txt" | "manual" = "manual";
+  let fileType: "pdf" | "docx" | "txt" | "manual" | "image" = "manual";
+  let mimeType = "application/octet-stream";
   let buffer: Buffer | null = null;
   let customText = "";
   let topics: string[] = [];
+  let forceOcr = false;
 
   if (contentType.includes("multipart/form-data")) {
     const formData = await req.formData();
@@ -96,16 +98,33 @@ export async function POST(
     }
 
     fileName = file.name;
-    const ext = fileName.split(".").pop()?.toLowerCase();
-    if (ext === "pdf") fileType = "pdf";
-    else if (ext === "docx") fileType = "docx";
-    else if (ext === "txt" || ext === "md") fileType = "txt";
-    else {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    if (ext === "pdf") {
+      fileType = "pdf";
+      mimeType = "application/pdf";
+    } else if (ext === "docx") {
+      fileType = "docx";
+      mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    } else if (ext === "txt" || ext === "md") {
+      fileType = "txt";
+      mimeType = "text/plain";
+    } else if (["png", "jpg", "jpeg", "webp"].includes(ext)) {
+      fileType = "image";
+      if (ext === "png") mimeType = "image/png";
+      else if (ext === "webp") mimeType = "image/webp";
+      else mimeType = "image/jpeg";
+    } else {
       return NextResponse.json(
-        { error: "نوع الملف غير مدعوم. الصيغ المدعومة هي: PDF, DOCX, TXT" },
+        {
+          error:
+            "نوع الملف غير مدعوم. الصيغ المدعومة هي: PDF, DOCX, TXT، أو الصور ومستندات خط اليد (PNG, JPG, JPEG, WEBP)",
+        },
         { status: 400 }
       );
     }
+
+    const rawForceOcr = formData.get("forceOcr");
+    forceOcr = rawForceOcr === "true" || rawForceOcr === "1";
 
     const arrayBuffer = await file.arrayBuffer();
     buffer = Buffer.from(arrayBuffer);
@@ -135,11 +154,30 @@ export async function POST(
   }
 
   try {
-    const extraction = await extractTextFromBuffer(buffer, fileType);
+    let apiKey = "";
+    let aiModel = "gemini-3.8-flash";
+    try {
+      const aiSettings = await getGroupAISettings(groupId);
+      apiKey = aiSettings.geminiApiKey || process.env.GEMINI_API_KEY || "";
+      if (aiSettings.defaultModel) aiModel = aiSettings.defaultModel;
+    } catch {
+      apiKey = process.env.GEMINI_API_KEY || "";
+    }
 
-    if (!extraction.cleanedText || extraction.cleanedText.length < 20) {
+    const extraction = await extractTextFromBuffer(buffer, fileType, {
+      apiKey,
+      model: aiModel,
+      fileName,
+      mimeType,
+      forceOcr,
+    });
+
+    if (!extraction.cleanedText || extraction.cleanedText.length < 15) {
       return NextResponse.json(
-        { error: "لم يتم العثور على نص كافٍ في الملف. تأكد من أن الملف ليس عبارة عن صور ممسوحة ضوئياً بدون OCR." },
+        {
+          error:
+            "لم يتم العثور على نص كافٍ في الملف. تأكد من وضوح المحتوى، وإذا كان المستند ممسوحاً ضوئياً أو خط يد فتأكد من تفعيل مفتاح Google Gemini API Key في تبويب 'إعدادات الذكاء الاصطناعي'.",
+        },
         { status: 400 }
       );
     }
@@ -163,6 +201,7 @@ export async function POST(
       charCount: extraction.charCount,
       topics: combinedTopics,
       sections: extraction.sections,
+      ocrUsed: extraction.ocrUsed,
       uploadedBy: {
         id: auth.userId,
         name: auth.user.firstName || "المعلم",

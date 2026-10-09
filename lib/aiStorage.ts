@@ -9,7 +9,7 @@ export interface CurriculumMaterial {
   subject: string;
   grade: string;
   fileName: string;
-  fileType: "pdf" | "docx" | "txt" | "manual";
+  fileType: "pdf" | "docx" | "txt" | "manual" | "image";
   fileSize: number;
   rawText: string;
   cleanedText: string;
@@ -23,6 +23,7 @@ export interface CurriculumMaterial {
     username?: string;
     photoUrl?: string;
   };
+  ocrUsed?: boolean;
   createdAt: string;
   updatedAt: string;
 }
