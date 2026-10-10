@@ -739,12 +739,12 @@ export default function CurriculumPage() {
     const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
 
     // Architectural solution for Vercel 4.5MB Serverless Function payload limit:
-    // When a user uploads a PDF, DOCX, or TXT (especially files >= 3.5 MB),
-    // extract clean text & chapters directly in the browser using native Web APIs.
-    // The resulting clean JSON payload is only ~500KB - 1.5MB and succeeds 100% of the time!
+    // Extract clean text & chapters directly in the browser using native Web APIs.
+    // For scanned PDFs without text layers, automatically slices pages into offscreen canvas batches
+    // and processes them sequentially with Gemini multimodal chunk OCR.
     const canExtractInBrowser = isBrowserExtractable(uploadFile);
     const isLargeFile = uploadFile.size >= 3.5 * 1024 * 1024;
-    const shouldUseBrowserExtraction = canExtractInBrowser && (isLargeFile || !forceOcr);
+    const shouldUseBrowserExtraction = canExtractInBrowser;
 
     if (shouldUseBrowserExtraction) {
       setUploading(true);
@@ -763,6 +763,9 @@ export default function CurriculumPage() {
           .filter(Boolean);
 
         extracted = await extractMaterialInBrowser(uploadFile, {
+          groupId,
+          apiKey: keyToSend || undefined,
+          forceOcr,
           title: uploadTitle.trim(),
           subject: uploadSubject.trim() || (isRtl ? "عام" : "General"),
           grade: uploadGrade.trim(),
@@ -773,15 +776,18 @@ export default function CurriculumPage() {
           },
         });
       } catch (browserErr: any) {
-        // If file is smaller than 3.5MB and not forceOcr, gracefully fall back to server multipart upload
-        if (!isLargeFile && !forceOcr) {
+        const errMsg = browserErr?.message || "";
+        const isPasswordErr = /password|كلمة مرور|محمي/i.test(errMsg);
+        const isMissingKeyErr = /Google Gemini API Key/i.test(errMsg);
+        // If file is smaller than 3.5MB, not forced OCR, and not an unrecoverable password/key error, gracefully fall back to server multipart upload
+        if (!isLargeFile && !forceOcr && !isPasswordErr && !isMissingKeyErr) {
           console.warn(
             "[ClientExtractor] Browser extraction error on file < 3.5MB, falling back to server multipart:",
             browserErr
           );
           extracted = null;
         } else {
-          // Large file (or forced OCR) cannot bypass Vercel 4.5MB limit via multipart
+          // Large file (or scanned/OCR PDF, or password protected) cannot bypass Vercel 4.5MB limit via multipart
           setUploading(false);
           setUploadProgressPercent(0);
           setUploadProgressStep("");

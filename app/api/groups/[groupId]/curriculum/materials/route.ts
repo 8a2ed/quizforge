@@ -232,7 +232,7 @@ export async function POST(
         charCount,
         topics: combinedTopics,
         sections,
-        ocrUsed: false,
+        ocrUsed: Boolean(body.ocrUsed),
         digitalFallback: false,
         uploadedBy: {
           id: auth.userId,

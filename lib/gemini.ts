@@ -3,6 +3,7 @@ import {
   ValidatedQuestion,
   validateAndSanitizeQuestion,
 } from "./questionValidator";
+import { cleanText, splitIntoSections } from "./textCleaner";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 
@@ -827,3 +828,166 @@ export async function extractDocumentTextWithGemini(
     tokensUsed: estimateTokens(text),
   };
 }
+
+export interface ChunkOcrOptions {
+  pages: string[];
+  startPage: number;
+  endPage: number;
+  apiKey?: string;
+  model?: string;
+  documentTitle?: string;
+}
+
+export interface ChunkOcrResult {
+  transcribedText: string;
+  sections: { title: string; content: string }[];
+  modelUsed: string;
+  fallbackUsed?: boolean;
+  tokensUsed: number;
+}
+
+/**
+ * Multimodal OCR chunk extraction for sliced PDF pages using Google Gemini.
+ * Transcribes Arabic & English text, headings, tables, and notes from page image chunks.
+ */
+export async function extractChunkTextWithGemini(
+  options: ChunkOcrOptions
+): Promise<ChunkOcrResult> {
+  const apiKey =
+    options.apiKey?.trim() ||
+    process.env.GEMINI_API_KEY?.trim() ||
+    "";
+
+  if (!apiKey) {
+    throw new Error(
+      "لم يتم العثور على مفتاح Google Gemini API Key. يرجى إدخال المفتاح في تبويب 'إعدادات الذكاء الاصطناعي' أو إضافته في ملف البيئة (GEMINI_API_KEY) لتفعيل التعرف البصري على الصور والمستندات (OCR)."
+    );
+  }
+
+  if (!options.pages || !Array.isArray(options.pages) || options.pages.length === 0) {
+    throw new Error("لم يتم تمرير أي صفحات للمعالجة البصرية.");
+  }
+
+  const requestedModel = normalizeModelName(options.model || DEFAULT_GEMINI_MODEL);
+  const startPage = options.startPage || 1;
+  const endPage = options.endPage || (startPage + options.pages.length - 1);
+
+  const parts: any[] = [];
+  options.pages.forEach((pageData, idx) => {
+    const pageNum = startPage + idx;
+    let base64 = pageData;
+    let mimeType = "image/jpeg";
+    if (pageData.includes(",")) {
+      const match = pageData.match(/^data:([^;]+);base64,/);
+      if (match) {
+        mimeType = match[1];
+      }
+      base64 = pageData.split(",")[1];
+    }
+
+    parts.push({
+      inlineData: {
+        mimeType,
+        data: base64,
+      },
+    });
+    parts.push({
+      text: `[صفحة ${pageNum}]`,
+    });
+  });
+
+  let prompt = `You are an expert multimodal OCR and document understanding engine like Google's NotebookLM.
+Transcribe and extract ALL text, tables, diagrams, equations, notes, and chapter headings from the provided document pages (${startPage} to ${endPage}) with 100% precision and fidelity.
+Capture printed text and handwriting in Arabic and English accurately.
+Preserve document structure using Markdown headings (# الفصل الأول, ## المبحث, etc.), lists, and tables.
+Never summarize, omit, or truncate any visible content.`;
+
+  if (options.documentTitle) {
+    prompt += `\nعنوان أو مرجع المستند: ${options.documentTitle}`;
+  }
+
+  parts.push({ text: prompt });
+
+  const requestBody = {
+    systemInstruction: {
+      parts: [{ text: NOTEBOOKLM_OCR_SYSTEM_INSTRUCTION }],
+    },
+    contents: [
+      {
+        role: "user",
+        parts,
+      },
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 8192,
+    },
+  };
+
+  let activeModel = requestedModel;
+  let fallbackUsed = false;
+  let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
+
+  // Quick retry for transient 429 / 503 before fallback or error
+  if (!apiRes.ok && (apiRes.status === 429 || apiRes.status === 503)) {
+    console.warn(`[Gemini Chunk OCR] Transient ${apiRes.status} on model '${requestedModel}', waiting 2.5s before retry...`);
+    await new Promise((r) => setTimeout(r, 2500));
+    apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
+  }
+
+  if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
+    console.warn(
+      `[Gemini Chunk OCR] Model '${requestedModel}' failed (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
+    );
+
+    let fetched: AvailableGeminiModel[] = [];
+    try {
+      fetched = await fetchAvailableGeminiModels(apiKey);
+    } catch {}
+
+    const fallbackCandidates = getFallbackCandidates(requestedModel, fetched);
+    for (const candidate of fallbackCandidates) {
+      console.log(`[Gemini Chunk OCR] Attempting fallback model: ${candidate}`);
+      let fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
+      if (!fallbackRes.ok && (fallbackRes.status === 429 || fallbackRes.status === 503)) {
+        await new Promise((r) => setTimeout(r, 2000));
+        fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
+      }
+      if (fallbackRes.ok && fallbackRes.text) {
+        console.log(`[Gemini Chunk OCR] Fallback succeeded with model: ${candidate}`);
+        apiRes = fallbackRes;
+        activeModel = candidate;
+        fallbackUsed = true;
+        break;
+      }
+    }
+  }
+
+  if (!apiRes.ok) {
+    throw new Error(`خطأ في استخراج النص عبر الذكاء الاصطناعي (${apiRes.status}): ${apiRes.errorDetails}`);
+  }
+
+  const transcribedText = (apiRes.text || "").trim();
+  const cleaned = cleanText(transcribedText);
+  let sections = splitIntoSections(cleaned);
+  if (sections.length === 0 && cleaned.length > 0) {
+    sections = [
+      {
+        id: `chunk-${startPage}-${endPage}`,
+        title: startPage === endPage ? `الصفحة ${startPage}` : `الصفحات ${startPage} - ${endPage}`,
+        content: cleaned,
+        wordCount: cleaned.split(/\s+/).filter(Boolean).length,
+      },
+    ];
+  }
+
+  return {
+    transcribedText,
+    sections: sections.map((s) => ({ title: s.title, content: s.content })),
+    modelUsed: activeModel,
+    fallbackUsed,
+    tokensUsed: estimateTokens(transcribedText),
+  };
+}
+
+
