@@ -263,15 +263,15 @@ export async function extractTextFromBuffer(
 
     const cleanedDigital = cleanText(digitalText);
     const digitalWords = cleanedDigital.split(/\s+/).filter(Boolean);
-    // Real digital documents typically have high text density.
-    // If text has < 30 words or < 150 chars, or if file is large (>80KB) with < 60 words,
-    // it is almost certainly a scanned document with minimal metadata or publisher header.
+    // Real digital documents (e.g. 20-50MB textbooks like Crop Production Book) contain extractable digital text.
+    // If digitalText was parsed and has valid content (>= 15 chars or >= 5 words), it is authentic digital text!
+    const hasDigitalContent = !digitalError && (digitalWords.length >= 5 || cleanedDigital.length >= 15);
     const isSparseText =
       digitalWords.length < 30 ||
       cleanedDigital.length < 150 ||
       (buffer.length > 80_000 && digitalWords.length < 60);
 
-    const hasRichDigitalText = !digitalError && (digitalWords.length >= 100 || !isSparseText);
+    const hasRichDigitalText = !digitalError && (digitalWords.length >= 100 || !isSparseText || hasDigitalContent);
 
     if (isLargeFile) {
       // Large file (>14MB, up to 50MB):

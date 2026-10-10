@@ -5,6 +5,7 @@ import {
   getMaterialById,
   getGroupAISettings,
   updateGroupAISettings,
+  isValidApiKeyCandidate,
   recordGenerationLog,
   GenerationLog,
 } from "@/lib/aiStorage";
@@ -109,7 +110,8 @@ export async function POST(
     // Load AI settings for this group
     const settings = await getGroupAISettings(groupId);
     const clientApiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
-    const apiKey = clientApiKey || settings.geminiApiKey || process.env.GEMINI_API_KEY;
+    const validClientKey = isValidApiKeyCandidate(clientApiKey) ? clientApiKey : "";
+    const apiKey = validClientKey || settings.geminiApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -123,9 +125,9 @@ export async function POST(
     }
 
     // If client supplied a valid key and group had none, auto-persist it
-    if (clientApiKey && clientApiKey.length > 8 && !clientApiKey.includes("••••") && !settings.geminiApiKey) {
+    if (validClientKey && !settings.geminiApiKey) {
       try {
-        await updateGroupAISettings(groupId, { geminiApiKey: clientApiKey });
+        await updateGroupAISettings(groupId, { geminiApiKey: validClientKey });
       } catch {}
     }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-import { getGroupAISettings, updateGroupAISettings } from "@/lib/aiStorage";
+import { getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate } from "@/lib/aiStorage";
 import { DEFAULT_GEMINI_MODEL, normalizeModelName } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
@@ -16,12 +16,6 @@ async function checkAuth(req: NextRequest) {
   } catch {
     return null;
   }
-}
-
-function maskApiKey(key?: string): string {
-  if (!key) return "";
-  if (key.length <= 8) return "••••••••";
-  return `${key.slice(0, 4)}••••••••${key.slice(-4)}`;
 }
 
 // GET /api/groups/[groupId]/curriculum/settings
@@ -41,9 +35,10 @@ export async function GET(
   return NextResponse.json({
     settings: {
       ...settings,
+      geminiApiKey: rawKey,
       defaultModel: settings.defaultModel || DEFAULT_GEMINI_MODEL,
       hasApiKey: !!rawKey,
-      maskedApiKey: maskApiKey(rawKey),
+      maskedApiKey: rawKey,
     },
   });
 }
@@ -63,9 +58,8 @@ export async function PATCH(
   const updates: Parameters<typeof updateGroupAISettings>[1] = {};
 
   if (body.geminiApiKey !== undefined) {
-    // If empty or masked, ignore or update
     const key = String(body.geminiApiKey).trim();
-    if (key && !key.includes("••••")) {
+    if (isValidApiKeyCandidate(key)) {
       updates.geminiApiKey = key;
     }
   }
@@ -84,8 +78,9 @@ export async function PATCH(
     message: "تم حفظ إعدادات الذكاء الاصطناعي بنجاح!",
     settings: {
       ...updated,
+      geminiApiKey: rawKey,
       hasApiKey: !!rawKey,
-      maskedApiKey: maskApiKey(rawKey),
+      maskedApiKey: rawKey,
     },
   });
 }

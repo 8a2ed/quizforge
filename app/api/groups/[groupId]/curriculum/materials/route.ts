@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 import { extractTextFromBuffer } from "@/lib/textExtractor";
-import { getMaterials, saveMaterial, getGroupAISettings, updateGroupAISettings, CurriculumMaterial } from "@/lib/aiStorage";
+import { getMaterials, saveMaterial, getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate, CurriculumMaterial } from "@/lib/aiStorage";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -170,7 +170,8 @@ export async function POST(
   }
 
   try {
-    let apiKey = clientApiKey;
+    const validClientKey = isValidApiKeyCandidate(clientApiKey) ? clientApiKey : "";
+    let apiKey = validClientKey;
     let aiModel = "gemini-3.8-flash";
     try {
       const aiSettings = await getGroupAISettings(groupId);
@@ -181,9 +182,9 @@ export async function POST(
     }
 
     // Auto-persist valid clientApiKey if group had none
-    if (clientApiKey && clientApiKey.length > 8 && !clientApiKey.includes("••••")) {
+    if (validClientKey) {
       try {
-        await updateGroupAISettings(groupId, { geminiApiKey: clientApiKey });
+        await updateGroupAISettings(groupId, { geminiApiKey: validClientKey });
       } catch {}
     }
 
@@ -248,12 +249,11 @@ export async function POST(
   } catch (err: unknown) {
     console.error("[Materials API Error]", err);
     const msg = err instanceof Error ? err.message : "فشل استخراج وتحليل الملف";
-    const status =
-      msg.includes("50 ميجابايت") ||
-      msg.includes("يتجاوز الحد الأقصى") ||
-      msg.toLowerCase().includes("too large")
-        ? 413
-        : 500;
+    // 413 is strictly reserved for payloads that exceed the 50MB ceiling (52,428,800 bytes)
+    const isOver50Mb =
+      (buffer && buffer.length > 50 * 1024 * 1024) ||
+      msg.includes("50 ميجابايت");
+    const status = isOver50Mb ? 413 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
 }

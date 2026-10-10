@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
-import { getGroupAISettings, updateGroupAISettings } from "@/lib/aiStorage";
+import { getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate } from "@/lib/aiStorage";
 import { testGeminiConnection, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
@@ -31,8 +31,8 @@ export async function POST(
   let apiKey = body.apiKey ? String(body.apiKey).trim() : "";
   const model = body.model ? String(body.model).trim() : DEFAULT_GEMINI_MODEL;
 
-  // If user passed placeholder or empty, read from saved group settings
-  if (!apiKey || apiKey.includes("••••")) {
+  // If user passed placeholder or invalid candidate, read from saved group settings
+  if (!isValidApiKeyCandidate(apiKey)) {
     const settings = await getGroupAISettings(groupId);
     apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY || "";
   }

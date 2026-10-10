@@ -133,6 +133,17 @@ interface TelegramTopic {
   icon_color?: number;
 }
 
+function isValidApiKey(k?: string | null): boolean {
+  if (!k) return false;
+  const trimmed = String(k).trim();
+  if (trimmed.length < 20) return false;
+  if (trimmed.includes("••••") || trimmed.includes("•")) return false;
+  if (trimmed.includes("...") || trimmed.includes("…")) return false;
+  if (trimmed.includes("***") || trimmed.includes("*")) return false;
+  if (trimmed === "undefined" || trimmed === "null") return false;
+  return true;
+}
+
 export default function CurriculumPage() {
   const { groupId } = useParams<{ groupId: string }>();
   const router = useRouter();
@@ -326,16 +337,18 @@ export default function CurriculumPage() {
         const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
         const serverKey = d.settings?.geminiApiKey;
 
-        if (serverKey && !serverKey.includes("••••")) {
-          setApiKeyInput(serverKey);
-          try { localStorage.setItem("gemini_api_key", serverKey); } catch {}
-        } else if (localKey) {
-          setApiKeyInput(localKey);
-          if (!d.settings?.hasApiKey) {
+        const validServerKey = isValidApiKey(serverKey) ? serverKey!.trim() : null;
+        const validLocalKey = isValidApiKey(localKey) ? localKey!.trim() : null;
+        const activeKey = validServerKey || validLocalKey;
+
+        if (activeKey) {
+          setApiKeyInput(activeKey);
+          try { localStorage.setItem("gemini_api_key", activeKey); } catch {}
+          if (!d.settings?.hasApiKey && validLocalKey) {
             fetch(`/api/groups/${groupId}/curriculum/settings`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ geminiApiKey: localKey }),
+              body: JSON.stringify({ geminiApiKey: validLocalKey }),
             })
               .then(async (r) => {
                 const txt = await r.text();
@@ -416,8 +429,9 @@ export default function CurriculumPage() {
       };
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      if (localKey) {
-        payload.apiKey = localKey;
+      const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
+      if (keyToSend) {
+        payload.apiKey = keyToSend;
       }
 
       if (sourceMode === "material") {
@@ -740,8 +754,9 @@ export default function CurriculumPage() {
       formData.append("forceOcr", String(forceOcr));
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      if (localKey) {
-        formData.append("apiKey", localKey);
+      const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
+      if (keyToSend) {
+        formData.append("apiKey", keyToSend);
       }
 
       // Track live XHR upload progress
@@ -832,12 +847,25 @@ export default function CurriculumPage() {
 
       if (!res.ok) {
         if (res.status === 413 || (resText && resText.toLowerCase().includes("request entity too large"))) {
-          throw new Error(
-            data?.error ||
-            (isRtl
-              ? `حجم الملف (${sizeMb} ميجابايت) تجاوز الحد الأقصى المسموح به للخادم (Request Entity Too Large). يُرجى التأكد من أن حجم الملف أقل من 50 ميجابايت.`
-              : `File size (${sizeMb} MB) exceeded server limits (413 Request Entity Too Large). Maximum supported size is 50MB.`)
-          );
+          const isFileReallyOver50Mb = uploadFile.size > 50 * 1024 * 1024;
+          if (isFileReallyOver50Mb) {
+            throw new Error(
+              data?.error ||
+              (isRtl
+                ? `حجم الملف (${sizeMb} ميجابايت) تجاوز الحد الأقصى المسموح به للخادم (50 ميجابايت). يُرجى تقليل حجم الملف أو تقسيمه.`
+                : `File size (${sizeMb} MB) exceeded server limits (413 Request Entity Too Large). Maximum supported size is 50MB.`)
+            );
+          } else {
+            // File is <= 50MB (e.g. 22.1MB), so display actual server message or fallback
+            throw new Error(
+              data?.error ||
+              (resText && resText.length < 300 && !resText.includes("<html")
+                ? resText
+                : isRtl
+                ? `تعذر تحليل وقراءة الملف (${sizeMb} ميجابايت). يرجى التأكد من أن الملف سليم ويحتوي على نصوص واضحة.`
+                : `Failed to process document (${sizeMb} MB).`)
+            );
+          }
         }
         if (res.status === 504 || res.status === 408 || (resText && resText.toLowerCase().includes("timeout"))) {
           throw new Error(
@@ -930,10 +958,13 @@ export default function CurriculumPage() {
         strictGrounding: settings?.strictGrounding ?? true,
         systemInstruction: settings?.systemInstruction || "",
       };
-      if (apiKeyInput.trim()) {
-        payload.geminiApiKey = apiKeyInput.trim();
+      const trimmedKey = apiKeyInput.trim();
+      const isCandidateValid = isValidApiKey(trimmedKey);
+
+      if (isCandidateValid) {
+        payload.geminiApiKey = trimmedKey;
         try {
-          localStorage.setItem("gemini_api_key", apiKeyInput.trim());
+          localStorage.setItem("gemini_api_key", trimmedKey);
         } catch {}
       }
 
@@ -949,8 +980,9 @@ export default function CurriculumPage() {
       if (!res.ok) throw new Error(data?.error || (isRtl ? `فشل حفظ الإعدادات (${res.status})` : "Failed to save settings"));
 
       setSettings(data.settings);
-      if (data.settings?.geminiApiKey && !data.settings.geminiApiKey.includes("••••")) {
+      if (data.settings?.geminiApiKey && isValidApiKey(data.settings.geminiApiKey)) {
         setApiKeyInput(data.settings.geminiApiKey);
+        try { localStorage.setItem("gemini_api_key", data.settings.geminiApiKey); } catch {}
       } else if (payload.geminiApiKey) {
         setApiKeyInput(payload.geminiApiKey);
       }
@@ -967,7 +999,7 @@ export default function CurriculumPage() {
     setTestResult(null);
     try {
       const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      const keyToTest = apiKeyInput.trim() || localKey || undefined;
+      const keyToTest = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : undefined);
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
@@ -998,7 +1030,7 @@ export default function CurriculumPage() {
       }
 
       if (data?.success) {
-        if (apiKeyInput.trim()) {
+        if (isValidApiKey(apiKeyInput)) {
           try {
             localStorage.setItem("gemini_api_key", apiKeyInput.trim());
           } catch {}
@@ -1029,7 +1061,7 @@ export default function CurriculumPage() {
     setDetectingModels(true);
     try {
       const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      const keyToUse = apiKeyInput.trim() || localKey || undefined;
+      const keyToUse = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : undefined);
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
@@ -1225,7 +1257,10 @@ export default function CurriculumPage() {
             <span>{isRtl ? "إحصائيات واستخدام الذكاء الاصطناعي" : "Usage & Analytics"}</span>
           </button>
           <button
-            onClick={() => setActiveTab("settings")}
+            onClick={() => {
+              setActiveTab("settings");
+              loadSettings();
+            }}
             className={`btn ${activeTab === "settings" ? "btn-brand" : "btn-ghost"}`}
             style={{ gap: 8, borderRadius: "var(--radius-md) var(--radius-md) 0 0" }}
           >
@@ -1241,7 +1276,7 @@ export default function CurriculumPage() {
       {activeTab === "generate" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
           {/* Missing API Key Alert */}
-          {(!settings?.hasApiKey && !(typeof window !== "undefined" && localStorage.getItem("gemini_api_key"))) && !process.env.NEXT_PUBLIC_DEV_KEY && (
+          {(!settings?.hasApiKey && !(typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && !process.env.NEXT_PUBLIC_DEV_KEY && (
             <div
               style={{
                 background: "rgba(245, 158, 11, 0.12)",
@@ -1270,7 +1305,10 @@ export default function CurriculumPage() {
               </div>
               <button
                 className="btn btn-warning btn-sm"
-                onClick={() => setActiveTab("settings")}
+                onClick={() => {
+                  setActiveTab("settings");
+                  loadSettings();
+                }}
                 style={{ gap: 6 }}
               >
                 <Settings size={16} />
@@ -1280,7 +1318,7 @@ export default function CurriculumPage() {
           )}
 
           {/* Persistent Key Active Indicator */}
-          {(settings?.hasApiKey || (typeof window !== "undefined" && !!localStorage.getItem("gemini_api_key"))) && (
+          {(settings?.hasApiKey || (typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && (
             <div
               style={{
                 background: "rgba(16, 185, 129, 0.08)",
@@ -1301,7 +1339,10 @@ export default function CurriculumPage() {
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                onClick={() => setActiveTab("settings")}
+                onClick={() => {
+                  setActiveTab("settings");
+                  loadSettings();
+                }}
                 style={{ fontSize: "0.8rem", padding: "4px 10px", gap: 6 }}
               >
                 <Key size={14} />
@@ -2564,7 +2605,7 @@ export default function CurriculumPage() {
             </p>
 
             {/* Persistent Key Active Indicator */}
-            {(settings?.hasApiKey || (typeof window !== "undefined" && !!localStorage.getItem("gemini_api_key"))) && (
+            {(settings?.hasApiKey || (typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && (
               <div
                 style={{
                   background: "rgba(16, 185, 129, 0.1)",
@@ -2583,13 +2624,8 @@ export default function CurriculumPage() {
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <CheckCircle2 size={18} />
-                  <span>{isRtl ? "✅ المفتاح محفوظ ومفعّل وجاهز للاستخدام بدون الحاجة لإعادة كتابته" : "✅ Gemini API Key is saved and active"}</span>
+                  <span>{isRtl ? "✅ مفتاح Google Gemini API محفوظ ومفعّل وجاهز للاستخدام بدون الحاجة لإعادة كتابته" : "✅ Gemini API Key is saved and active"}</span>
                 </div>
-                {settings?.maskedApiKey && (
-                  <code style={{ fontSize: "0.82rem", background: "rgba(0,0,0,0.06)", padding: "2px 8px", borderRadius: 4, fontFamily: "monospace" }}>
-                    {settings.maskedApiKey}
-                  </code>
-                )}
               </div>
             )}
 
@@ -2597,7 +2633,7 @@ export default function CurriculumPage() {
               <input
                 type={showApiKey ? "text" : "password"}
                 className="input"
-                placeholder={settings?.maskedApiKey || "AIzaSy..."}
+                placeholder={isRtl ? "أدخل مفتاح Google Gemini API Key هنا..." : "Enter Gemini API Key..."}
                 value={apiKeyInput}
                 onChange={(e) => setApiKeyInput(e.target.value)}
                 style={{ flex: 1, fontFamily: "monospace" }}

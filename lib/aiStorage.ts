@@ -554,6 +554,25 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   return defaultSettings;
 }
 
+/**
+ * Validate candidate API keys before persisting to storage.
+ * Protection rules:
+ * - Must be at least 20 characters long
+ * - Must not contain masking bullets ("••••")
+ * - Must not contain ellipsis abbreviation ("..." or "…")
+ * - Must not contain asterisks ("***")
+ */
+export function isValidApiKeyCandidate(key?: string | null): boolean {
+  if (!key) return false;
+  const trimmed = String(key).trim();
+  if (trimmed.length < 20) return false;
+  if (trimmed.includes("••••") || trimmed.includes("•")) return false;
+  if (trimmed.includes("...") || trimmed.includes("…")) return false;
+  if (trimmed.includes("***") || trimmed.includes("*")) return false;
+  if (trimmed === "undefined" || trimmed === "null") return false;
+  return true;
+}
+
 export async function updateGroupAISettings(
   groupId: string,
   partial: Partial<AISettings>
@@ -562,11 +581,11 @@ export async function updateGroupAISettings(
   const allSettings = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
   const current = await getGroupAISettings(cleanGid);
 
-  // CRITICAL RULE: Never overwrite an existing saved key if partial.geminiApiKey is empty string, masked, or undefined!
+  // CRITICAL RULE: Never overwrite an existing saved key if partial.geminiApiKey is invalid, empty, or masked!
   let resolvedKey = current.geminiApiKey || "";
   if (partial.geminiApiKey !== undefined) {
     const candidate = String(partial.geminiApiKey).trim();
-    if (candidate && !candidate.includes("••••")) {
+    if (isValidApiKeyCandidate(candidate)) {
       resolvedKey = candidate;
     }
   }

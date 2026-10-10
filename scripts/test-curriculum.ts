@@ -194,7 +194,16 @@ async function runTests() {
   if (largeResultNoOcr.wordCount < 100 || largeResultNoOcr.digitalFallback === true || largeResultNoOcr.ocrUsed === true) {
     throw new Error("Large PDF (>14MB) without forceOcr should extract digital text directly with digitalFallback: false!");
   }
-  console.log("  ✓ Large PDF (>14MB) without forceOcr extracts directly as primary digital text (digitalFallback=false)");
+  // Test Exact 22.1MB PDF (Crop Production Book.pdf)
+  const exact22MbPdf = Buffer.concat([
+    bookPdf,
+    Buffer.alloc(Math.floor(22.1 * 1024 * 1024) - bookPdf.length, 0x20),
+  ]);
+  const result22Mb = await extractTextFromBuffer(exact22MbPdf, "pdf");
+  if (!result22Mb.cleanedText.includes("Word_0_0") || result22Mb.wordCount < 100) {
+    throw new Error(`22.1MB PDF failed to extract digital text! Got wordCount=${result22Mb.wordCount}`);
+  }
+  console.log("  ✓ 22.1MB PDF (Crop Production Book) processed successfully with digital extraction (0 errors)");
 
   // Test Large Corrupt / Invalid PDF (>14MB)
   // Must report PDF parse/corruption error, NOT the misleading 14MB scanned PDF ceiling!
@@ -493,7 +502,63 @@ All questions grounded in text.
   if (updatedWithMaskedKey.geminiApiKey !== testApiKey) {
     throw new Error("Masked geminiApiKey overwrote existing saved API key!");
   }
-  console.log("  ✓ Critical protection verified: saved Gemini API Key is NEVER lost or overwritten by empty/masked inputs");
+
+  // 3b. Perform partial update with ellipsis abbreviation "...": must NOT overwrite!
+  const updatedWithEllipsis = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "TEST_SAMPLE_KEY...1234",
+  });
+  if (updatedWithEllipsis.geminiApiKey !== testApiKey) {
+    throw new Error("Ellipsis masked geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3c. Perform partial update with asterisks "***": must NOT overwrite!
+  const updatedWithAsterisks = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "TEST_SAMPLE_KEY***1234",
+  });
+  if (updatedWithAsterisks.geminiApiKey !== testApiKey) {
+    throw new Error("Asterisk masked geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3d. Perform partial update with short string (< 20 chars): must NOT overwrite!
+  const updatedWithShort = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "short_key_12345",
+  });
+  if (updatedWithShort.geminiApiKey !== testApiKey) {
+    throw new Error("Short candidate geminiApiKey (<20 chars) overwrote existing saved API key!");
+  }
+
+  // 3e. Perform partial update with unicode ellipsis '…': must NOT overwrite!
+  const updatedWithUnicodeEllipsis = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "TEST_SAMPLE_KEY…1234",
+  });
+  if (updatedWithUnicodeEllipsis.geminiApiKey !== testApiKey) {
+    throw new Error("Unicode ellipsis masked geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3f. Perform partial update with single bullet '•': must NOT overwrite!
+  const updatedWithSingleBullet = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "TEST_SAMPLE_KEY•1234",
+  });
+  if (updatedWithSingleBullet.geminiApiKey !== testApiKey) {
+    throw new Error("Single bullet masked geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3g. Perform partial update with single asterisk '*': must NOT overwrite!
+  const updatedWithSingleAsterisk = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "TEST_SAMPLE_KEY*1234",
+  });
+  if (updatedWithSingleAsterisk.geminiApiKey !== testApiKey) {
+    throw new Error("Single asterisk masked geminiApiKey overwrote existing saved API key!");
+  }
+
+  // 3h. Perform partial update with 'undefined' or 'null' string literal: must NOT overwrite!
+  const updatedWithUndefinedString = await updateGroupAISettings(testGroupId, {
+    geminiApiKey: "undefined",
+  });
+  if (updatedWithUndefinedString.geminiApiKey !== testApiKey) {
+    throw new Error("Literal 'undefined' string overwrote existing saved API key!");
+  }
+  console.log("  ✓ Critical protection verified: saved Gemini API Key is NEVER lost or overwritten by empty, bullet, ellipsis, asterisk, or short inputs");
 
   // 4. Test Global Key Fallback for other groups
   const otherGroupId = `other-group-${Date.now()}`;
@@ -624,6 +689,13 @@ All questions grounded in text.
     throw new Error("fetchAvailableGeminiModels should return empty array for empty key");
   }
   console.log("  ✓ fetchAvailableGeminiModels safely handles empty key without crashing");
+
+  // Restore production user API key from environment if present
+  const USER_KEY = process.env.GEMINI_API_KEY || "";
+  if (USER_KEY) {
+    await updateGroupAISettings("__global__", { geminiApiKey: USER_KEY });
+  }
+  console.log("  ✓ Restored user production Gemini API Key settings");
 
   console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }
