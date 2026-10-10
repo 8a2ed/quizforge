@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
-import { extractTextFromBuffer } from "@/lib/textExtractor";
+import {
+  extractTextFromBuffer,
+  cleanText,
+  splitIntoSections,
+  extractSuggestedTopics,
+  ExtractedSection,
+} from "@/lib/textExtractor";
 import { getMaterials, saveMaterial, getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate, CurriculumMaterial } from "@/lib/aiStorage";
 
 export const maxDuration = 300;
@@ -138,8 +144,116 @@ export async function POST(
       title = fileName.replace(/\.[^/.]+$/, "");
     }
   } else {
-    // JSON body (direct manual text input)
+    // JSON body (either pre-extracted material or direct manual text input)
     const body = await req.json();
+    const isPreExtracted = Boolean(body.rawText || body.cleanedText);
+
+    if (isPreExtracted) {
+      // Direct pre-extracted material payload (extracted in client browser to bypass Vercel 4.5MB limit)
+      title = body.title?.trim() || "";
+      subject = body.subject?.trim() || "عام";
+      grade = body.grade?.trim() || "";
+      fileName = body.fileName || "curriculum_document.pdf";
+      fileType = body.fileType || "pdf";
+      const raw = body.rawText || body.cleanedText || "";
+      const cleaned = cleanText(body.cleanedText || raw);
+
+      const reportedSize = typeof body.fileSize === "number" ? body.fileSize : 0;
+      if (reportedSize > 50 * 1024 * 1024) {
+        return NextResponse.json(
+          {
+            error: `حجم الملف (${(reportedSize / (1024 * 1024)).toFixed(1)} ميجابايت) يتجاوز الحد الأقصى المسموح به للخادم (50 ميجابايت).`,
+          },
+          { status: 413 }
+        );
+      }
+
+      if (!cleaned || cleaned.length < 15) {
+        return NextResponse.json(
+          {
+            error:
+              "لم يتم العثور على نص كافٍ في الملف. تأكد من وضوح المحتوى واحتواء المستند على نصوص قابلة للقراءة.",
+          },
+          { status: 400 }
+        );
+      }
+
+      let sections: ExtractedSection[] = [];
+      if (Array.isArray(body.sections) && body.sections.length > 0) {
+        sections = body.sections
+          .map((s: any, idx: number) => ({
+            id: String(s.id || `sec-${idx + 1}`),
+            title: String(s.title || `القسم ${idx + 1}`).trim(),
+            content: String(s.content || "").trim(),
+            wordCount:
+              typeof s.wordCount === "number"
+                ? s.wordCount
+                : s.content
+                ? String(s.content).split(/\s+/).filter(Boolean).length
+                : 0,
+          }))
+          .filter((s: ExtractedSection) => s.content.length > 0);
+      }
+      if (sections.length === 0) {
+        sections = splitIntoSections(cleaned);
+      }
+
+      const inputTopics = Array.isArray(body.topics)
+        ? body.topics.map((t: any) => String(t).trim()).filter(Boolean)
+        : typeof body.topics === "string"
+        ? body.topics.split(",").map((t: string) => t.trim()).filter(Boolean)
+        : [];
+      const suggested = extractSuggestedTopics(cleaned);
+      const combinedTopics = Array.from(new Set([...inputTopics, ...suggested])).slice(0, 10);
+
+      clientApiKey = (body.apiKey || "").trim();
+      if (isValidApiKeyCandidate(clientApiKey)) {
+        try {
+          await updateGroupAISettings(groupId, { geminiApiKey: clientApiKey });
+        } catch {}
+      }
+
+      const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+      const charCount = cleaned.length;
+      const fileSize = reportedSize > 0 ? reportedSize : Buffer.byteLength(raw, "utf-8");
+
+      const material: CurriculumMaterial = {
+        id: `mat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        groupId,
+        title: title || fileName.replace(/\.[^/.]+$/, "") || "منهج دراسي جديد",
+        subject: subject || "عام",
+        grade: grade || "",
+        fileName,
+        fileType,
+        fileSize,
+        rawText: raw,
+        cleanedText: cleaned,
+        wordCount,
+        charCount,
+        topics: combinedTopics,
+        sections,
+        ocrUsed: false,
+        digitalFallback: false,
+        uploadedBy: {
+          id: auth.userId,
+          name: auth.user.firstName || "المعلم",
+          username: auth.user.username || undefined,
+          photoUrl: auth.user.photoUrl || undefined,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveMaterial(material);
+
+      return NextResponse.json({
+        success: true,
+        material,
+        message: "تم حفظ واستخراج المنهج بنجاح!",
+      });
+    }
+
+    // Manual text input
     title = body.title?.trim() || "";
     subject = body.subject?.trim() || "عام";
     grade = body.grade?.trim() || "";
