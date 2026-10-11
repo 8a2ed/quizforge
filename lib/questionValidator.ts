@@ -1,6 +1,16 @@
 export interface RawGeneratedQuestion {
-  question: string;
-  options: string[] | Record<string, string>;
+  question?: string;
+  questionText?: string;
+  title?: string;
+  prompt?: string;
+  text?: string;
+  q?: string;
+  options?: string[] | Record<string, string> | string;
+  choices?: string[] | Record<string, string> | string;
+  answers?: string[] | Record<string, string> | string;
+  alternatives?: string[] | Record<string, string> | string;
+  items?: string[] | Record<string, string> | string;
+  distractors?: string[] | Record<string, string> | string;
   correctOptionId?: number | string;
   correct_option_id?: number | string;
   correctAnswer?: string | number;
@@ -8,6 +18,10 @@ export interface RawGeneratedQuestion {
   correctOption?: string | number;
   correct_option?: string | number;
   answer?: string | number;
+  correct?: string | number;
+  rightAnswer?: string | number;
+  solution?: string | number;
+  key?: string | number;
   explanation?: string;
   difficulty?: "EASY" | "MEDIUM" | "HARD" | string;
   topic?: string;
@@ -79,7 +93,11 @@ function resolveCorrectOptionIndex(
     raw.correct_answer ??
     raw.correctOption ??
     raw.correct_option ??
-    raw.answer;
+    raw.answer ??
+    (raw as any).correct ??
+    (raw as any).rightAnswer ??
+    (raw as any).solution ??
+    (raw as any).key;
 
   if (candidate === undefined || candidate === null) {
     return 0;
@@ -146,7 +164,15 @@ export function validateAndSanitizeQuestion(
   const errors: string[] = [];
 
   // 1. Question validation & sanitization
-  let question = (raw.question || "").trim();
+  let question = (
+    raw.question ||
+    raw.questionText ||
+    raw.title ||
+    raw.prompt ||
+    raw.text ||
+    raw.q ||
+    ""
+  ).trim();
   if (!question) {
     errors.push("نص السؤال فارغ");
     question = `سؤال غير محدد ${index + 1}`;
@@ -155,12 +181,33 @@ export function validateAndSanitizeQuestion(
     question = cleanAndTruncate(question, TELEGRAM_LIMITS.MAX_QUESTION_LENGTH);
   }
 
-  // 2. Options extraction & normalization (handles array or object key-value pairs)
+  // 2. Options extraction & normalization (handles array, object key-value pairs, or string)
+  const rawOptCandidates =
+    raw.options ??
+    raw.choices ??
+    raw.answers ??
+    raw.alternatives ??
+    raw.items ??
+    raw.distractors;
+
   let rawOptions: string[] = [];
-  if (Array.isArray(raw.options)) {
-    rawOptions = raw.options.map((o) => (typeof o === "object" && o !== null ? (o as any).text || (o as any).option || String(o) : String(o || "")));
-  } else if (raw.options && typeof raw.options === "object") {
-    rawOptions = Object.values(raw.options).map((v) => String(v || ""));
+  if (Array.isArray(rawOptCandidates)) {
+    rawOptions = rawOptCandidates.map((o) =>
+      typeof o === "object" && o !== null
+        ? (o as any).text || (o as any).option || (o as any).title || (o as any).value || String(o)
+        : String(o || "")
+    );
+  } else if (rawOptCandidates && typeof rawOptCandidates === "object") {
+    rawOptions = Object.values(rawOptCandidates).map((v) =>
+      typeof v === "object" && v !== null
+        ? (v as any).text || (v as any).option || (v as any).title || String(v)
+        : String(v || "")
+    );
+  } else if (typeof rawOptCandidates === "string") {
+    rawOptions = (rawOptCandidates as string)
+      .split(/\r?\n|;\s*|,\s*(?=[A-D\d]\)|\([A-D\d]\)|[A-D\d]\.)/)
+      .map((s) => s.replace(/^[A-Da-d0-9\-\.\)\s]+/, "").trim())
+      .filter(Boolean);
   }
 
   const processedOptions: string[] = [];

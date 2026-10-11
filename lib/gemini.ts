@@ -167,17 +167,24 @@ export function isModelNotFoundError(status: number, message: string): boolean {
  */
 export function shouldTriggerModelFallback(status: number, message: string): boolean {
   if (isModelNotFoundError(status, message)) return true;
-  if (status === 429) {
-    const lower = (message || "").toLowerCase();
-    if (
-      lower.includes("quota exceeded") ||
-      lower.includes("free_tier_requests") ||
-      lower.includes("resource_exhausted") ||
-      lower.includes("limit:") ||
-      lower.includes("retry in")
-    ) {
-      return true;
-    }
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+  const lower = (message || "").toLowerCase();
+  if (
+    lower.includes("quota exceeded") ||
+    lower.includes("rate limit") ||
+    lower.includes("free_tier_requests") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("limit:") ||
+    lower.includes("retry in") ||
+    lower.includes("overloaded") ||
+    lower.includes("high demand") ||
+    lower.includes("unavailable") ||
+    lower.includes("not supported for generatecontent") ||
+    lower.includes("only supports interactions api")
+  ) {
+    return true;
   }
   return false;
 }
@@ -190,15 +197,15 @@ export const KNOWN_DEPRECATED_MODELS = new Set([
   "gemini-1.5-flash",
   "gemini-1.5-pro",
   "gemini-1.0-pro",
+  "gemini-2.5-flash-lite",
 ]);
 
 /**
  * Builds an ordered list of fallback candidates:
  * 1. DEFAULT_GEMINI_MODEL (gemini-3.8-flash)
- * 2. gemini-2.5-flash
- * 3. gemini-2.5-pro
- * 4. Any models returned by dynamic ListModels API
- * Filters out the failed model and known deprecated models.
+ * 2. Stable modern models (gemini-3.5-flash, gemini-3.6-flash, etc.)
+ * 3. Any models returned by dynamic ListModels API
+ * Filters out the failed model, known deprecated models, and non-text models (tts, image, etc.).
  */
 export function getFallbackCandidates(
   failedModel: string,
@@ -207,24 +214,54 @@ export function getFallbackCandidates(
   const cleanFailed = normalizeModelName(failedModel);
   const candidates: string[] = [];
 
+  const isNonTextModel = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return (
+      lower.includes("-tts") ||
+      lower.includes("-image") ||
+      lower.includes("computer-use") ||
+      lower.includes("embedding") ||
+      lower.includes("nano") ||
+      lower.includes("deep-research") ||
+      lower.includes("lyria") ||
+      lower.includes("aqa") ||
+      lower.includes("robotics") ||
+      lower.includes("transcribe") ||
+      lower.includes("audio") ||
+      lower.includes("customtools")
+    );
+  };
+
   const addIfValid = (m: string) => {
     const clean = normalizeModelName(m);
     if (!clean || clean === cleanFailed) return;
     if (KNOWN_DEPRECATED_MODELS.has(clean)) return;
+    if (isNonTextModel(clean)) return;
     if (!candidates.includes(clean)) {
       candidates.push(clean);
     }
   };
 
   addIfValid(DEFAULT_GEMINI_MODEL);
+  addIfValid("gemini-3.6-flash");
+  addIfValid("gemini-3.5-flash");
+  addIfValid("gemini-3.7-flash");
+  addIfValid("gemini-flash-latest");
   addIfValid("gemini-2.5-flash");
   addIfValid("gemini-2.5-pro");
+  addIfValid("gemini-pro-latest");
+  addIfValid("gemini-3-flash-preview");
+  addIfValid("gemini-3.5-flash-lite");
+  addIfValid("gemini-3.1-flash-lite");
+  addIfValid("gemini-flash-lite-latest");
 
-  for (const m of dynamicModels) {
-    const clean = normalizeModelName(m.id);
-    if (clean && clean !== cleanFailed && !candidates.includes(clean)) {
-      candidates.push(clean);
-    }
+  // Sort dynamic models so text flash models come first and non-text models are excluded
+  const sortedDynamic = [...dynamicModels]
+    .filter((m) => !isNonTextModel(m.id))
+    .sort((a, b) => getModelSortScore(b.id) - getModelSortScore(a.id));
+
+  for (const m of sortedDynamic) {
+    addIfValid(m.id);
   }
 
   return candidates;
@@ -232,13 +269,31 @@ export function getFallbackCandidates(
 
 function getModelSortScore(id: string): number {
   if (id === DEFAULT_GEMINI_MODEL) return 1000;
-  if (id.includes("3.8") && id.includes("flash")) return 900;
-  if (id.includes("3.8")) return 850;
-  if (id.includes("2.5") && id.includes("flash")) return 800;
-  if (id.includes("2.5") && id.includes("pro")) return 750;
-  if (id.includes("2.5")) return 700;
-  if (id.includes("flash")) return 600;
-  if (id.includes("pro")) return 500;
+  if (
+    id.includes("-tts") ||
+    id.includes("-image") ||
+    id.includes("computer-use") ||
+    id.includes("audio") ||
+    id.includes("robotics") ||
+    id.includes("transcribe") ||
+    id.includes("deep-research")
+  ) {
+    return 0;
+  }
+  if (id.includes("3.8") && id.includes("flash")) return 980;
+  if (id.includes("3.6") && id.includes("flash")) return 960;
+  if (id.includes("3.5") && id.includes("flash")) return 950;
+  if (id.includes("3.7") && id.includes("flash")) return 940;
+  if (id.includes("flash-latest")) return 930;
+  if (id.includes("2.5") && id.includes("flash")) return 900;
+  if (id.includes("2.5") && id.includes("pro")) return 890;
+  if (id.includes("pro-latest")) return 880;
+  if (id.includes("3-flash")) return 870;
+  if (id.includes("3.5") && id.includes("lite")) return 800;
+  if (id.includes("3.1") && id.includes("lite")) return 790;
+  if (id.includes("flash-lite-latest")) return 780;
+  if (id.includes("flash")) return 750;
+  if (id.includes("pro")) return 700;
   return 100;
 }
 
@@ -315,12 +370,34 @@ async function callGeminiGenerateContent(
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
 
   try {
-    const res = await fetch(endpoint, {
+    let res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(timeoutMs),
     });
+
+    // If 400 Bad Request happens and we sent responseSchema, retry without responseSchema
+    if (!res.ok && res.status === 400 && requestBody?.generationConfig?.responseSchema) {
+      const fallbackBody = {
+        ...requestBody,
+        generationConfig: {
+          ...requestBody.generationConfig,
+        },
+      };
+      delete fallbackBody.generationConfig.responseSchema;
+      try {
+        const retryRes = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(fallbackBody),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (retryRes.ok) {
+          res = retryRes;
+        }
+      } catch {}
+    }
 
     if (!res.ok) {
       let errorDetails = "";
@@ -335,7 +412,12 @@ async function callGeminiGenerateContent(
 
     const data = await res.json();
     const parts = data.candidates?.[0]?.content?.parts || [];
-    const rawText = parts.map((p: any) => p.text || "").join("");
+    // Exclude thought/reasoning parts so they don't break JSON parsing
+    const contentParts = parts.filter((p: any) => !p.thought && typeof p.text === "string");
+    const rawText = (contentParts.length > 0 ? contentParts : parts)
+      .map((p: any) => (typeof p.text === "string" ? p.text : ""))
+      .join("");
+
     if (!rawText && data.candidates?.[0]?.finishReason && data.candidates[0].finishReason !== "STOP") {
       return {
         ok: false,
@@ -411,17 +493,18 @@ export async function generateCurriculumQuestions(
             items: {
               type: "OBJECT",
               properties: {
-                question: { type: "STRING" },
+                question: { type: "STRING", description: "Direct question text, maximum 300 characters" },
                 options: {
                   type: "ARRAY",
                   items: { type: "STRING" },
+                  description: "2 to 4 distinct answer options, maximum 100 characters each",
                 },
-                correctOptionId: { type: "INTEGER" },
-                explanation: { type: "STRING" },
-                difficulty: { type: "STRING" },
-                topic: { type: "STRING" },
-                bloomTaxonomy: { type: "STRING" },
-                groundingQuote: { type: "STRING" },
+                correctOptionId: { type: "INTEGER", description: "0-based integer index of correct option" },
+                explanation: { type: "STRING", description: "Clear explanation why the answer is correct, maximum 200 characters" },
+                difficulty: { type: "STRING", enum: ["EASY", "MEDIUM", "HARD"] },
+                topic: { type: "STRING", description: "Short topic name, maximum 40 characters" },
+                bloomTaxonomy: { type: "STRING", enum: ["Recall", "Understanding", "Application", "Analysis"] },
+                groundingQuote: { type: "STRING", description: "Short quote from excerpt proving the answer, maximum 150 characters" },
               },
               required: ["question", "options", "correctOptionId", "explanation"],
             },
@@ -429,7 +512,7 @@ export async function generateCurriculumQuestions(
         },
         required: ["questions"],
       },
-      temperature: 0.15, // Low temperature for deterministic grounding
+      temperature: 0.25,
       maxOutputTokens: 8192,
     },
   };
@@ -438,10 +521,19 @@ export async function generateCurriculumQuestions(
   let fallbackUsed = false;
   let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
 
-  // If model fails with 404, deprecation, or quota exhaustion (429), trigger intelligent fallback
-  if (!apiRes.ok && shouldTriggerModelFallback(apiRes.status, apiRes.errorDetails)) {
+  let rawQuestions: RawGeneratedQuestion[] = [];
+  if (apiRes.ok && apiRes.text) {
+    try {
+      rawQuestions = extractQuestionsFromJson(apiRes.text);
+    } catch (parseErr) {
+      console.warn(`[Gemini] Initial model '${requestedModel}' produced unparseable output:`, parseErr);
+    }
+  }
+
+  // If initial model failed or parsing produced no valid questions, try fallback candidates
+  if (!apiRes.ok || rawQuestions.length === 0) {
     console.warn(
-      `[Gemini] Model '${requestedModel}' failed with (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
+      `[Gemini] Model '${requestedModel}' failed or returned invalid response (status: ${apiRes.status}). Initiating auto-fallback...`
     );
 
     let fetched: AvailableGeminiModel[] = [];
@@ -454,14 +546,23 @@ export async function generateCurriculumQuestions(
     const fallbackCandidates = getFallbackCandidates(requestedModel, fetched);
 
     for (const candidate of fallbackCandidates) {
+      if (candidate === requestedModel) continue;
       console.log(`[Gemini] Attempting fallback model: ${candidate}`);
       const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
       if (fallbackRes.ok && fallbackRes.text) {
-        console.log(`[Gemini] Fallback succeeded with model: ${candidate}`);
-        apiRes = fallbackRes;
-        activeModel = candidate;
-        fallbackUsed = true;
-        break;
+        try {
+          const candidateQuestions = extractQuestionsFromJson(fallbackRes.text);
+          if (candidateQuestions.length > 0) {
+            console.log(`[Gemini] Fallback succeeded with model: ${candidate} (${candidateQuestions.length} questions)`);
+            apiRes = fallbackRes;
+            activeModel = candidate;
+            fallbackUsed = true;
+            rawQuestions = candidateQuestions;
+            break;
+          }
+        } catch (e) {
+          console.warn(`[Gemini] Fallback model '${candidate}' returned unparseable output:`, e);
+        }
       }
     }
   }
@@ -474,9 +575,6 @@ export async function generateCurriculumQuestions(
   if (!rawText) {
     throw new Error("لم يتم استلام أي نص من نموذج الذكاء الاصطناعي");
   }
-
-  // Resilient multi-stage structured JSON parser
-  const rawQuestions = extractQuestionsFromJson(rawText);
 
   if (rawQuestions.length === 0) {
     throw new Error("لم يحتوِ رد الذكاء الاصطناعي على أي أسئلة صالحة");
@@ -501,77 +599,390 @@ export async function generateCurriculumQuestions(
 }
 
 /**
- * Robust JSON extraction resilient to LLM preambles, code fences, and trailing commas.
+ * Repairs broken/truncated JSON syntax from LLMs (e.g. unescaped newlines, trailing commas, unclosed brackets).
  */
-export function extractQuestionsFromJson(rawText: string): RawGeneratedQuestion[] {
-  const tryParse = (str: string): any => {
-    // Strip trailing commas before closing braces/brackets
-    const sanitized = str.replace(/,\s*([}\]])/g, "$1").trim();
-    return JSON.parse(sanitized);
+export function repairJsonSyntax(raw: string): string {
+  if (!raw || typeof raw !== "string") return "";
+
+  let text = raw.trim();
+
+  // Strip single-line and multi-line comments
+  text = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  text = text.replace(/(^|[^:])\/\/[^\r\n]*/g, "$1");
+
+  // Fix python literals
+  text = text.replace(/:\s*True\b/g, ": true");
+  text = text.replace(/:\s*False\b/g, ": false");
+  text = text.replace(/:\s*None\b/g, ": null");
+
+  // If single quotes are used as JSON delimiters (e.g. {'questions': [...]})
+  if (text.includes("'") && !text.includes('"')) {
+    text = text.replace(/'((?:\\.|[^'\\])*)'/g, '"$1"');
+  }
+
+  let inString = false;
+  let isEscaped = false;
+  let result = "";
+  const stack: string[] = [];
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+
+    if (inString) {
+      if (isEscaped) {
+        result += char;
+        isEscaped = false;
+      } else if (char === "\\") {
+        const nextChar = text[i + 1] || "";
+        if (/["\\/bfnrtu]/.test(nextChar)) {
+          result += char;
+          isEscaped = true;
+        } else {
+          // Invalid JSON escape sequence (e.g. \s in \sqrt, \alpha in math)
+          // Escape the backslash itself so it becomes valid JSON literal \\
+          result += "\\\\";
+        }
+      } else if (char === '"') {
+        // Lookahead to verify if this quote really ends the string
+        // In valid JSON, closing quote must be followed by optional whitespace then: , } ] : or EOF
+        const nextChars = text.slice(i + 1, i + 30).trim();
+        const isValidFollower =
+          nextChars.length === 0 ||
+          /^[,}\]:\n\r]/.test(nextChars) ||
+          /^[A-Za-z0-9_"]+\s*:/.test(nextChars);
+
+        if (isValidFollower) {
+          inString = false;
+          result += char;
+        } else {
+          // Unescaped inner quote: escape it!
+          result += '\\"';
+        }
+      } else if (char === "\n") {
+        result += "\\n";
+      } else if (char === "\r") {
+        result += "\\r";
+      } else if (char === "\t") {
+        result += "\\t";
+      } else {
+        result += char;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+        result += char;
+      } else if (char === "{" || char === "[") {
+        stack.push(char);
+        result += char;
+      } else if (char === "}") {
+        if (stack.length > 0 && stack[stack.length - 1] === "{") {
+          stack.pop();
+        }
+        result += char;
+      } else if (char === "]") {
+        if (stack.length > 0 && stack[stack.length - 1] === "[") {
+          stack.pop();
+        }
+        result += char;
+      } else {
+        result += char;
+      }
+    }
+  }
+
+  // Close unclosed string at EOF
+  if (inString) {
+    result += '"';
+  }
+
+  // Remove trailing commas before closing braces/brackets
+  result = result.replace(/,\s*([\]}])/g, "$1");
+  // Remove trailing comma at very end of string
+  result = result.replace(/,\s*$/, "");
+
+  // If ends with a dangling incomplete key or colon (e.g. `,"topic": ` or `,"topic": "` or `,"topic"`), clean it
+  result = result.replace(/,\s*"[^"]*"\s*:\s*"?$/, "");
+  result = result.replace(/,\s*"[^"]*"\s*$/, "");
+  result = result.replace(/,\s*$/, "");
+
+  // Close unclosed brackets/braces from stack in reverse order
+  while (stack.length > 0) {
+    const openChar = stack.pop();
+    if (openChar === "{") {
+      result = result.replace(/,\s*$/, "") + "}";
+    } else if (openChar === "[") {
+      result = result.replace(/,\s*$/, "") + "]";
+    }
+  }
+
+  // Final cleanup of trailing commas
+  result = result.replace(/,\s*([\]}])/g, "$1");
+
+  return result;
+}
+
+/**
+ * Robust JSON extraction and parsing resilient to LLM preambles, code fences, unescaped characters, and truncated output.
+ */
+export function cleanAndParseJson(rawText: string): any {
+  if (!rawText || typeof rawText !== "string") return null;
+
+  let text = rawText.trim();
+
+  // Strip BOM and consecutive invisible/directional control characters
+  text = text.replace(/^\uFEFF/, "");
+  text = text.replace(/[\u200E\u200F\u202A-\u202E\u200B\u200C\u200D]{2,}/g, "");
+
+  // Strip <thought> or <thinking> blocks (both closed and unclosed before JSON)
+  text = text.replace(/<(?:thought|thinking)>[\s\S]*?<\/(?:thought|thinking)>/gi, "").trim();
+  text = text.replace(/<(?:thought|thinking)>[\s\S]*?(?=\{|\[|$)/gi, "").trim();
+
+  const tryJson = (str: string): any => {
+    if (!str || typeof str !== "string") return null;
+    const trimmed = str.trim();
+    if (!trimmed) return null;
+
+    // Direct
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "string") {
+        try {
+          const inner = JSON.parse(parsed);
+          if (inner && typeof inner === "object") return inner;
+        } catch {}
+      }
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+
+    // Repaired
+    try {
+      const repaired = repairJsonSyntax(trimmed);
+      const parsed = JSON.parse(repaired);
+      if (typeof parsed === "string") {
+        try {
+          const inner = JSON.parse(parsed);
+          if (inner && typeof inner === "object") return inner;
+        } catch {}
+      }
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+
+    // Single quotes to double quotes for python dicts
+    if (trimmed.includes("'")) {
+      try {
+        const converted = trimmed.replace(/'((?:\\.|[^'\\])*)'/g, '"$1"');
+        const parsed = JSON.parse(converted);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch {}
+      try {
+        const repaired = repairJsonSyntax(trimmed.replace(/'((?:\\.|[^'\\])*)'/g, '"$1"'));
+        const parsed = JSON.parse(repaired);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch {}
+    }
+
+    return null;
   };
 
-  let parsed: any = null;
+  // 1. Direct parse
+  const direct = tryJson(text);
+  if (direct) return direct;
 
-  // 1. Direct parse attempt
-  try {
-    parsed = tryParse(rawText);
-  } catch {}
-
-  // 2. Code fence extraction ```json ... ```
-  if (!parsed) {
-    const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (fenceMatch?.[1]) {
-      try {
-        parsed = tryParse(fenceMatch[1]);
-      } catch {}
+  // 2. Code fences ```json ... ``` or ``` ... ```
+  const fenceMatches = text.matchAll(/```(?:json)?\s*([\s\S]*?)(?:```|$)/gi);
+  for (const match of fenceMatches) {
+    if (match[1]) {
+      const fenced = match[1].trim();
+      const res = tryJson(fenced);
+      if (res) return res;
     }
   }
 
-  // 3. Outermost JSON object search `{ ... }`
-  if (!parsed) {
-    const firstBrace = rawText.indexOf("{");
-    const lastBrace = rawText.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      try {
-        parsed = tryParse(rawText.slice(firstBrace, lastBrace + 1));
-      } catch {}
+  // 3. Search specifically around key anchors ("questions" or "question")
+  const anchorMatch = text.match(/"questions?"\s*:/i);
+  if (anchorMatch && anchorMatch.index !== undefined) {
+    const anchorIdx = anchorMatch.index;
+    const startBrace = text.lastIndexOf("{", anchorIdx);
+    if (startBrace !== -1) {
+      const candidate = text.slice(startBrace);
+      const res = tryJson(candidate);
+      if (res) return res;
     }
   }
 
-  // 4. Outermost JSON array search `[ ... ]`
-  if (!parsed) {
-    const firstBracket = rawText.indexOf("[");
-    const lastBracket = rawText.lastIndexOf("]");
-    if (firstBracket !== -1 && lastBracket > firstBracket) {
-      try {
-        parsed = tryParse(rawText.slice(firstBracket, lastBracket + 1));
-      } catch {}
+  // 4. Outermost JSON Object `{ ... }`
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const objCandidate = text.slice(firstBrace, lastBrace + 1);
+    const res = tryJson(objCandidate);
+    if (res) return res;
+  } else if (firstBrace !== -1) {
+    const res = tryJson(text.slice(firstBrace));
+    if (res) return res;
+  }
+
+  // 5. Outermost JSON Array `[ ... ]`
+  const firstBracket = text.indexOf("[");
+  const lastBracket = text.lastIndexOf("]");
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    const arrCandidate = text.slice(firstBracket, lastBracket + 1);
+    const res = tryJson(arrCandidate);
+    if (res) return res;
+  } else if (firstBracket !== -1) {
+    const res = tryJson(text.slice(firstBracket));
+    if (res) return res;
+  }
+
+  return null;
+}
+
+/**
+ * Fallback regex extractor that scrapes individual question objects when JSON structure is damaged.
+ */
+export function extractQuestionsViaRegex(rawText: string): RawGeneratedQuestion[] {
+  const list: RawGeneratedQuestion[] = [];
+  const qRegex = /"(?:question|questionText|prompt|title|text|نص_السؤال|السؤال)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/gi;
+  let qMatch: RegExpExecArray | null;
+
+  while ((qMatch = qRegex.exec(rawText)) !== null) {
+    const questionText = qMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n").trim();
+    if (!questionText) continue;
+
+    const startIdx = qMatch.index;
+    const nextMatch = rawText.slice(startIdx + qMatch[0].length).search(/"(?:question|questionText|prompt|title|text)"\s*:/i);
+    const chunkEnd = nextMatch !== -1 ? startIdx + qMatch[0].length + nextMatch : rawText.length;
+    const chunk = rawText.slice(startIdx, Math.min(chunkEnd, startIdx + 3000));
+
+    let options: string[] = [];
+    const optionsBlock = chunk.match(/"(?:options|choices|answers|alternatives|items|الخيارات)"\s*:\s*\[([\s\S]*?)\]/i);
+    if (optionsBlock && optionsBlock[1]) {
+      const optItems = optionsBlock[1].match(/"([^"\\]*(?:\\.[^"\\]*)*)"/g);
+      if (optItems && optItems.length >= 2) {
+        options = optItems.map((o) => o.replace(/^"|"$/g, "").replace(/\\"/g, '"').trim());
+      }
+    }
+
+    // If options array was truncated or missing closing bracket
+    if (options.length < 2) {
+      const optTruncMatch = chunk.match(/"(?:options|choices|answers|alternatives|items)"\s*:\s*\[([^\]]*)$/i);
+      if (optTruncMatch && optTruncMatch[1]) {
+        const optItems = optTruncMatch[1].match(/"([^"\\]*(?:\\.[^"\\]*)*)"/g);
+        if (optItems && optItems.length >= 2) {
+          options = optItems.map((o) => o.replace(/^"|"$/g, "").replace(/\\"/g, '"').trim());
+        }
+      }
+    }
+
+    const corrMatch = chunk.match(
+      /"(?:correctOptionId|correct_option_id|correctAnswer|correct_answer|answer|correct|rightAnswer|solution|key|الإجابة_الصحيحة)"\s*:\s*["']?(\d+|[A-Za-z]|[أ-ي])["']?/i
+    );
+    let correctOptionId: any = 0;
+    if (corrMatch && corrMatch[1]) {
+      const val = corrMatch[1];
+      if (/^\d+$/.test(val)) {
+        correctOptionId = parseInt(val, 10);
+      } else {
+        correctOptionId = val;
+      }
+    }
+
+    const expMatch = chunk.match(/"(?:explanation|الشرح|reason)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+    const explanation = expMatch ? expMatch[1].replace(/\\"/g, '"').trim() : "";
+
+    const diffMatch = chunk.match(/"(?:difficulty|المستوى)"\s*:\s*"([^"]+)"/i);
+    const difficulty = diffMatch ? diffMatch[1].trim() : "MEDIUM";
+
+    const topMatch = chunk.match(/"(?:topic|الموضوع)"\s*:\s*"([^"]+)"/i);
+    const topic = topMatch ? topMatch[1].trim() : "عام";
+
+    const quoteMatch = chunk.match(/"(?:groundingQuote|الاقتباس)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i);
+    const groundingQuote = quoteMatch ? quoteMatch[1].replace(/\\"/g, '"').trim() : "";
+
+    if (options.length >= 2) {
+      list.push({
+        question: questionText,
+        options,
+        correctOptionId,
+        explanation,
+        difficulty,
+        topic,
+        groundingQuote,
+      });
     }
   }
 
-  if (!parsed) {
-    console.error("[Gemini] Failed to parse JSON response:", rawText);
+  return list;
+}
+
+/**
+ * Robust JSON extraction resilient to LLM preambles, code fences, trailing commas, and truncated responses.
+ */
+export function extractQuestionsFromJson(rawText: string): RawGeneratedQuestion[] {
+  const parsed = cleanAndParseJson(rawText);
+
+  let rawList: any[] = [];
+  if (Array.isArray(parsed)) {
+    rawList = parsed;
+  } else if (parsed && typeof parsed === "object") {
+    const candidateKeys = [
+      "questions", "quiz", "items", "data", "mcqs", "results",
+      "Questions", "Quiz", "Items", "Data", "MCQs", "Results",
+      "questions_list", "questionsList", "exam", "output"
+    ];
+    for (const key of candidateKeys) {
+      if (Array.isArray(parsed[key])) {
+        rawList = parsed[key];
+        break;
+      }
+      // Check nested objects, e.g. parsed.data?.questions or parsed.result?.mcqs
+      if (parsed[key] && typeof parsed[key] === "object") {
+        for (const subKey of candidateKeys) {
+          if (Array.isArray(parsed[key][subKey])) {
+            rawList = parsed[key][subKey];
+            break;
+          }
+        }
+        if (rawList.length > 0) break;
+      }
+    }
+
+    // If single question object was returned
+    if (
+      rawList.length === 0 &&
+      (parsed.question || parsed.prompt || parsed.title || parsed.text || parsed.questionText) &&
+      (Array.isArray(parsed.options) || Array.isArray(parsed.choices) || Array.isArray(parsed.answers) || typeof parsed.options === "object" || typeof parsed.choices === "object")
+    ) {
+      rawList = [parsed];
+    }
+
+    // Check if any property value is an array of questions
+    if (rawList.length === 0) {
+      for (const val of Object.values(parsed)) {
+        if (
+          Array.isArray(val) &&
+          val.length > 0 &&
+          typeof val[0] === "object" &&
+          (val[0]?.question || val[0]?.prompt || val[0]?.title || val[0]?.text || val[0]?.questionText)
+        ) {
+          rawList = val;
+          break;
+        }
+      }
+    }
+  }
+
+  // If JSON parsing yielded no items, attempt regex extraction fallback
+  if (rawList.length === 0) {
+    rawList = extractQuestionsViaRegex(rawText);
+  }
+
+  if (rawList.length === 0) {
+    console.error("[Gemini] Failed to parse JSON response:", rawText?.slice(0, 500));
     throw new Error("فشل فك شفرة رد الذكاء الاصطناعي كـ JSON صالح");
   }
 
-  // Extract questions array from varied object shapes
-  if (Array.isArray(parsed)) {
-    return parsed;
-  }
-  if (Array.isArray(parsed.questions)) {
-    return parsed.questions;
-  }
-  if (Array.isArray(parsed.quiz)) {
-    return parsed.quiz;
-  }
-  if (Array.isArray(parsed.items)) {
-    return parsed.items;
-  }
-  if (Array.isArray(parsed.data)) {
-    return parsed.data;
-  }
-
-  return [];
+  return rawList;
 }
 
 /**
@@ -648,8 +1059,8 @@ export async function testGeminiConnection(
   let activeModel = requestedModel;
   let fallbackUsed = false;
 
-  // Auto-fallback if requested model is 404 or deprecated
-  if (!pingRes.ok && isModelNotFoundError(pingRes.status, pingRes.errorMsg)) {
+  // Auto-fallback if requested model is 404, deprecated, 503, or quota exhausted
+  if (!pingRes.ok && shouldTriggerModelFallback(pingRes.status, pingRes.errorMsg)) {
     console.warn(
       `[Gemini Test] Model '${requestedModel}' failed (${pingRes.status}): ${pingRes.errorMsg}. Initiating auto-fallback...`
     );

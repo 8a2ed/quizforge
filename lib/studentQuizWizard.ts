@@ -377,11 +377,11 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
   const sKey = getSessionKey(userId, chatId);
   const session = quizSessions.get(sKey);
 
-  // Ownership verification: ensure only the student who initiated /qs can click
+  // Ownership verification: ensure only the student who initiated /qs or /boost can click
   if (!session || session.userId !== userId) {
     await telegram.answerCallbackQuery(
       cbId,
-      "⛔ هذا الكويز مخصص للطالب الذي طلبه فقط. اكتب /qs لبدء كويز خاص بك.",
+      "⛔ هذا الكويز مخصص للطالب الذي طلبه فقط. اكتب /qs أو /boost لبدء كويز خاص بك.",
       true
     );
     return true;
@@ -390,12 +390,12 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
   // Session TTL check
   if (Date.now() - session.updatedAt > SESSION_TTL_MS) {
     quizSessions.delete(sKey);
-    await telegram.answerCallbackQuery(cbId, "⏰ انتهت مهلة الجلسة. اكتب /qs للبدء من جديد.", true);
+    await telegram.answerCallbackQuery(cbId, "⏰ انتهت مهلة الجلسة. اكتب /qs أو /boost للبدء من جديد.", true);
     try {
       await telegram.editMessageText({
         chat_id: chatId,
         message_id: msg.message_id,
-        text: "⏰ <i>انتهت مهلة الجلسة لعدم التفاعل. اكتب <code>/qs</code> للبدء مجدداً.</i>",
+        text: "⏰ <i>انتهت مهلة الجلسة لعدم التفاعل. اكتب <code>/qs</code> أو <code>/boost</code> للبدء مجدداً.</i>",
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [] },
       });
@@ -639,22 +639,41 @@ async function executeGeneration(
       throw new Error("لم يتم ضبط مفتاح Gemini API Key في النظام بعد. يرجى إدخال المفتاح في لوحة التحكم.");
     }
 
-    // 4. Generate with Auto-Fallback (gemini-3.8-flash -> gemini-2.5-flash)
-    const genResult = await generateCurriculumQuestions({
-      apiKey,
-      model: settings.defaultModel || "gemini-3.8-flash",
-      textExcerpt,
-      materialTitle,
-      questionCount: session.questionCount || 5,
-      difficulty: session.difficulty || "mixed",
-      strictGrounding: settings.strictGrounding ?? true,
-      systemInstruction: (settings as any).systemInstruction || undefined,
-    });
+    // 4. Generate with Auto-Fallback and transient retry
+    let genResult: { questions: ValidatedQuestion[]; modelUsed: string; estimatedTokens: number } | null = null;
+    let lastGenError: any = null;
 
-    const questions: ValidatedQuestion[] = genResult.questions || [];
-    if (questions.length === 0) {
-      throw new Error("لم يتمكن المحرك من توليد أسئلة مطابقة للشروط من هذا النص.");
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        genResult = await generateCurriculumQuestions({
+          apiKey,
+          model: settings.defaultModel || "gemini-3.8-flash",
+          textExcerpt,
+          materialTitle,
+          questionCount: session.questionCount || 5,
+          difficulty: session.difficulty || "mixed",
+          strictGrounding: settings.strictGrounding ?? true,
+          systemInstruction: (settings as any).systemInstruction || undefined,
+        });
+
+        if (genResult && genResult.questions && genResult.questions.length > 0) {
+          break;
+        }
+        throw new Error("لم يتمكن المحرك من استخراج أسئلة صالحة من النص المحدد.");
+      } catch (attemptErr: any) {
+        lastGenError = attemptErr;
+        if (attempt >= 2) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
+
+    if (!genResult || !genResult.questions || genResult.questions.length === 0) {
+      throw lastGenError || new Error("لم يتمكن المحرك من توليد أسئلة مطابقة للشروط من هذا النص.");
+    }
+
+    const questions: ValidatedQuestion[] = genResult.questions;
 
     // 5. Update Wizard Message with Success Banner
     await telegram.editMessageText({
@@ -799,7 +818,7 @@ async function executeGeneration(
         text:
           `❌ <b>تعذر إنشاء الكويز:</b>\n\n` +
           `${escapeHtml(errorMsg)}\n\n` +
-          `<i>يمكنك المحاولة مجدداً بكتابة <code>/qs</code> واختيار قسم أو عدد أسئلة مختلف.</i>`,
+          `<i>يمكنك المحاولة مجدداً بكتابة <code>/qs</code> أو <code>/boost</code> واختيار قسم أو عدد أسئلة مختلف.</i>`,
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [] },
       }).catch(() => {});

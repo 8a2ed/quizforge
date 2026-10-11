@@ -386,10 +386,50 @@ Here is the examination paper you requested:
 All questions grounded in text.
   `;
   const extractedQuestions = extractQuestionsFromJson(messyResponse);
-  if (extractedQuestions.length !== 1 || !extractedQuestions[0].question.includes("وحدة السرعة")) {
+  if (extractedQuestions.length !== 1 || !extractedQuestions[0]?.question?.includes("وحدة السرعة")) {
     throw new Error("extractQuestionsFromJson failed on messy LLM response!");
   }
   console.log("  ✓ Handled markdown preamble, code fence, and trailing commas seamlessly");
+
+  // Test python-style single quoted JSON
+  const pythonDict = "{'questions': [{'question': 'ما هو العنصر X؟', 'options': ['حديد', 'نحاس'], 'correctOptionId': 0}]}";
+  const pythonExtracted = extractQuestionsFromJson(pythonDict);
+  if (pythonExtracted.length !== 1 || !pythonExtracted[0]?.question?.includes("العنصر X")) {
+    throw new Error("extractQuestionsFromJson failed on python-style single quoted JSON!");
+  }
+  console.log("  ✓ Handled Python-style single quoted dictionary response");
+
+  // Test double-escaped string JSON
+  const doubleEscaped = '"{\\"questions\\": [{\\"question\\": \\"سؤال مضاعف\\", \\"options\\": [\\"أ\\", \\"ب\\"], \\"correctOptionId\\": 0}]}"';
+  const doubleExtracted = extractQuestionsFromJson(doubleEscaped);
+  if (doubleExtracted.length !== 1 || !doubleExtracted[0]?.question?.includes("سؤال مضاعف")) {
+    throw new Error("extractQuestionsFromJson failed on double-escaped stringified JSON!");
+  }
+  console.log("  ✓ Handled double-escaped stringified JSON response");
+
+  // Test unclosed thought tags before JSON
+  const unclosedThought = "<thought>\nAnalyzing text...\n{\n  \"questions\": [\n    {\n      \"question\": \"سؤال بعد التفكير\",\n      \"options\": [\"أ\", \"ب\"],\n      \"correctOptionId\": 0\n    }\n  ]\n}";
+  const thoughtExtracted = extractQuestionsFromJson(unclosedThought);
+  if (thoughtExtracted.length !== 1 || !thoughtExtracted[0]?.question?.includes("سؤال بعد التفكير")) {
+    throw new Error("extractQuestionsFromJson failed on unclosed thought tags!");
+  }
+  console.log("  ✓ Handled unclosed <thought> tags before JSON");
+
+  // Test LaTeX backslashes inside math question
+  const latexQuestion = '{"questions": [{"question": "ما ناتج \\sqrt{16} + \\frac{1}{2}؟", "options": ["4.5", "5", "8", "2"], "correctOptionId": 0}]}';
+  const latexExtracted = extractQuestionsFromJson(latexQuestion);
+  if (latexExtracted.length !== 1) {
+    throw new Error("extractQuestionsFromJson failed on LaTeX math backslashes!");
+  }
+  console.log("  ✓ Handled LaTeX math formulas with unescaped backslashes");
+
+  // Test truncated JSON with unclosed arrays and braces
+  const truncatedJson = '{"questions": [{"question": "سؤال كامل", "options": ["خيار 1", "خيار 2"], "correctOptionId": 0}, {"question": "سؤال غير مكتمل", "options": ["خيار 1"';
+  const truncExtracted = extractQuestionsFromJson(truncatedJson);
+  if (truncExtracted.length < 1) {
+    throw new Error("extractQuestionsFromJson failed on truncated JSON!");
+  }
+  console.log("  ✓ Handled truncated JSON with unclosed brackets");
 
   // ── 4. AI Storage, Analytics & Protection Tests ──
   console.log("\n[4] Testing AI Storage & Usage Analytics...");

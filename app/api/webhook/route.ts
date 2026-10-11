@@ -658,8 +658,8 @@ export async function POST(req: NextRequest) {
         return grp;
       };
 
-      // Interactive student curriculum quiz generator command: /qs or /qs@BotUsername
-      const qsCmdMatch = text.trim().match(/^[/!]qs(?:@\w+)?$/i);
+      // Interactive student curriculum quiz generator command: /qs, /boost, /quiz or with @BotUsername and optional arguments
+      const qsCmdMatch = text.trim().match(/^[/!](?:qs|boost|quiz)(?:@\w+)?(?:\s+.*)?$/i);
       if (qsCmdMatch) {
         const group = await resolveGroup();
         await handleStudentQuizCommand({

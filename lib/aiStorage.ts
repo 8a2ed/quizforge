@@ -658,7 +658,7 @@ export async function deleteMaterial(groupId: string, materialId: string): Promi
     await safeWriteJson(MATERIALS_FILE, filtered);
     return true;
   }
-  return true;
+  return false;
 }
 
 // ─── AI Generation Logs & Analytics ───────────────────────────────────────────
