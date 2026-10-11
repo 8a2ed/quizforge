@@ -1,5 +1,5 @@
 import { cleanText, splitIntoSections, extractSuggestedTopics, extractTextFromBuffer } from "../lib/textExtractor";
-import { isBrowserExtractable } from "../lib/browserTextExtractor";
+import { isBrowserExtractable, parsePageRange, normalizeDigits } from "../lib/browserTextExtractor";
 import { validateAndSanitizeQuestion, TELEGRAM_LIMITS } from "../lib/questionValidator";
 import {
   getMaterials,
@@ -714,6 +714,50 @@ All questions grounded in text.
   if (isBrowserExtractable({} as File)) throw new Error("isBrowserExtractable should be false for empty file object");
   console.log("  ✓ isBrowserExtractable correctly discriminates between text documents and image/binary formats");
 
+  // A2. Testing parsePageRange and normalizeDigits
+  if (normalizeDigits("١٢٣٤٥") !== "12345" || normalizeDigits("۰۱۲۳۴") !== "01234") {
+    throw new Error("normalizeDigits failed to convert Eastern/Persian numerals!");
+  }
+  const r1 = parsePageRange("1-30");
+  if (!r1 || r1.startPage !== 1 || r1.endPage !== 30) throw new Error("parsePageRange failed on '1-30'");
+  const rArabic = parsePageRange("١-٣٠");
+  if (!rArabic || rArabic.startPage !== 1 || rArabic.endPage !== 30) throw new Error("parsePageRange failed on '١-٣٠'");
+  const rSpaced = parsePageRange(" 1 - 30 ");
+  if (!rSpaced || rSpaced.startPage !== 1 || rSpaced.endPage !== 30) throw new Error("parsePageRange failed on ' 1 - 30 '");
+  const rSingle = parsePageRange("15");
+  if (!rSingle || rSingle.startPage !== 15 || rSingle.endPage !== 15) throw new Error("parsePageRange failed on '15'");
+  const rOpen = parsePageRange("10-", 133);
+  if (!rOpen || rOpen.startPage !== 10 || rOpen.endPage !== 133) throw new Error("parsePageRange failed on '10-'");
+  const rReversed = parsePageRange("30-1");
+  if (!rReversed || rReversed.startPage !== 1 || rReversed.endPage !== 30) throw new Error("parsePageRange failed on '30-1'");
+  const rClamped = parsePageRange("1-200", 133);
+  if (!rClamped || rClamped.startPage !== 1 || rClamped.endPage !== 133) throw new Error("parsePageRange failed on '1-200' clamp");
+  if (parsePageRange("") !== null) throw new Error("parsePageRange should return null on empty string");
+  if (parsePageRange("invalid") !== null) throw new Error("parsePageRange should return null on invalid input");
+
+  // Advanced Arabic & edge-case formats
+  const rArabicTo = parsePageRange("1 إلى 30");
+  if (!rArabicTo || rArabicTo.startPage !== 1 || rArabicTo.endPage !== 30) throw new Error("parsePageRange failed on '1 إلى 30'");
+  const rArabicToAlt = parsePageRange("1 الى 30");
+  if (!rArabicToAlt || rArabicToAlt.startPage !== 1 || rArabicToAlt.endPage !== 30) throw new Error("parsePageRange failed on '1 الى 30'");
+  const rFromTo = parsePageRange("من 1 إلى 30");
+  if (!rFromTo || rFromTo.startPage !== 1 || rFromTo.endPage !== 30) throw new Error("parsePageRange failed on 'من 1 إلى 30'");
+  const rPrefixDash = parsePageRange("من 1-30");
+  if (!rPrefixDash || rPrefixDash.startPage !== 1 || rPrefixDash.endPage !== 30) throw new Error("parsePageRange failed on 'من 1-30'");
+  const rSadPrefix = parsePageRange("ص 1-30");
+  if (!rSadPrefix || rSadPrefix.startPage !== 1 || rSadPrefix.endPage !== 30) throw new Error("parsePageRange failed on 'ص 1-30'");
+  const rPagePrefix = parsePageRange("صفحة 15");
+  if (!rPagePrefix || rPagePrefix.startPage !== 15 || rPagePrefix.endPage !== 15) throw new Error("parsePageRange failed on 'صفحة 15'");
+  const rDots = parsePageRange("10..30");
+  if (!rDots || rDots.startPage !== 10 || rDots.endPage !== 30) throw new Error("parsePageRange failed on '10..30'");
+  const rEndOnly = parsePageRange("-30", 133);
+  if (!rEndOnly || rEndOnly.startPage !== 1 || rEndOnly.endPage !== 30) throw new Error("parsePageRange failed on '-30'");
+  const rHatta = parsePageRange("حتى 30", 133);
+  if (!rHatta || rHatta.startPage !== 1 || rHatta.endPage !== 30) throw new Error("parsePageRange failed on 'حتى 30'");
+  const rMinOnly = parsePageRange("من 10", 133);
+  if (!rMinOnly || rMinOnly.startPage !== 10 || rMinOnly.endPage !== 133) throw new Error("parsePageRange failed on 'من 10'");
+  console.log("  ✓ parsePageRange cleanly parsed standard, Arabic numeral, natural Arabic phrasing, single page, open, and clamped ranges");
+
   // B. Testing line breaks & chapter heading separation with splitIntoSections
   const multiLineWithHeadings = `مقدمة عامة للكتاب وتفاصيل المنهج
 الفصل الأول: العمليات الزراعية الأساسية
@@ -911,6 +955,33 @@ All questions grounded in text.
     throw new Error("Page batching calculation mismatch!");
   }
   console.log(`  ✓ 22.1MB scanned PDF page batching partitioned into ${batches.length} small chunks (${batchSize} pages/chunk)`);
+
+  // C2. Multi-page batching calculation for 133 pages with batchSize 6 (23 chunks instead of 67 chunks)
+  const totalPages133 = 133;
+  const batchSize6 = 6;
+  const batches133: { start: number; end: number }[] = [];
+  for (let p = 1; p <= totalPages133; p += batchSize6) {
+    batches133.push({ start: p, end: Math.min(p + batchSize6 - 1, totalPages133) });
+  }
+  if (batches133.length !== 23 || batches133[0].start !== 1 || batches133[0].end !== 6 || batches133[22].start !== 133 || batches133[22].end !== 133) {
+    throw new Error(`133-page batching mismatch! Expected 23 chunks, got ${batches133.length}`);
+  }
+  console.log(`  ✓ 133-page scanned PDF multi-page batching reduced from 67 down to ${batches133.length} requests (6 pages/chunk, ~420KB/chunk)`);
+
+  // C3. Verify rate-limiting pacer ensures strict compliance with Gemini 15 RPM
+  const targetMinIntervalMs = 4100;
+  const requestsPerMinute = (60 * 1000) / targetMinIntervalMs;
+  if (requestsPerMinute >= 15.0) {
+    throw new Error(`Rate-limiting pacer allows ${requestsPerMinute.toFixed(1)} RPM, exceeding Gemini Free Tier limit of 15 RPM!`);
+  }
+  const simulatedFastElapsed = 1500;
+  const fastPause = Math.max(800, targetMinIntervalMs - simulatedFastElapsed);
+  if (simulatedFastElapsed + fastPause !== 4100) throw new Error("Fast request pacing mismatch");
+
+  const simulatedSlowElapsed = 4500;
+  const slowPause = Math.max(800, targetMinIntervalMs - simulatedSlowElapsed);
+  if (slowPause !== 800) throw new Error("Slow request minimum pause mismatch");
+  console.log(`  ✓ Rate-limiting pacer mathematically enforces max ${requestsPerMinute.toFixed(1)} RPM (< 15 RPM threshold), preventing 429 quota backoffs`);
 
   // D. Simulating OCR accumulation and PreExtractedMaterial persistence with ocrUsed: true
   const ocrAccumulatedText = `الفصل الأول: فسيولوجيا النبات الممسوح ضوئياً

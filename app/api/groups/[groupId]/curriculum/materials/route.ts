@@ -249,7 +249,8 @@ export async function POST(
       return NextResponse.json({
         success: true,
         material,
-        message: "تم حفظ واستخراج المنهج بنجاح!",
+        notice: body.notice || undefined,
+        message: body.notice || "تم حفظ واستخراج المنهج بنجاح!",
       });
     }
 

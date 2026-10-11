@@ -14,6 +14,9 @@ export interface PreExtractedMaterial {
   sections: ExtractedSection[];
   topics: string[];
   ocrUsed?: boolean;
+  digitalFastPath?: boolean;
+  notice?: string;
+  pageCount?: number;
 }
 
 export interface ClientExtractionOptions {
@@ -26,12 +29,138 @@ export interface ClientExtractionOptions {
   forceOcr?: boolean;
   ocrChunkUrl?: string;
   batchSize?: number;
+  startPage?: number;
+  endPage?: number;
+  pageRange?: string;
   onProgress?: (step: string, percent: number) => void;
   processOcrChunk?: (
     pages: string[],
     startPage: number,
     endPage: number
   ) => Promise<{ transcribedText: string; sections?: any[] }>;
+}
+
+/**
+ * Normalizes Eastern Arabic digits (٠١٢٣٤٥٦٧٨٩) and Persian digits (۰۱۲۳۴۵۶۷۸۹) to Western Arabic digits (0123456789).
+ */
+export function normalizeDigits(input: string): string {
+  return input
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776));
+}
+
+/**
+ * Parses user page range input like "1-30", "1 - 30", "١-٣٠", "من 1 إلى 30", "1 الى 30", "15", "10-", "-30", etc.
+ * Supports Eastern Arabic & Persian numerals, Arabic text prefixes/connectors, and clamping against total doc pages.
+ */
+export function parsePageRange(
+  input?: string,
+  maxPages?: number
+): { startPage: number; endPage: number } | null {
+  if (!input || !input.trim()) return null;
+  let normalized = normalizeDigits(input.trim());
+
+  // Open-ended "from X" / "من X" (without end page)
+  const fromOnlyMatch = normalized.match(/^(?:من\s+|from\s+)(\d+)$/i);
+  if (fromOnlyMatch) {
+    let start = parseInt(fromOnlyMatch[1], 10);
+    if (isNaN(start) || start < 1) start = 1;
+    let end = maxPages && maxPages > 0 ? maxPages : start;
+    if (maxPages && maxPages > 0) {
+      start = Math.max(1, Math.min(start, maxPages));
+      end = Math.max(start, Math.min(end, maxPages));
+    }
+    return { startPage: start, endPage: end };
+  }
+
+  // Strip prefixes like "من", "صفحة", "صفحات", "ص", "from", "pages", "page", "p", "p.", "pg"
+  normalized = normalized
+    .replace(/^(?:من\s+|صفحة\s+|صفحات\s+|ص\s+|from\s+|pages?\s+|p\.?\s*|pg\.?\s*)/i, "")
+    .trim();
+
+  // 1. Open-ended start: e.g. "10-", "10 -", "10..", "10 to", "10 الى", "10 إلى", "10 حتى"
+  const openStartMatch = normalized.match(
+    /^(\d+)\s*(?:-|–|—|~|\.\.|:|\s+to\s*|\s+إلى\s*|\s+الى\s*|\s+حتى\s*)$/i
+  );
+  if (openStartMatch) {
+    let start = parseInt(openStartMatch[1], 10);
+    if (isNaN(start) || start < 1) start = 1;
+    let end = maxPages && maxPages > 0 ? maxPages : start;
+    if (maxPages && maxPages > 0) {
+      start = Math.max(1, Math.min(start, maxPages));
+      end = Math.max(start, Math.min(end, maxPages));
+    }
+    return { startPage: start, endPage: end };
+  }
+
+  // 2. Open-ended end: e.g. "-30", "- 30", "..30", "الى 30", "إلى 30", "حتى 30", "to 30"
+  const openEndMatch = normalized.match(
+    /^(?:-|–|—|~|\.\.|:|\s*to\s+|\s*إلى\s+|\s*الى\s+|\s*حتى\s+)\s*(\d+)$/i
+  );
+  if (openEndMatch) {
+    let end = parseInt(openEndMatch[1], 10);
+    if (isNaN(end) || end < 1) end = 1;
+    if (maxPages && maxPages > 0) {
+      end = Math.max(1, Math.min(end, maxPages));
+    }
+    return { startPage: 1, endPage: end };
+  }
+
+  // 3. Range: "1-30", "1 - 30", "1 to 30", "1 الى 30", "1 إلى 30", "1 حتى 30", "1..30", "1:30"
+  const rangeMatch = normalized.match(
+    /^(\d+)\s*(?:-|–|—|~|\.\.|:|\s+to\s+|\s+إلى\s+|\s+الى\s+|\s+حتى\s+|\s+لـ\s+|\s+لغاية\s+)\s*(\d+)$/i
+  );
+  if (rangeMatch) {
+    let start = parseInt(rangeMatch[1], 10);
+    let end = parseInt(rangeMatch[2], 10);
+    if (isNaN(start) || start < 1) start = 1;
+    if (isNaN(end) || end < 1) end = maxPages || start;
+    if (start > end) {
+      const tmp = start;
+      start = end;
+      end = tmp;
+    }
+    if (maxPages && maxPages > 0) {
+      start = Math.max(1, Math.min(start, maxPages));
+      end = Math.max(start, Math.min(end, maxPages));
+    }
+    return { startPage: start, endPage: end };
+  }
+
+  // 4. Single page: "15"
+  const singleMatch = normalized.match(/^(\d+)$/);
+  if (singleMatch) {
+    let p = parseInt(singleMatch[1], 10);
+    if (isNaN(p) || p < 1) p = 1;
+    if (maxPages && maxPages > 0) {
+      p = Math.max(1, Math.min(p, maxPages));
+    }
+    return { startPage: p, endPage: p };
+  }
+
+  return null;
+}
+
+/**
+ * Quickly inspect page count of a PDF file in the browser without extracting full page contents.
+ */
+export async function getPdfPageCount(file: File): Promise<number> {
+  if (!file || !file.name || !file.name.toLowerCase().endsWith(".pdf")) return 0;
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8 = new Uint8Array(arrayBuffer);
+    const pdf = await loadPdfDocument(uint8);
+    const count = pdf.numPages || 0;
+    try {
+      if (typeof pdf.destroy === "function") {
+        pdf.destroy();
+      }
+    } catch {}
+    return count;
+  } catch (e) {
+    console.warn("[getPdfPageCount] Failed to read page count:", e);
+    return 0;
+  }
 }
 
 /**
@@ -87,13 +216,13 @@ export async function loadPdfDocument(uint8: Uint8Array): Promise<any> {
 }
 
 /**
- * Render a single PDF page onto an offscreen HTML <canvas> scaled to crisp ~1024-1280px width,
- * exported as JPEG with 0.75-0.8 quality (~70-120 KB per page).
+ * Render a single PDF page onto an offscreen HTML <canvas> scaled to crisp ~1024px width,
+ * exported as JPEG with 0.70-0.75 quality (~50-70 KB per page).
  */
 export async function renderPdfPageToJpeg(
   page: any,
-  maxWidth: number = 1152,
-  quality: number = 0.78
+  maxWidth: number = 1024,
+  quality: number = 0.72
 ): Promise<string> {
   if (typeof document === "undefined") {
     throw new Error("تتطلب المعالجة البصرية لصفحات المستند بيئة متصفح تدعم Canvas.");
@@ -162,7 +291,7 @@ async function callOcrChunkApi(
   }
 
   let attempts = 0;
-  const maxAttempts = 5;
+  const maxAttempts = 6;
 
   while (attempts < maxAttempts) {
     try {
@@ -194,7 +323,7 @@ async function callOcrChunkApi(
           throw new Error(data?.error || "تم تجاوز معدل طلبات الذكاء الاصطناعي (429). يرجى الانتظار دقيقة والمحاولة ثانية.");
         }
         const backoffMs = isRateLimit
-          ? Math.min(30000, 3000 * Math.pow(2, attempts - 1))
+          ? Math.min(32000, 4000 * Math.pow(2, attempts - 1))
           : 2500 * attempts;
         const waitSec = Math.round(backoffMs / 1000);
         onStatusUpdate?.(
@@ -239,21 +368,30 @@ async function callOcrChunkApi(
 }
 
 /**
- * Automatically process scanned PDF pages in sequential small batches (2-3 pages per chunk)
+ * Automatically process scanned PDF pages in multi-page batches (6-8 pages per chunk)
  * using offscreen canvas rendering and multimodal Gemini OCR.
+ * Reduces API requests by 3x-4x, staying comfortably within Gemini's 15 RPM rate limits.
  */
 export async function processScannedPdfInBrowser(
   pdf: any,
   options?: ClientExtractionOptions
 ): Promise<{ rawText: string; cleanedText: string; sections: ExtractedSection[] }> {
-  const totalPages = pdf.numPages;
-  if (!totalPages || totalPages <= 0) {
+  const totalPagesInDoc = pdf.numPages;
+  if (!totalPagesInDoc || totalPagesInDoc <= 0) {
     throw new Error("ملف الـ PDF لا يحتوي على أي صفحات صالحة.");
   }
 
-  options?.onProgress?.(`📄 تم اكتشاف مستند ممسوح ضوئياً (${totalPages} صفحة)...`, 20);
+  const startPage = Math.max(1, Math.min(options?.startPage || 1, totalPagesInDoc));
+  const endPage = Math.max(startPage, Math.min(options?.endPage || totalPagesInDoc, totalPagesInDoc));
+  const totalPagesToProcess = endPage - startPage + 1;
 
-  const batchSize = Math.max(1, Math.min(options?.batchSize || 2, 4));
+  options?.onProgress?.(
+    `📄 تم اكتشاف مستند ممسوح ضوئياً (معالجة ${totalPagesToProcess} صفحة: من ${startPage} إلى ${endPage} من إجمالي ${totalPagesInDoc})...`,
+    20
+  );
+
+  // Multi-page batching: 6-8 pages per chunk (default 6)
+  const batchSize = Math.max(1, Math.min(options?.batchSize || 6, 8));
   const allTranscribedChunks: string[] = [];
 
   const ocrUrl =
@@ -264,35 +402,42 @@ export async function processScannedPdfInBrowser(
     throw new Error("لا يوجد مسار معالجة بصرية متاح للمستند الممسوح ضوئياً.");
   }
 
-  for (let pageNum = 1; pageNum <= totalPages; pageNum += batchSize) {
-    const endPage = Math.min(pageNum + batchSize - 1, totalPages);
+  for (let pageNum = startPage; pageNum <= endPage; pageNum += batchSize) {
+    const endBatch = Math.min(pageNum + batchSize - 1, endPage);
     const currentBatchPages: string[] = [];
 
     // Render pages of current batch on offscreen canvas with real-time per-page feedback
-    for (let p = pageNum; p <= endPage; p++) {
-      const renderPct = Math.min(85, 20 + Math.round(((p - 1) / totalPages) * 65));
+    for (let p = pageNum; p <= endBatch; p++) {
+      const renderPct = Math.min(
+        85,
+        20 + Math.round(((p - startPage) / totalPagesToProcess) * 65)
+      );
       options?.onProgress?.(
-        `🔍 جاري قراءة واستخراج الصفحات بالذكاء الاصطناعي (صفحة ${p} من ${totalPages})...`,
+        `🔍 جاري قراءة واستخراج الصفحات بالذكاء الاصطناعي (صفحة ${p} من ${endPage})...`,
         renderPct
       );
 
       const page = await pdf.getPage(p);
-      const jpegBase64 = await renderPdfPageToJpeg(page, 1152, 0.78);
+      const jpegBase64 = await renderPdfPageToJpeg(page, 1024, 0.72);
       currentBatchPages.push(jpegBase64);
     }
 
-    const currentPct = Math.min(85, 20 + Math.round((endPage / totalPages) * 65));
+    const currentPct = Math.min(
+      85,
+      20 + Math.round(((endBatch - startPage + 1) / totalPagesToProcess) * 65)
+    );
     options?.onProgress?.(
-      `🔍 جاري قراءة واستخراج الصفحات بالذكاء الاصطناعي (صفحة ${pageNum} من ${totalPages})...`,
+      `🔍 جاري قراءة واستخراج الصفحات بالذكاء الاصطناعي (الصفحات ${pageNum}-${endBatch} من ${endPage})...`,
       currentPct
     );
 
+    const chunkStartTime = Date.now();
     const chunkResult = await callOcrChunkApi(
       ocrUrl,
       {
         pages: currentBatchPages,
         startPage: pageNum,
-        endPage,
+        endPage: endBatch,
         apiKey: options?.apiKey,
         documentTitle: options?.title,
       },
@@ -306,9 +451,20 @@ export async function processScannedPdfInBrowser(
       allTranscribedChunks.push(chunkResult.transcribedText);
     }
 
-    // Polite pause between chunks to respect API rate limits
-    if (endPage < totalPages) {
-      await new Promise((r) => setTimeout(r, 350));
+    // Clean up internal PDF worker font/image caches after each batch
+    try {
+      if (typeof pdf.cleanup === "function") {
+        pdf.cleanup();
+      }
+    } catch {}
+
+    // Precise Rate-Limiting Pacer:
+    // Gemini Free Tier allows 15 RPM. Ensure at least ~4100ms from request start to request start (<= 14.6 RPM).
+    if (endBatch < endPage) {
+      const elapsed = Date.now() - chunkStartTime;
+      const minIntervalMs = 4100;
+      const pauseMs = Math.max(800, minIntervalMs - elapsed);
+      await new Promise((r) => setTimeout(r, pauseMs));
     }
   }
 
@@ -332,77 +488,104 @@ export async function processScannedPdfInBrowser(
 
 /**
  * Extract digital text from a PDF buffer in the browser environment.
+ * Supports optional page ranges (e.g. pages 1-30).
  */
-async function extractPdfTextInBrowser(
+export async function extractPdfTextInBrowser(
   uint8: Uint8Array,
-  onProgress?: (step: string, percent: number) => void
-): Promise<{ text: string; pdfDoc: any }> {
+  onProgress?: (step: string, percent: number) => void,
+  range?: { startPage?: number; endPage?: number } | string
+): Promise<{ text: string; pdfDoc: any; totalDocPages: number; startPage: number; endPage: number }> {
   onProgress?.("⚡ جاري قراءة واستخراج فصول الكتاب في المتصفح...", 35);
   try {
     const pdf = await loadPdfDocument(uint8);
     const pages: string[] = [];
-    const totalPages = pdf.numPages;
+    const totalDocPages = pdf.numPages || 1;
 
-    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    let resolvedRange: { startPage: number; endPage: number } | null = null;
+    if (typeof range === "string") {
+      resolvedRange = parsePageRange(range, totalDocPages);
+    } else if (range && (range.startPage !== undefined || range.endPage !== undefined)) {
+      resolvedRange = {
+        startPage: range.startPage || 1,
+        endPage: range.endPage || totalDocPages,
+      };
+    }
+
+    const startPage = Math.max(1, Math.min(resolvedRange?.startPage || 1, totalDocPages));
+    const endPage = Math.max(startPage, Math.min(resolvedRange?.endPage || totalDocPages, totalDocPages));
+    const totalToExtract = endPage - startPage + 1;
+
+    for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
       const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const pageLines: string[] = [];
-      let currentLine = "";
-      let lastY: number | null = null;
+      try {
+        const textContent = await page.getTextContent();
+        const pageLines: string[] = [];
+        let currentLine = "";
+        let lastY: number | null = null;
 
-      for (const item of textContent.items) {
-        if (!("str" in item)) continue;
-        const textItem = item as { str: string; hasEOL?: boolean; transform?: number[] };
-        const str = textItem.str;
-        if (!str && !textItem.hasEOL) continue;
+        for (const item of textContent.items) {
+          if (!("str" in item)) continue;
+          const textItem = item as { str: string; hasEOL?: boolean; transform?: number[] };
+          const str = textItem.str;
+          if (!str && !textItem.hasEOL) continue;
 
-        const currentY =
-          Array.isArray(textItem.transform) && textItem.transform.length >= 6
-            ? textItem.transform[5]
-            : null;
-        const isYChange =
-          lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 5;
+          const currentY =
+            Array.isArray(textItem.transform) && textItem.transform.length >= 6
+              ? textItem.transform[5]
+              : null;
+          const isYChange =
+            lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 5;
 
-        if (isYChange && currentLine.trim()) {
-          pageLines.push(currentLine.trim());
-          currentLine = "";
-        }
-
-        if (str) {
-          if (currentLine && !currentLine.endsWith(" ")) {
-            currentLine += " ";
+          if (isYChange && currentLine.trim()) {
+            pageLines.push(currentLine.trim());
+            currentLine = "";
           }
-          currentLine += str;
+
+          if (str) {
+            if (currentLine && !currentLine.endsWith(" ")) {
+              currentLine += " ";
+            }
+            currentLine += str;
+          }
+
+          if (textItem.hasEOL && currentLine.trim()) {
+            pageLines.push(currentLine.trim());
+            currentLine = "";
+          }
+
+          if (currentY !== null) {
+            lastY = currentY;
+          }
         }
 
-        if (textItem.hasEOL && currentLine.trim()) {
+        if (currentLine.trim()) {
           pageLines.push(currentLine.trim());
-          currentLine = "";
         }
 
-        if (currentY !== null) {
-          lastY = currentY;
+        const pageStr = pageLines.join("\n").trim();
+        if (pageStr) {
+          pages.push(pageStr);
         }
-      }
 
-      if (currentLine.trim()) {
-        pageLines.push(currentLine.trim());
-      }
-
-      const pageStr = pageLines.join("\n").trim();
-      if (pageStr) {
-        pages.push(pageStr);
-      }
-
-      if (totalPages > 5 && pageNum % Math.max(1, Math.ceil(totalPages / 5)) === 0) {
-        const pct = Math.min(60, 35 + Math.round((pageNum / totalPages) * 25));
-        onProgress?.(`⚡ جاري استخراج صفحات الكتاب (${pageNum}/${totalPages})...`, pct);
+        if (totalToExtract > 5 && (pageNum - startPage + 1) % Math.max(1, Math.ceil(totalToExtract / 6)) === 0) {
+          const pct = Math.min(65, 35 + Math.round(((pageNum - startPage + 1) / totalToExtract) * 30));
+          onProgress?.(`⚡ جاري استخراج صفحات الكتاب (${pageNum}/${endPage})...`, pct);
+        }
+      } finally {
+        try {
+          if (typeof page.cleanup === "function") {
+            page.cleanup();
+          }
+        } catch {}
       }
     }
 
     return {
       text: pages.join("\n\n"),
       pdfDoc: pdf,
+      totalDocPages,
+      startPage,
+      endPage,
     };
   } catch (err: any) {
     console.error("[BrowserTextExtractor] PDF parsing failed:", err);
@@ -434,7 +617,12 @@ async function extractDocxTextInBrowser(arrayBuffer: ArrayBuffer): Promise<strin
 /**
  * Main client-side curriculum material extractor.
  * Converts a client file (PDF, DOCX, TXT) into a clean, lightweight JSON material payload (< 1.5 MB).
- * For scanned PDFs, automatically slices pages into offscreen canvas batches and runs multimodal OCR.
+ * 
+ * SMART DIGITAL PRIORITY:
+ * ALWAYS attempts digital extraction first (takes 1-2 seconds with 0 API calls).
+ * If digital extraction yields substantial text (> 100 words), uses it immediately!
+ * Does NOT trigger visual OCR on 133 pages even if forceOcr was checked.
+ * Only falls back to visual OCR if digital text is empty (< 50 words) or for image files.
  */
 export async function extractMaterialInBrowser(
   file: File,
@@ -456,6 +644,9 @@ export async function extractMaterialInBrowser(
   let rawText = "";
   let fileType: "pdf" | "docx" | "txt" = "txt";
   let ocrUsed = false;
+  let digitalFastPath = false;
+  let pageCount = 0;
+  let notice: string | undefined = undefined;
   let precomputedSections: ExtractedSection[] | null = null;
 
   if (ext === "pdf") {
@@ -464,35 +655,85 @@ export async function extractMaterialInBrowser(
     const uint8 = new Uint8Array(arrayBuffer);
 
     let pdfDoc: any = null;
+    let digitalWordCount = 0;
+    let startExtractedPage = 1;
+    let endExtractedPage = 1;
 
-    // Fast digital text extraction attempt if not forceOcr
-    if (!options?.forceOcr) {
-      try {
-        const extraction = await extractPdfTextInBrowser(uint8, options?.onProgress);
-        rawText = extraction.text;
-        pdfDoc = extraction.pdfDoc;
-      } catch (e: any) {
-        if (
-          e?.name === "PasswordException" ||
-          /password|كلمة مرور|محمي/i.test(e?.message || "")
-        ) {
-          throw e;
-        }
-        // If digital extraction failed or crashed on scanned PDF, proceed to load for OCR
-        pdfDoc = null;
+    // Resolve user range input if requested
+    const requestedRange = options?.pageRange
+      ? options.pageRange
+      : (options?.startPage || options?.endPage)
+      ? { startPage: options?.startPage || 1, endPage: options?.endPage || 999999 }
+      : undefined;
+
+    // 1. SMART DIGITAL PRIORITY:
+    // ALWAYS attempt digital PDF text extraction first — EVEN IF forceOcr was checked!
+    // Why: Digital textbooks (like Crop Production Book, 133 pages) contain authentic digital text
+    // that extracts in 1-2 seconds with 100% precision, 0 API calls, and zero rate limits.
+    try {
+      const extraction = await extractPdfTextInBrowser(
+        uint8,
+        options?.onProgress,
+        requestedRange
+      );
+      rawText = extraction.text;
+      pdfDoc = extraction.pdfDoc;
+      pageCount = extraction.totalDocPages;
+      startExtractedPage = extraction.startPage;
+      endExtractedPage = extraction.endPage;
+      const cleanedDigital = cleanText(rawText);
+      digitalWordCount = cleanedDigital.split(/\s+/).filter(Boolean).length;
+    } catch (e: any) {
+      if (
+        e?.name === "PasswordException" ||
+        /password|كلمة مرور|محمي/i.test(e?.message || "")
+      ) {
+        throw e;
       }
+      // If digital extraction failed or crashed on scanned PDF, proceed to load for OCR
+      pdfDoc = null;
     }
 
     const digitalCleaned = cleanText(rawText);
-    const isScannedOrEmpty = !digitalCleaned || digitalCleaned.length < 15;
+    const pagesExtractedCount = Math.max(1, endExtractedPage - startExtractedPage + 1);
+    // Real digital documents contain substantial extractable words.
+    // If digital extraction yields substantial text (> 100 words, or >= 50 words for short documents/sections):
+    // Use it immediately with digitalFastPath: true!
+    const hasSubstantialDigitalText =
+      digitalWordCount >= 100 ||
+      (digitalWordCount >= 50 && (pagesExtractedCount <= 2 || (digitalWordCount / pagesExtractedCount) >= 1.5));
+    const isScannedOrEmpty = !hasSubstantialDigitalText || digitalWordCount < 50 || digitalCleaned.length < 15;
 
-    // When PDF is scanned (or forceOcr requested): automatically slice & OCR in batches!
-    if (isScannedOrEmpty || options?.forceOcr) {
+    if (hasSubstantialDigitalText) {
+      // FAST PATH: Digital text extracted successfully!
+      // We do NOT trigger visual OCR on 133 pages even if forceOcr was checked.
+      digitalFastPath = true;
+      ocrUsed = false;
+      const isPartialRange = startExtractedPage > 1 || endExtractedPage < pageCount;
+      const rangeLabel = isPartialRange ? ` (الصفحات ${startExtractedPage}-${endExtractedPage} من ${pageCount})` : "";
+
+      if (options?.forceOcr) {
+        notice = `تم استخراج محتوى وفصول الكتاب${rangeLabel} بنجاح وفورياً عبر محرك القراءة الرقمية عالي الدقة (تم تخطي التعرف البصري المجهد لتوفير وقت الانتظار وكوتا الذكاء الاصطناعي).`;
+        options?.onProgress?.(
+          `⚡ تم استخراج نصوص وفصول الكتاب${rangeLabel} رقمياً في ثوانٍ بدقة 100% وتخطي المعالجة البصرية لتوفير الوقت والكوتا...`,
+          65
+        );
+      } else if (isPartialRange) {
+        notice = `تم استخراج الصفحات المحددة${rangeLabel} بنجاح وفورياً.`;
+      }
+    } else if (isScannedOrEmpty) {
+      // FALL BACK TO VISUAL OCR ONLY WHEN DIGITAL TEXT IS EMPTY / SCANNED (< 50 words)
       if (options?.groupId || options?.processOcrChunk || options?.ocrChunkUrl) {
         if (!pdfDoc) {
           pdfDoc = await loadPdfDocument(uint8);
         }
-        const ocrResult = await processScannedPdfInBrowser(pdfDoc, options);
+        pageCount = pdfDoc.numPages || 1;
+        const ocrOptions: ClientExtractionOptions = {
+          ...options,
+          startPage: startExtractedPage,
+          endPage: endExtractedPage,
+        };
+        const ocrResult = await processScannedPdfInBrowser(pdfDoc, ocrOptions);
         rawText = ocrResult.rawText;
         precomputedSections = ocrResult.sections;
         ocrUsed = true;
@@ -502,6 +743,13 @@ export async function extractMaterialInBrowser(
         );
       }
     }
+
+    // Free PDF document memory
+    try {
+      if (pdfDoc && typeof pdfDoc.destroy === "function") {
+        await pdfDoc.destroy();
+      }
+    } catch {}
   } else if (ext === "docx") {
     fileType = "docx";
     const arrayBuffer = await file.arrayBuffer();
@@ -547,5 +795,8 @@ export async function extractMaterialInBrowser(
     sections,
     topics: combinedTopics,
     ocrUsed,
+    digitalFastPath,
+    notice,
+    pageCount,
   };
 }

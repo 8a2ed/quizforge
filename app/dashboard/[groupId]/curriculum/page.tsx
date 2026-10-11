@@ -34,7 +34,7 @@ import {
   HelpCircle,
   TrendingUp,
 } from "lucide-react";
-import { isBrowserExtractable, extractMaterialInBrowser } from "@/lib/browserTextExtractor";
+import { isBrowserExtractable, extractMaterialInBrowser, getPdfPageCount, parsePageRange } from "@/lib/browserTextExtractor";
 
 interface CurriculumMaterial {
   id: string;
@@ -189,6 +189,9 @@ export default function CurriculumPage() {
   const [uploadGrade, setUploadGrade] = useState("");
   const [uploadTopics, setUploadTopics] = useState("");
   const [forceOcr, setForceOcr] = useState(false);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  const [pageRange, setPageRange] = useState<string>("");
+  const [readingPdfInfo, setReadingPdfInfo] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgressStep, setUploadProgressStep] = useState<string>("");
@@ -766,6 +769,7 @@ export default function CurriculumPage() {
           groupId,
           apiKey: keyToSend || undefined,
           forceOcr,
+          pageRange: pageRange.trim() || undefined,
           title: uploadTitle.trim(),
           subject: uploadSubject.trim() || (isRtl ? "عام" : "General"),
           grade: uploadGrade.trim(),
@@ -842,6 +846,8 @@ export default function CurriculumPage() {
 
           // Reset form
           setUploadFile(null);
+          setPdfPageCount(null);
+          setPageRange("");
           setUploadTitle("");
           setUploadSubject("");
           setUploadGrade("");
@@ -901,6 +907,9 @@ export default function CurriculumPage() {
       formData.append("grade", uploadGrade.trim());
       formData.append("topics", uploadTopics.trim());
       formData.append("forceOcr", String(forceOcr));
+      if (pageRange.trim()) {
+        formData.append("pageRange", pageRange.trim());
+      }
 
       if (keyToSend) {
         formData.append("apiKey", keyToSend);
@@ -1036,6 +1045,8 @@ export default function CurriculumPage() {
 
       // Reset form
       setUploadFile(null);
+      setPdfPageCount(null);
+      setPageRange("");
       setUploadTitle("");
       setUploadSubject("");
       setUploadGrade("");
@@ -2078,6 +2089,16 @@ export default function CurriculumPage() {
                     if (!uploadTitle) {
                       setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
                     }
+                    setPageRange("");
+                    if (f.name.toLowerCase().endsWith(".pdf")) {
+                      setReadingPdfInfo(true);
+                      getPdfPageCount(f)
+                        .then((count) => setPdfPageCount(count > 0 ? count : null))
+                        .catch(() => setPdfPageCount(null))
+                        .finally(() => setReadingPdfInfo(false));
+                    } else {
+                      setPdfPageCount(null);
+                    }
                   }
                 }}
               >
@@ -2093,6 +2114,16 @@ export default function CurriculumPage() {
                       if (!uploadTitle) {
                         setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
                       }
+                      setPageRange("");
+                      if (f.name.toLowerCase().endsWith(".pdf")) {
+                        setReadingPdfInfo(true);
+                        getPdfPageCount(f)
+                          .then((count) => setPdfPageCount(count > 0 ? count : null))
+                          .catch(() => setPdfPageCount(null))
+                          .finally(() => setReadingPdfInfo(false));
+                      } else {
+                        setPdfPageCount(null);
+                      }
                     }
                   }}
                 />
@@ -2103,7 +2134,8 @@ export default function CurriculumPage() {
                     <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
                       {uploadFile.size > 1024 * 1024
                         ? `${(uploadFile.size / (1024 * 1024)).toFixed(1)} MB`
-                        : `${(uploadFile.size / 1024).toFixed(1)} KB`}{" "}
+                        : `${(uploadFile.size / 1024).toFixed(1)} KB`}
+                      {pdfPageCount ? ` • ${pdfPageCount} ${isRtl ? "صفحة" : "pages"}` : readingPdfInfo ? ` • ${isRtl ? "جاري قراءة عدد الصفحات..." : "Reading pages..."}` : ""}{" "}
                       — {isRtl ? "جاهز للاستخراج والتحليل" : "Ready to parse"}
                     </span>
                   </div>
@@ -2140,6 +2172,123 @@ export default function CurriculumPage() {
                 )}
               </div>
 
+              {/* Page Range Selector (when PDF selected) */}
+              {uploadFile && uploadFile.name.toLowerCase().endsWith(".pdf") && (
+                <div
+                  style={{
+                    marginBottom: "var(--space-4)",
+                    padding: "12px 14px",
+                    borderRadius: "var(--radius-md)",
+                    background: "var(--clr-bg-elevated)",
+                    border: "1px solid var(--clr-border)",
+                  }}
+                >
+                  <label
+                    htmlFor="pageRangeInput"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 6,
+                      fontSize: "0.88rem",
+                      fontWeight: 600,
+                      color: "var(--clr-text-primary)",
+                    }}
+                  >
+                    <span>
+                      {isRtl
+                        ? "📄 نطاق الصفحات (اختياري، مثلاً: 1-30 أو اتركه فارغاً لكامل الكتاب):"
+                        : "📄 Page Range (optional, e.g., 1-30 or leave empty for full book):"}
+                    </span>
+                    {pdfPageCount ? (
+                      <span
+                        style={{
+                          fontSize: "0.78rem",
+                          color: "var(--clr-brand)",
+                          background: "rgba(99, 102, 241, 0.1)",
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-full)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {isRtl ? `إجمالي الكتاب: ${pdfPageCount} صفحة` : `Total: ${pdfPageCount} pages`}
+                      </span>
+                    ) : readingPdfInfo ? (
+                      <span style={{ fontSize: "0.75rem", color: "var(--clr-text-secondary)" }}>
+                        {isRtl ? "⏳ جاري قراءة عدد الصفحات..." : "Reading pages..."}
+                      </span>
+                    ) : null}
+                  </label>
+                  <input
+                    id="pageRangeInput"
+                    type="text"
+                    className="input"
+                    dir="ltr"
+                    placeholder={
+                      pdfPageCount
+                        ? `1-${pdfPageCount} (${isRtl ? "مثلاً: 1-30 أو 20-50" : "e.g. 1-30"})`
+                        : isRtl
+                        ? "مثال: 1-30 أو اتركه فارغاً لكامل الكتاب"
+                        : "e.g., 1-30 or leave empty for full book"
+                    }
+                    value={pageRange}
+                    onChange={(e) => setPageRange(e.target.value)}
+                    style={{ width: "100%", fontSize: "0.88rem" }}
+                  />
+                  {pageRange.trim() ? (
+                    (() => {
+                      const parsed = parsePageRange(pageRange, pdfPageCount || undefined);
+                      if (!parsed) {
+                        return (
+                          <span
+                            style={{
+                              display: "block",
+                              fontSize: "0.75rem",
+                              color: "#f59e0b",
+                              marginTop: 4,
+                              fontWeight: 500,
+                            }}
+                          >
+                            {isRtl
+                              ? "⚠️ تعذر التعرف على النطاق، سيتم استخراج المستند كاملاً (صيغ مدعومة: 1-30 أو ١-٣٠ أو 15 أو 10-)"
+                              : "⚠️ Range not recognized, entire document will be extracted (supported: 1-30, 15, 10-)"}
+                          </span>
+                        );
+                      }
+                      const count = parsed.endPage - parsed.startPage + 1;
+                      return (
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: "0.75rem",
+                            color: "#10b981",
+                            marginTop: 4,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {isRtl
+                            ? `✓ سيتم استخراج ${count} ${count === 1 ? "صفحة" : "صفحات"} (من ${parsed.startPage} إلى ${parsed.endPage})`
+                            : `✓ Will extract ${count} pages (pages ${parsed.startPage} to ${parsed.endPage})`}
+                        </span>
+                      );
+                    })()
+                  ) : (
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: "0.75rem",
+                        color: "var(--clr-text-secondary)",
+                        marginTop: 4,
+                      }}
+                    >
+                      {isRtl
+                        ? "يمكنك تحديد صفحات فصل محدد فقط لتسريع التوليد والاختبار، أو اتركه فارغاً لتحليل المستند بالكامل."
+                        : "Specify a chapter range to speed up processing, or leave empty for the entire book."}
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Force OCR Option */}
               <div
                 style={{
@@ -2169,8 +2318,8 @@ export default function CurriculumPage() {
                     : "✨ Force Intelligent AI Visual OCR (NotebookLM Mode)"}
                   <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-secondary)", marginTop: 2 }}>
                     {isRtl
-                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات بدقة متناهية. (إذا كان الكتاب رقمياً كبيراً ويتجاوز 14 ميجابايت، يتم تلقائياً استخراج نصوصه الرقمية الأصلية لتجنب حدود الخادم وضمان السرعة)."
-                      : "Ensures extraction of handwriting, diagrams, and tables. (If textbook exceeds 14MB and has digital text, authentic digital text is extracted automatically to bypass payload limits)."}
+                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات في المستندات الممسوحة ضوئياً. (إذا كان الكتاب يحتوي على نصوص رقمية أصلية، يتم استخراجها فورياً في ثوانٍ بدقة 100% لتجنب الانتظار وحدود معدل الطلبات)."
+                      : "Ensures extraction of handwriting, diagrams, and tables in scanned documents. (If textbook has authentic digital text, it is extracted instantly in seconds with 100% precision to bypass rate limits)."}
                   </span>
                 </label>
               </div>
