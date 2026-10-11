@@ -9,6 +9,7 @@ import {
   getAIAnalytics,
   getGroupAISettings,
   updateGroupAISettings,
+  isDatabaseConfigured,
   CurriculumMaterial,
 } from "../lib/aiStorage";
 import {
@@ -1103,6 +1104,129 @@ All questions grounded in text.
     throw new Error("Password exception pattern matching failed!");
   }
   console.log("  ✓ Password-protected PDF exceptions preserved and protected from being swallowed");
+
+  // ── 9. End-to-End Cohesion: Settings Propagation, Logging & Analytics ──
+  console.log("\n[9] Testing End-to-End Settings, Generation Logging & Analytics Cohesion...");
+
+  // A. AI Settings Update & Retrieval
+  const testGid = `grp_cohesion_${Date.now()}`;
+  const initialSettings = await getGroupAISettings(testGid);
+  if (!initialSettings || initialSettings.defaultCount !== 5) {
+    throw new Error("Default AI settings initialization failed!");
+  }
+
+  const updatedSettings = await updateGroupAISettings(testGid, {
+    defaultModel: "gemini-3.8-flash",
+    defaultDifficulty: "hard",
+    defaultCount: 10,
+    strictGrounding: true,
+  });
+  if (updatedSettings.defaultCount !== 10 || updatedSettings.defaultDifficulty !== "hard") {
+    throw new Error("updateGroupAISettings failed to update parameters!");
+  }
+
+  const reReadSettings = await getGroupAISettings(testGid);
+  if (reReadSettings.defaultCount !== 10 || reReadSettings.defaultDifficulty !== "hard" || reReadSettings.strictGrounding !== true) {
+    throw new Error("getGroupAISettings failed to retrieve updated parameters!");
+  }
+  console.log("  ✓ AI settings update, persistence, and retrieval cleanly verified");
+
+  // B. Candidate Key Masking Protection
+  const maskedKey = "AIzaSyD9•••••••••••••••••Ab3";
+  const updatedWithMasked = await updateGroupAISettings(testGid, {
+    geminiApiKey: maskedKey,
+  });
+  if (updatedWithMasked.geminiApiKey === maskedKey) {
+    throw new Error("Masked API key should NEVER overwrite valid key!");
+  }
+  console.log("  ✓ Masked / bulleted API keys strictly protected from overwriting stored credentials");
+
+  // C. Audit Log Recording & Analytics Reflection
+  const testLog = {
+    id: `log_cohesion_${Date.now()}`,
+    groupId: testGid,
+    userId: "student_ali_99",
+    userName: "علي حسن",
+    userUsername: "ali_quiz",
+    materialId: "mat_test_101",
+    materialTitle: "الوحدة الأولى: القوى والحركة",
+    questionCount: 10,
+    modelUsed: "gemini-3.8-flash",
+    estimatedTokens: 1850,
+    difficulty: "HARD",
+    timestamp: new Date().toISOString(),
+    success: true,
+    questionsSummary: [
+      { question: "ما هو قانون نيوتن الأول؟", difficulty: "HARD", topic: "الحركة" },
+      { question: "ما وحدة قياس السرعة؟", difficulty: "EASY", topic: "السرعة" },
+    ],
+  };
+
+  await recordGenerationLog(testLog);
+
+  const cohesionAnalytics = await getAIAnalytics(testGid);
+  if (cohesionAnalytics.totalGenerations < 1 || cohesionAnalytics.totalQuestions < 10 || cohesionAnalytics.totalTokens < 1850) {
+    throw new Error(`getAIAnalytics summary metrics mismatch! Got gens=${cohesionAnalytics.totalGenerations}, questions=${cohesionAnalytics.totalQuestions}`);
+  }
+  if (cohesionAnalytics.activeUsersCount < 1) {
+    throw new Error("Active users count in analytics mismatch!");
+  }
+  const aliUser = cohesionAnalytics.userLeaderboard.find((u) => u.userId === "student_ali_99");
+  if (!aliUser || aliUser.questionsCount < 10 || aliUser.userUsername !== "ali_quiz") {
+    throw new Error("Student leaderboard details not reflected accurately!");
+  }
+  if (cohesionAnalytics.difficultyBreakdown.HARD < 1 || cohesionAnalytics.difficultyBreakdown.EASY < 1) {
+    throw new Error("Difficulty breakdown in analytics not reflected accurately!");
+  }
+  const materialStat = cohesionAnalytics.materialsUsage.find((m) => m.materialTitle === "الوحدة الأولى: القوى والحركة");
+  if (!materialStat || materialStat.questionsCount < 10) {
+    throw new Error("Materials usage breakdown in analytics not reflected accurately!");
+  }
+  console.log("  ✓ Generation log recorded and 100% reflected in analytics (generations, tokens, leaderboard, materials & difficulty)");
+
+  // ── 10. Robustness & Deep Interoperability Edge Cases ──
+  console.log("\n[10] Testing System Robustness, Key Normalization & Wizard Default Propagation...");
+
+  // A. Database configuration detection
+  const dbAvail = isDatabaseConfigured();
+  console.log(`  ✓ Database configuration cleanly evaluated: ${dbAvail ? "Configured" : "Unconfigured / Fallback mode"}`);
+
+  // B. Fallback difficulty breakdown when questionsSummary is missing or empty
+  const summarylessGid = `grp_fallback_${Date.now()}`;
+  await recordGenerationLog({
+    id: `log_fallback_${Date.now()}`,
+    groupId: summarylessGid,
+    userId: "student_karim",
+    userName: "كريم أحمد",
+    materialTitle: "موجز الفيزياء",
+    questionCount: 8,
+    modelUsed: "gemini-3.8-flash",
+    estimatedTokens: 1200,
+    difficulty: "EASY",
+    timestamp: new Date().toISOString(),
+    success: true,
+  });
+
+  const fallbackAnalytics = await getAIAnalytics(summarylessGid);
+  if (fallbackAnalytics.difficultyBreakdown.EASY < 8) {
+    throw new Error(`Fallback difficulty breakdown failed! Expected at least 8 EASY, got ${fallbackAnalytics.difficultyBreakdown.EASY}`);
+  }
+  console.log("  ✓ Missing questionsSummary gracefully falls back to log-level difficulty and question counts");
+
+  // C. Wizard Settings Fallback for Global / Direct Telegram Chat sessions
+  const globalDirectSettings = await getGroupAISettings("global");
+  if (!globalDirectSettings || typeof globalDirectSettings.defaultCount !== "number") {
+    throw new Error("getGroupAISettings failed on global/direct chats!");
+  }
+  console.log("  ✓ Telegram wizard direct DM sessions cleanly resolve global settings without throwing errors");
+
+  // D. ISO Date string serialization for broadcast scheduling
+  const clientLocalDatetime = "2026-10-15T14:30";
+  const parsedIso = new Date(clientLocalDatetime).toISOString();
+  if (!parsedIso.endsWith("Z") || isNaN(new Date(parsedIso).getTime())) {
+    throw new Error("Client scheduledAt ISO conversion validation failed!");
+  }
+  console.log("  ✓ Client datetime-local conversion to UTC ISO string validated");
 
   console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }

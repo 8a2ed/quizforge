@@ -14,11 +14,11 @@ async function checkAuth(req: NextRequest, groupId: string) {
     const m = await withRetry(() =>
       prisma.groupMember.findUnique({
         where: { userId_groupId: { userId, groupId } },
-        include: { group: true },
+        include: { group: { include: { botConfig: true } } },
       })
     );
     if (!m || !m.approved) return null;
-    return { userId, group: m.group };
+    return { userId, group: m.group, botConfig: m.group.botConfig };
   } catch {
     return null;
   }
@@ -40,15 +40,27 @@ export async function POST(
     questions,
     topicId,
     topicName,
-    isAnonymous = true,
-    openPeriod = 0,
+    isAnonymous: rawIsAnonymous,
+    openPeriod: rawOpenPeriod,
+    scheduledAt,
   } = body;
+
+  const isAnonymous = rawIsAnonymous !== undefined
+    ? Boolean(rawIsAnonymous)
+    : (auth.botConfig?.defaultAnonymous ?? true);
+
+  const openPeriod = rawOpenPeriod !== undefined
+    ? Number(rawOpenPeriod)
+    : (auth.botConfig?.defaultOpenPeriod ?? 0);
 
   if (!Array.isArray(questions) || questions.length === 0) {
     return NextResponse.json({ error: "لا توجد أسئلة محددة للبث" }, { status: 400 });
   }
 
   const chatId = auth.group.chatId;
+  const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
+  const isScheduled = Boolean(scheduledDate && !isNaN(scheduledDate.getTime()) && scheduledDate.getTime() > Date.now());
+
   const broadcastResults: Array<{ id: string; success: boolean; error?: string }> = [];
 
   for (let i = 0; i < questions.length; i++) {
@@ -66,47 +78,72 @@ export async function POST(
     if (!questionText || options.length < 2) continue;
 
     try {
-      // Send to Telegram
-      const msg = await telegram.sendPoll({
-        chat_id: chatId,
-        question: questionText,
-        options: options.map((opt: string) => ({ text: opt })),
-        type: "quiz",
-        correct_option_id: correctOptionId,
-        explanation,
-        is_anonymous: Boolean(isAnonymous),
-        open_period: openPeriod > 0 ? Number(openPeriod) : undefined,
-        message_thread_id: topicId ? Number(topicId) : undefined,
-      });
+      if (isScheduled && scheduledDate) {
+        // Schedule for later dispatch by cron runner
+        await withRetry(() =>
+          prisma.quiz.create({
+            data: {
+              groupId,
+              sentById: auth.userId,
+              question: questionText,
+              options,
+              type: "QUIZ",
+              correctOptionId,
+              explanation,
+              isAnonymous,
+              openPeriod: openPeriod > 0 ? Number(openPeriod) : null,
+              topicId: topicId ? Number(topicId) : null,
+              topicName: topicName || null,
+              scheduledAt: scheduledDate,
+              sentAt: null,
+              tags: ["AI_CURRICULUM", "scheduled", q.topic].filter(Boolean),
+            },
+          })
+        );
+        broadcastResults.push({ id: q.id || `q-${i}`, success: true });
+      } else {
+        // Send to Telegram immediately
+        const msg = await telegram.sendPoll({
+          chat_id: chatId,
+          question: questionText,
+          options: options.map((opt: string) => ({ text: opt })),
+          type: "quiz",
+          correct_option_id: correctOptionId,
+          explanation,
+          is_anonymous: isAnonymous,
+          open_period: openPeriod > 0 ? Number(openPeriod) : undefined,
+          message_thread_id: topicId ? Number(topicId) : undefined,
+        });
 
-      // Save record in database
-      await withRetry(() =>
-        prisma.quiz.create({
-          data: {
-            groupId,
-            sentById: auth.userId,
-            question: questionText,
-            options,
-            type: "QUIZ",
-            correctOptionId,
-            explanation,
-            isAnonymous: Boolean(isAnonymous),
-            openPeriod: openPeriod > 0 ? Number(openPeriod) : null,
-            topicId: topicId ? Number(topicId) : null,
-            topicName: topicName || null,
-            messageId: msg.message_id,
-            pollId: msg.poll?.id,
-            sentAt: new Date(),
-            tags: ["AI_CURRICULUM", q.topic].filter(Boolean),
-          },
-        })
-      );
+        // Save record in database
+        await withRetry(() =>
+          prisma.quiz.create({
+            data: {
+              groupId,
+              sentById: auth.userId,
+              question: questionText,
+              options,
+              type: "QUIZ",
+              correctOptionId,
+              explanation,
+              isAnonymous,
+              openPeriod: openPeriod > 0 ? Number(openPeriod) : null,
+              topicId: topicId ? Number(topicId) : null,
+              topicName: topicName || null,
+              messageId: msg.message_id,
+              pollId: msg.poll?.id,
+              sentAt: new Date(),
+              tags: ["AI_CURRICULUM", q.topic].filter(Boolean),
+            },
+          })
+        );
 
-      broadcastResults.push({ id: q.id || `q-${i}`, success: true });
+        broadcastResults.push({ id: q.id || `q-${i}`, success: true });
 
-      // Respect Telegram rate limits (wait 1.5s between consecutive polls)
-      if (i < questions.length - 1) {
-        await new Promise((r) => setTimeout(r, 1500));
+        // Respect Telegram rate limits (wait 1.5s between consecutive polls)
+        if (i < questions.length - 1) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
       }
     } catch (err: unknown) {
       console.error(`[Broadcast Error Question ${i + 1}]`, err);
@@ -124,7 +161,10 @@ export async function POST(
     success: successCount > 0,
     total: questions.length,
     successCount,
+    isScheduled,
     results: broadcastResults,
-    message: `تم نشر ${successCount} من أصل ${questions.length} سؤال مباشرة في تليجرام!`,
+    message: isScheduled
+      ? `تمت جدولة ${successCount} من أصل ${questions.length} سؤال بنجاح للإرسال التلقائي في موعدها المحدد!`
+      : `تم نشر ${successCount} من أصل ${questions.length} سؤال مباشرة في تليجرام!`,
   });
 }

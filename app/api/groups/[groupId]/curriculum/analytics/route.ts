@@ -43,7 +43,10 @@ export async function GET(
       prisma.quiz.findMany({
         where: {
           groupId,
-          tags: { has: "AI_CURRICULUM" },
+          OR: [
+            { tags: { has: "AI_CURRICULUM" } },
+            { tags: { has: "qs-bot" } },
+          ],
         },
         include: {
           _count: { select: { answers: true } },

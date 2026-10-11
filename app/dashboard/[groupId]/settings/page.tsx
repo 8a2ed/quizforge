@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 
 interface BotConfig {
   id: string;
@@ -18,12 +19,23 @@ interface BotInfo {
   id: number;
 }
 
+interface AISettingsData {
+  geminiApiKey?: string;
+  defaultModel: string;
+  defaultDifficulty: "mixed" | "easy" | "medium" | "hard";
+  defaultCount: number;
+  strictGrounding: boolean;
+  systemInstruction?: string;
+}
+
 export default function SettingsPage() {
   const params = useParams();
   const groupId = params.groupId as string;
   const [config, setConfig] = useState<BotConfig | null>(null);
   const [botInfo, setBotInfo] = useState<BotInfo | null>(null);
   const [webhookStatus, setWebhookStatus] = useState<Record<string, unknown> | null>(null);
+  const [aiSettings, setAiSettings] = useState<AISettingsData | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ type: string; msg: string } | null>(null);
@@ -41,6 +53,7 @@ export default function SettingsPage() {
         setConfig(d.config);
         setBotInfo(d.botInfo);
         setWebhookStatus(d.webhookStatus);
+        if (d.aiSettings) setAiSettings(d.aiSettings);
         setLoading(false);
       });
   }, [groupId]);
@@ -51,10 +64,19 @@ export default function SettingsPage() {
     const res = await fetch(`/api/groups/${groupId}/settings`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
+      body: JSON.stringify({
+        ...config,
+        aiSettings: aiSettings || undefined,
+      }),
     });
-    if (res.ok) showToast("success", "Settings saved!");
-    else showToast("error", "Failed to save settings.");
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.config) setConfig(data.config);
+      if (data?.aiSettings) setAiSettings(data.aiSettings);
+      showToast("success", "Settings saved!");
+    } else {
+      showToast("error", "Failed to save settings.");
+    }
     setSaving(false);
   };
 
@@ -233,6 +255,116 @@ export default function SettingsPage() {
                 />
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI & Curriculum Settings Card */}
+      {aiSettings && (
+        <div className="card animate-fade-up animate-delay-4" style={{ marginTop: "var(--space-5)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
+            <div>
+              <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>🤖 إعدادات الذكاء الاصطناعي والمناهج (AI & Curriculum)</span>
+              </h3>
+              <p style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)", marginTop: 4 }}>
+                ضبط نموذج التوليد ومفتاح Gemini ومستوى صعوبة الأسئلة المعتمدة للبوت ولوحة التحكم
+              </p>
+            </div>
+            <Link
+              href={`/dashboard/${groupId}/curriculum`}
+              className="btn btn-secondary btn-sm"
+              style={{ display: "flex", alignItems: "center", gap: 6 }}
+            >
+              📚 فتح إدارة المناهج
+            </Link>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            {/* API Key */}
+            <div className="input-wrapper">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <label className="input-label" style={{ margin: 0 }}>Google Gemini API Key</label>
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  style={{ background: "none", border: "none", color: "var(--clr-brand)", fontSize: "0.75rem", cursor: "pointer" }}
+                >
+                  {showApiKey ? "إخفاء 🙈" : "إظهار المفتاح 👁️"}
+                </button>
+              </div>
+              <input
+                type={showApiKey ? "text" : "password"}
+                className="input"
+                placeholder="AIzaSy... (مفتاح API الخاص بـ Google AI Studio)"
+                value={aiSettings.geminiApiKey || ""}
+                onChange={(e) => setAiSettings({ ...aiSettings, geminiApiKey: e.target.value })}
+              />
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginTop: 4 }}>
+                {aiSettings.geminiApiKey ? "✅ مفتاح التوليد مضبوط ويعمل للنظام وتليجرام" : "⚠️ لم يتم إدخال مفتاح Gemini بعد"}
+              </div>
+            </div>
+
+            {/* Default Model & Difficulty */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)" }}>
+              <div className="input-wrapper">
+                <label className="input-label">النموذج الافتراضي (Default Model)</label>
+                <select
+                  className="select"
+                  value={aiSettings.defaultModel || "gemini-3.8-flash"}
+                  onChange={(e) => setAiSettings({ ...aiSettings, defaultModel: e.target.value })}
+                >
+                  <option value="gemini-3.8-flash">gemini-3.8-flash (الأسرع والأحدث)</option>
+                  <option value="gemini-2.5-flash">gemini-2.5-flash (مستقر وسريع)</option>
+                  <option value="gemini-2.0-flash">gemini-2.0-flash (كلاسيكي)</option>
+                </select>
+              </div>
+
+              <div className="input-wrapper">
+                <label className="input-label">مستوى الصعوبة الافتراضي</label>
+                <select
+                  className="select"
+                  value={aiSettings.defaultDifficulty || "mixed"}
+                  onChange={(e) => setAiSettings({ ...aiSettings, defaultDifficulty: e.target.value as any })}
+                >
+                  <option value="mixed">متوازن ومتدرج (Mixed)</option>
+                  <option value="easy">سهل ومباشر (Easy)</option>
+                  <option value="medium">متوسط وفهم (Medium)</option>
+                  <option value="hard">متقدم ومهارات عليا (Hard)</option>
+                </select>
+              </div>
+
+              <div className="input-wrapper">
+                <label className="input-label">العدد الافتراضي للأسئلة</label>
+                <select
+                  className="select"
+                  value={aiSettings.defaultCount || 5}
+                  onChange={(e) => setAiSettings({ ...aiSettings, defaultCount: Number(e.target.value) })}
+                >
+                  <option value={3}>3 أسئلة (سريع)</option>
+                  <option value={5}>5 أسئلة (قياسي)</option>
+                  <option value={10}>10 أسئلة (شامل)</option>
+                  <option value={15}>15 سؤالاً</option>
+                  <option value={20}>20 سؤالاً</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Strict Grounding Toggle */}
+            <label className="toggle-group" style={{ marginTop: "var(--space-2)" }}>
+              <div className="toggle-info">
+                <div className="toggle-title">الالتزام الصارم بالمنهج (Zero-Hallucination Grounding)</div>
+                <div className="toggle-desc">منع الذكاء الاصطناعي من إضافة أي معلومات غير مذكورة نصاً في الكتاب أو المحتوى المرفوع</div>
+              </div>
+              <div className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={aiSettings.strictGrounding}
+                  onChange={(e) => setAiSettings({ ...aiSettings, strictGrounding: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </div>
+            </label>
           </div>
         </div>
       )}

@@ -44,7 +44,7 @@ export interface GenerationLog {
   difficulty: string;
   timestamp: string;
   success: boolean;
-  questionsSummary: Array<{
+  questionsSummary?: Array<{
     question: string;
     difficulty: string;
     topic: string;
@@ -355,8 +355,16 @@ HTTP Status Codes:
 // ─── Materials CRUD (PostgreSQL + Serverless File Fallback) ───────────────────
 
 let dbTablesInitialized = false;
-async function ensureAiDatabaseTables(prismaClient: any) {
-  if (dbTablesInitialized) return;
+let dbInitAttempted = false;
+
+export function isDatabaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.trim());
+}
+
+async function ensureAiDatabaseTables(prismaClient: any): Promise<boolean> {
+  if (dbTablesInitialized) return true;
+  if (!isDatabaseConfigured()) return false;
+  if (dbInitAttempted) return false;
   try {
     await prismaClient.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_curriculum_materials (
@@ -384,9 +392,51 @@ async function ensureAiDatabaseTables(prismaClient: any) {
     await prismaClient.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS idx_ai_curriculum_materials_group ON ai_curriculum_materials(group_id)
     `);
+
+    // Settings table for multi-instance & telegram webhook synchronization
+    await prismaClient.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_curriculum_settings (
+        group_id TEXT PRIMARY KEY,
+        gemini_api_key TEXT,
+        default_model TEXT,
+        default_difficulty TEXT,
+        default_count INT,
+        strict_grounding BOOLEAN DEFAULT true,
+        system_instruction TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Generation logs table for persistent analytics across dashboard and telegram
+    await prismaClient.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_generation_logs (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT NOT NULL,
+        user_username TEXT,
+        user_photo TEXT,
+        material_id TEXT,
+        material_title TEXT NOT NULL,
+        question_count INT DEFAULT 0,
+        model_used TEXT NOT NULL,
+        estimated_tokens INT DEFAULT 0,
+        difficulty TEXT NOT NULL,
+        timestamp TIMESTAMPTZ DEFAULT NOW(),
+        success BOOLEAN DEFAULT true,
+        questions_summary JSONB
+      )
+    `);
+    await prismaClient.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS idx_ai_generation_logs_group ON ai_generation_logs(group_id)
+    `);
+
     dbTablesInitialized = true;
+    return true;
   } catch (err) {
+    dbInitAttempted = true;
     console.warn("[aiStorage] Failed to ensure DB table:", err);
+    return false;
   }
 }
 
@@ -431,18 +481,22 @@ export async function getMaterials(groupId: string): Promise<CurriculumMaterial[
   const cleanGid = String(groupId || "").trim();
 
   // 1. Try reading from PostgreSQL database first (shared across all Vercel instances & bot webhooks)
-  try {
-    const { prisma } = await import("./db");
-    await ensureAiDatabaseTables(prisma);
-    const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
-      cleanGid
-    );
-    if (Array.isArray(rows) && rows.length > 0) {
-      return rows.map(mapDbRowToMaterial);
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        const rows = await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
+          cleanGid
+        );
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map(mapDbRowToMaterial);
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
     }
-  } catch (dbErr) {
-    console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
   }
 
   // 2. Fallback to local files
@@ -462,29 +516,32 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
   const cleanGid = String(groupId || "").trim();
 
   // 1. Try reading from PostgreSQL database first
-  try {
-    const { prisma } = await import("./db");
-    await ensureAiDatabaseTables(prisma);
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        if (cleanGid) {
+          const rows = await prisma.$queryRawUnsafe<any[]>(
+            `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
+            cleanGid
+          );
+          if (Array.isArray(rows) && rows.length > 0) {
+            return rows.map(mapDbRowToMaterial);
+          }
+        }
 
-    if (cleanGid) {
-      const rows = await prisma.$queryRawUnsafe<any[]>(
-        `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
-        cleanGid
-      );
-      if (Array.isArray(rows) && rows.length > 0) {
-        return rows.map(mapDbRowToMaterial);
+        // If no group specified or group had no custom materials, check all custom materials in DB
+        const allRows = await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
+        );
+        if (Array.isArray(allRows) && allRows.length > 0) {
+          return allRows.map(mapDbRowToMaterial);
+        }
       }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
     }
-
-    // If no group specified or group had no custom materials, check all custom materials in DB
-    const allRows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
-    );
-    if (Array.isArray(allRows) && allRows.length > 0) {
-      return allRows.map(mapDbRowToMaterial);
-    }
-  } catch (dbErr) {
-    console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
   }
 
   // 2. Fallback to local files
@@ -520,102 +577,105 @@ export async function getMaterialById(
 
 export async function saveMaterial(material: CurriculumMaterial): Promise<void> {
   // 1. Persist to PostgreSQL database (ensures Vercel serverless persistence across all instances & bot webhooks)
-  try {
-    const { prisma } = await import("./db");
-    await ensureAiDatabaseTables(prisma);
-
+  if (isDatabaseConfigured()) {
     try {
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO ai_curriculum_materials (
-          id, group_id, title, subject, grade, file_name, file_type, file_size,
-          raw_text, cleaned_text, word_count, char_count, topics, sections,
-          uploaded_by, ocr_used, digital_fallback, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, CAST($13 AS jsonb), CAST($14 AS jsonb),
-          CAST($15 AS jsonb), $16, $17, $18, $19
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          title = EXCLUDED.title,
-          subject = EXCLUDED.subject,
-          grade = EXCLUDED.grade,
-          raw_text = EXCLUDED.raw_text,
-          cleaned_text = EXCLUDED.cleaned_text,
-          word_count = EXCLUDED.word_count,
-          char_count = EXCLUDED.char_count,
-          topics = EXCLUDED.topics,
-          sections = EXCLUDED.sections,
-          ocr_used = EXCLUDED.ocr_used,
-          digital_fallback = EXCLUDED.digital_fallback,
-          updated_at = NOW()`,
-        material.id,
-        material.groupId,
-        material.title,
-        material.subject || "عام",
-        material.grade || "",
-        material.fileName || "",
-        material.fileType || "manual",
-        material.fileSize || 0,
-        material.rawText || "",
-        material.cleanedText || "",
-        material.wordCount || 0,
-        material.charCount || 0,
-        JSON.stringify(material.topics || []),
-        JSON.stringify(material.sections || []),
-        JSON.stringify(material.uploadedBy || {}),
-        Boolean(material.ocrUsed),
-        Boolean(material.digitalFallback),
-        new Date(material.createdAt || Date.now()),
-        new Date(material.updatedAt || Date.now())
-      );
-    } catch {
-      // Fallback query without jsonb cast if column type differs
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO ai_curriculum_materials (
-          id, group_id, title, subject, grade, file_name, file_type, file_size,
-          raw_text, cleaned_text, word_count, char_count, topics, sections,
-          uploaded_by, ocr_used, digital_fallback, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, $14,
-          $15, $16, $17, $18, $19
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          title = EXCLUDED.title,
-          subject = EXCLUDED.subject,
-          grade = EXCLUDED.grade,
-          raw_text = EXCLUDED.raw_text,
-          cleaned_text = EXCLUDED.cleaned_text,
-          word_count = EXCLUDED.word_count,
-          char_count = EXCLUDED.char_count,
-          topics = EXCLUDED.topics,
-          sections = EXCLUDED.sections,
-          ocr_used = EXCLUDED.ocr_used,
-          digital_fallback = EXCLUDED.digital_fallback,
-          updated_at = NOW()`,
-        material.id,
-        material.groupId,
-        material.title,
-        material.subject || "عام",
-        material.grade || "",
-        material.fileName || "",
-        material.fileType || "manual",
-        material.fileSize || 0,
-        material.rawText || "",
-        material.cleanedText || "",
-        material.wordCount || 0,
-        material.charCount || 0,
-        JSON.stringify(material.topics || []),
-        JSON.stringify(material.sections || []),
-        JSON.stringify(material.uploadedBy || {}),
-        Boolean(material.ocrUsed),
-        Boolean(material.digitalFallback),
-        new Date(material.createdAt || Date.now()),
-        new Date(material.updatedAt || Date.now())
-      );
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        try {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO ai_curriculum_materials (
+              id, group_id, title, subject, grade, file_name, file_type, file_size,
+              raw_text, cleaned_text, word_count, char_count, topics, sections,
+              uploaded_by, ocr_used, digital_fallback, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8,
+              $9, $10, $11, $12, CAST($13 AS jsonb), CAST($14 AS jsonb),
+              CAST($15 AS jsonb), $16, $17, $18, $19
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              title = EXCLUDED.title,
+              subject = EXCLUDED.subject,
+              grade = EXCLUDED.grade,
+              raw_text = EXCLUDED.raw_text,
+              cleaned_text = EXCLUDED.cleaned_text,
+              word_count = EXCLUDED.word_count,
+              char_count = EXCLUDED.char_count,
+              topics = EXCLUDED.topics,
+              sections = EXCLUDED.sections,
+              ocr_used = EXCLUDED.ocr_used,
+              digital_fallback = EXCLUDED.digital_fallback,
+              updated_at = NOW()`,
+            material.id,
+            material.groupId,
+            material.title,
+            material.subject || "عام",
+            material.grade || "",
+            material.fileName || "",
+            material.fileType || "manual",
+            material.fileSize || 0,
+            material.rawText || "",
+            material.cleanedText || "",
+            material.wordCount || 0,
+            material.charCount || 0,
+            JSON.stringify(material.topics || []),
+            JSON.stringify(material.sections || []),
+            JSON.stringify(material.uploadedBy || {}),
+            Boolean(material.ocrUsed),
+            Boolean(material.digitalFallback),
+            new Date(material.createdAt || Date.now()),
+            new Date(material.updatedAt || Date.now())
+          );
+        } catch {
+          // Fallback query without jsonb cast if column type differs
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO ai_curriculum_materials (
+              id, group_id, title, subject, grade, file_name, file_type, file_size,
+              raw_text, cleaned_text, word_count, char_count, topics, sections,
+              uploaded_by, ocr_used, digital_fallback, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8,
+              $9, $10, $11, $12, $13, $14,
+              $15, $16, $17, $18, $19
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              title = EXCLUDED.title,
+              subject = EXCLUDED.subject,
+              grade = EXCLUDED.grade,
+              raw_text = EXCLUDED.raw_text,
+              cleaned_text = EXCLUDED.cleaned_text,
+              word_count = EXCLUDED.word_count,
+              char_count = EXCLUDED.char_count,
+              topics = EXCLUDED.topics,
+              sections = EXCLUDED.sections,
+              ocr_used = EXCLUDED.ocr_used,
+              digital_fallback = EXCLUDED.digital_fallback,
+              updated_at = NOW()`,
+            material.id,
+            material.groupId,
+            material.title,
+            material.subject || "عام",
+            material.grade || "",
+            material.fileName || "",
+            material.fileType || "manual",
+            material.fileSize || 0,
+            material.rawText || "",
+            material.cleanedText || "",
+            material.wordCount || 0,
+            material.charCount || 0,
+            JSON.stringify(material.topics || []),
+            JSON.stringify(material.sections || []),
+            JSON.stringify(material.uploadedBy || {}),
+            Boolean(material.ocrUsed),
+            Boolean(material.digitalFallback),
+            new Date(material.createdAt || Date.now()),
+            new Date(material.updatedAt || Date.now())
+          );
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB save error (falling back to disk):", dbErr);
     }
-  } catch (dbErr) {
-    console.warn("[aiStorage] DB save error (falling back to disk):", dbErr);
   }
 
   // 2. Also write to local file storage
@@ -631,18 +691,26 @@ export async function saveMaterial(material: CurriculumMaterial): Promise<void> 
 
 export async function deleteMaterial(groupId: string, materialId: string): Promise<boolean> {
   const cleanGid = String(groupId || "").trim();
+  let dbDeleted = false;
 
   // 1. Delete from PostgreSQL database
-  try {
-    const { prisma } = await import("./db");
-    await ensureAiDatabaseTables(prisma);
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM ai_curriculum_materials WHERE id = $1 AND group_id = $2`,
-      materialId,
-      cleanGid
-    );
-  } catch (dbErr) {
-    console.warn("[aiStorage] DB delete error:", dbErr);
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        const count = await prisma.$executeRawUnsafe(
+          `DELETE FROM ai_curriculum_materials WHERE id = $1 AND group_id = $2`,
+          materialId,
+          cleanGid
+        );
+        if (typeof count === "number" && count > 0) {
+          dbDeleted = true;
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB delete error:", dbErr);
+    }
   }
 
   // 2. Delete from local cache
@@ -654,29 +722,138 @@ export async function deleteMaterial(groupId: string, materialId: string): Promi
     (m) => !(m.id === materialId && String(m.groupId || "").trim() === cleanGid && m.groupId !== "global")
   );
 
+  let fileDeleted = false;
   if (filtered.length !== initialLength) {
     await safeWriteJson(MATERIALS_FILE, filtered);
-    return true;
+    fileDeleted = true;
   }
-  return false;
+  return dbDeleted || fileDeleted;
 }
 
 // ─── AI Generation Logs & Analytics ───────────────────────────────────────────
 
-export async function recordGenerationLog(log: GenerationLog): Promise<void> {
-  const logs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
+function mapDbRowToLog(r: any): GenerationLog {
+  return {
+    id: r.id,
+    groupId: r.group_id,
+    userId: r.user_id,
+    userName: r.user_name || "المعلم",
+    userUsername: r.user_username || undefined,
+    userPhoto: r.user_photo || undefined,
+    materialId: r.material_id || undefined,
+    materialTitle: r.material_title || "نص مخصص",
+    questionCount: Number(r.question_count) || 0,
+    modelUsed: r.model_used || "gemini-3.8-flash",
+    estimatedTokens: Number(r.estimated_tokens) || 0,
+    difficulty: r.difficulty || "mixed",
+    timestamp: r.timestamp ? new Date(r.timestamp).toISOString() : new Date().toISOString(),
+    success: Boolean(r.success),
+    questionsSummary: parseJsonField<any[]>(r.questions_summary, []),
+  };
+}
 
+export async function recordGenerationLog(log: GenerationLog): Promise<void> {
+  // 1. Persist to PostgreSQL database (ensures shared analytics across all lambdas & Telegram webhooks)
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        try {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO ai_generation_logs (
+              id, group_id, user_id, user_name, user_username, user_photo,
+              material_id, material_title, question_count, model_used,
+              estimated_tokens, difficulty, timestamp, success, questions_summary
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CAST($15 AS jsonb)
+            )
+            ON CONFLICT (id) DO NOTHING`,
+            log.id,
+            log.groupId,
+            log.userId,
+            log.userName,
+            log.userUsername || null,
+            log.userPhoto || null,
+            log.materialId || null,
+            log.materialTitle,
+            log.questionCount || 0,
+            log.modelUsed,
+            log.estimatedTokens || 0,
+            log.difficulty,
+            new Date(log.timestamp || Date.now()),
+            Boolean(log.success),
+            JSON.stringify(log.questionsSummary || [])
+          );
+        } catch {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO ai_generation_logs (
+              id, group_id, user_id, user_name, user_username, user_photo,
+              material_id, material_title, question_count, model_used,
+              estimated_tokens, difficulty, timestamp, success, questions_summary
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+            )
+            ON CONFLICT (id) DO NOTHING`,
+            log.id,
+            log.groupId,
+            log.userId,
+            log.userName,
+            log.userUsername || null,
+            log.userPhoto || null,
+            log.materialId || null,
+            log.materialTitle,
+            log.questionCount || 0,
+            log.modelUsed,
+            log.estimatedTokens || 0,
+            log.difficulty,
+            new Date(log.timestamp || Date.now()),
+            Boolean(log.success),
+            JSON.stringify(log.questionsSummary || [])
+          );
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB insert log notice (falling back to disk):", dbErr);
+    }
+  }
+
+  // 2. Also write to local file storage
+  const logs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
   logs.unshift(log);
   // Keep last 1,000 logs to maintain speed
   const trimmedLogs = logs.length > 1000 ? logs.slice(0, 1000) : logs;
-
   await safeWriteJson(LOGS_FILE, trimmedLogs);
 }
 
 export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummary> {
-  const allLogs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
   const cleanGid = String(groupId || "").trim();
-  const groupLogs = allLogs.filter((l) => String(l.groupId || "").trim() === cleanGid);
+  let groupLogs: GenerationLog[] = [];
+
+  // 1. Try reading from PostgreSQL database first
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        const rows = await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM ai_generation_logs WHERE group_id = $1 ORDER BY timestamp DESC LIMIT 1000`,
+          cleanGid
+        );
+        if (Array.isArray(rows) && rows.length > 0) {
+          groupLogs = rows.map(mapDbRowToLog);
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB query logs notice (falling back to disk):", dbErr);
+    }
+  }
+
+  // 2. Fallback to local files if no DB logs found
+  if (groupLogs.length === 0) {
+    const allLogs = await safeReadJson<GenerationLog[]>(LOGS_FILE, []);
+    groupLogs = allLogs.filter((l) => String(l.groupId || "").trim() === cleanGid);
+  }
 
   const totalGenerations = groupLogs.length;
   const totalQuestions = groupLogs.reduce((acc, l) => acc + (l.questionCount || 0), 0);
@@ -718,6 +895,15 @@ export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummar
     };
     existingUser.generationsCount += 1;
     existingUser.questionsCount += log.questionCount;
+    if (log.userUsername && !existingUser.userUsername) {
+      existingUser.userUsername = log.userUsername;
+    }
+    if (log.userPhoto && !existingUser.userPhoto) {
+      existingUser.userPhoto = log.userPhoto;
+    }
+    if (log.userName && log.userName !== "مستخدم غير معروف") {
+      existingUser.userName = log.userName;
+    }
     if (new Date(log.timestamp) > new Date(existingUser.lastActive)) {
       existingUser.lastActive = log.timestamp;
     }
@@ -734,14 +920,19 @@ export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummar
     existingMat.questionsCount += log.questionCount;
     materialsMap.set(title, existingMat);
 
-    // Difficulty
-    if (Array.isArray(log.questionsSummary)) {
+    // Difficulty breakdown (from question summary or fallback to log difficulty)
+    if (Array.isArray(log.questionsSummary) && log.questionsSummary.length > 0) {
       for (const q of log.questionsSummary) {
         const d = (q.difficulty || "MEDIUM").toUpperCase();
         if (d === "EASY") difficultyBreakdown.EASY += 1;
         else if (d === "HARD") difficultyBreakdown.HARD += 1;
         else difficultyBreakdown.MEDIUM += 1;
       }
+    } else if (log.questionCount > 0) {
+      const d = (log.difficulty || "MEDIUM").toUpperCase();
+      if (d === "EASY") difficultyBreakdown.EASY += log.questionCount;
+      else if (d === "HARD") difficultyBreakdown.HARD += log.questionCount;
+      else difficultyBreakdown.MEDIUM += log.questionCount;
     }
   }
 
@@ -774,12 +965,58 @@ export async function getAIAnalytics(groupId: string): Promise<AIAnalyticsSummar
 
 const GLOBAL_SETTINGS_KEY = "__global__";
 
+function mapDbRowToSettings(r: any): AISettings {
+  return {
+    groupId: r.group_id,
+    geminiApiKey: r.gemini_api_key || undefined,
+    defaultModel: r.default_model || "gemini-3.8-flash",
+    defaultDifficulty: (r.default_difficulty as any) || "mixed",
+    defaultCount: Number(r.default_count) || 5,
+    strictGrounding: r.strict_grounding !== false,
+    systemInstruction: r.system_instruction || "",
+    updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+  };
+}
+
 export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   const cleanGid = String(groupId || "").trim();
+
+  // Global key fallback from process.env
+  let globalEnvKey = process.env.GEMINI_API_KEY?.trim() || "";
+
+  // 1. Try reading from PostgreSQL database first
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        const rows = await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM ai_curriculum_settings WHERE group_id = $1 OR group_id = $2`,
+          cleanGid,
+          GLOBAL_SETTINGS_KEY
+        );
+        if (Array.isArray(rows) && rows.length > 0) {
+          const groupRow = rows.find((r) => r.group_id === cleanGid);
+          const globalRow = rows.find((r) => r.group_id === GLOBAL_SETTINGS_KEY);
+          const globalKey = globalRow?.gemini_api_key || globalEnvKey;
+
+          if (groupRow) {
+            return {
+              ...mapDbRowToSettings(groupRow),
+              geminiApiKey: groupRow.gemini_api_key || globalKey,
+            };
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB query settings notice (falling back to disk):", dbErr);
+    }
+  }
+
+  // 2. Fallback to local file storage
   const allSettings = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
   const existing = allSettings[cleanGid];
 
-  // Global key fallback: check __global__, then any group with a saved key, then process.env
   let globalFallbackKey = allSettings[GLOBAL_SETTINGS_KEY]?.geminiApiKey || "";
   if (!globalFallbackKey) {
     for (const val of Object.values(allSettings)) {
@@ -790,13 +1027,12 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
     }
   }
   if (!globalFallbackKey) {
-    globalFallbackKey = process.env.GEMINI_API_KEY?.trim() || "";
+    globalFallbackKey = globalEnvKey;
   }
 
   if (existing) {
     return {
       ...existing,
-      // If group has key, prioritize it; otherwise fallback to global / env
       geminiApiKey: existing.geminiApiKey || globalFallbackKey,
     };
   }
@@ -859,6 +1095,59 @@ export async function updateGroupAISettings(
     updatedAt: new Date().toISOString(),
   };
 
+  // 1. Persist to PostgreSQL database (ensures multi-instance & telegram webhook synchronization)
+  if (isDatabaseConfigured()) {
+    try {
+      const { prisma } = await import("./db");
+      const ready = await ensureAiDatabaseTables(prisma);
+      if (ready) {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO ai_curriculum_settings (
+            group_id, gemini_api_key, default_model, default_difficulty, default_count,
+            strict_grounding, system_instruction, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+          ON CONFLICT (group_id) DO UPDATE SET
+            gemini_api_key = EXCLUDED.gemini_api_key,
+            default_model = EXCLUDED.default_model,
+            default_difficulty = EXCLUDED.default_difficulty,
+            default_count = EXCLUDED.default_count,
+            strict_grounding = EXCLUDED.strict_grounding,
+            system_instruction = EXCLUDED.system_instruction,
+            updated_at = NOW()`,
+          cleanGid,
+          resolvedKey || null,
+          updated.defaultModel,
+          updated.defaultDifficulty,
+          updated.defaultCount,
+          updated.strictGrounding,
+          updated.systemInstruction || ""
+        );
+
+        if (resolvedKey) {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO ai_curriculum_settings (
+              group_id, gemini_api_key, default_model, default_difficulty, default_count,
+              strict_grounding, system_instruction, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            ON CONFLICT (group_id) DO UPDATE SET
+              gemini_api_key = EXCLUDED.gemini_api_key,
+              updated_at = NOW()`,
+            GLOBAL_SETTINGS_KEY,
+            resolvedKey,
+            updated.defaultModel,
+            updated.defaultDifficulty,
+            updated.defaultCount,
+            updated.strictGrounding,
+            updated.systemInstruction || ""
+          );
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[aiStorage] DB update settings notice (falling back to disk):", dbErr);
+    }
+  }
+
+  // 2. Also write to local file storage
   allSettings[cleanGid] = updated;
 
   // If a valid key exists, also update the global fallback so other groups automatically inherit it

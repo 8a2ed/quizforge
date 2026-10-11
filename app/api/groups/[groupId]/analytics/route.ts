@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
+import { getAIAnalytics } from "@/lib/aiStorage";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -178,11 +179,12 @@ export async function GET(
     );
 
     // ── Anonymous vs Public Quizzes stats ─────────────────────────────────────
-    const [anonQuizzesCount, publicQuizzesCount, anonAnswersCount, publicAnswersCount] = await Promise.all([
+    const [anonQuizzesCount, publicQuizzesCount, anonAnswersCount, publicAnswersCount, aiAnalytics] = await Promise.all([
       withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: true, sentAt: { not: null } } })),
       withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: false, sentAt: { not: null } } })),
       withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: true } } })),
       withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: false } } })),
+      getAIAnalytics(groupId).catch(() => null),
     ]);
 
     const anonymousStats = {
@@ -205,6 +207,7 @@ export async function GET(
         activeCount: totalQuizzes - deletedCount - closedCount,
       },
       anonymousStats,
+      aiAnalytics,
       byTopic,
       bySender: senderDetails,
       activityData,

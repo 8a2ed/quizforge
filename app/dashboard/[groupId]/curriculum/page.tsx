@@ -235,6 +235,7 @@ export default function CurriculumPage() {
   const [broadcastTopicId, setBroadcastTopicId] = useState<number | undefined>(undefined);
   const [broadcastOpenPeriod, setBroadcastOpenPeriod] = useState<number>(0);
   const [broadcastAnonymous, setBroadcastAnonymous] = useState<boolean>(true);
+  const [broadcastScheduledAt, setBroadcastScheduledAt] = useState<string>("");
   const [broadcasting, setBroadcasting] = useState(false);
 
   // Settings Tab State
@@ -416,6 +417,20 @@ export default function CurriculumPage() {
           }
         }
       }
+
+      // Also fetch group quiz settings to initialize default anonymous and timer
+      try {
+        const groupSettingsRes = await fetch(`/api/groups/${groupId}/settings`);
+        const groupSettingsData = await groupSettingsRes.json();
+        if (groupSettingsData?.config) {
+          if (typeof groupSettingsData.config.defaultAnonymous === "boolean") {
+            setBroadcastAnonymous(groupSettingsData.config.defaultAnonymous);
+          }
+          if (typeof groupSettingsData.config.defaultOpenPeriod === "number") {
+            setBroadcastOpenPeriod(groupSettingsData.config.defaultOpenPeriod);
+          }
+        }
+      } catch {}
     } catch (e) {
       console.error(e);
     }
@@ -763,6 +778,7 @@ export default function CurriculumPage() {
           topicId: broadcastTopicId,
           isAnonymous: broadcastAnonymous,
           openPeriod: broadcastOpenPeriod,
+          scheduledAt: broadcastScheduledAt ? new Date(broadcastScheduledAt).toISOString() : undefined,
         }),
       });
       const resText = await res.text();
@@ -773,9 +789,11 @@ export default function CurriculumPage() {
       setShowBroadcastModal(false);
       showToast(
         "success",
-        isRtl
-          ? `تم نشر ${data?.successCount || selectedQuestions.length} سؤال مباشرة على تليجرام بنجاح!`
-          : `Broadcasted ${data?.successCount || selectedQuestions.length} questions directly to Telegram!`
+        data?.message || (
+          isRtl
+            ? `تمت معالجة ${data?.successCount || selectedQuestions.length} سؤال بنجاح!`
+            : `Processed ${data?.successCount || selectedQuestions.length} questions successfully!`
+        )
       );
     } catch (e: any) {
       showToast("error", e.message || "Failed to broadcast");
@@ -3674,6 +3692,22 @@ export default function CurriculumPage() {
                 </label>
               </div>
 
+              <div>
+                <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                  {isRtl ? "⏰ جدولة الإرسال لوقت لاحق (اختياري):" : "Schedule for later (Optional):"}
+                </label>
+                <input
+                  type="datetime-local"
+                  className="input"
+                  value={broadcastScheduledAt}
+                  onChange={(e) => setBroadcastScheduledAt(e.target.value)}
+                  style={{ width: "100%", fontSize: "0.85rem" }}
+                />
+                <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", display: "block", marginTop: 4 }}>
+                  {isRtl ? "اتركه فارغاً للبث الفوري الآن إلى تليجرام." : "Leave empty to broadcast immediately."}
+                </span>
+              </div>
+
               <div
                 style={{
                   background: "var(--clr-bg-elevated)",
@@ -3684,9 +3718,13 @@ export default function CurriculumPage() {
                 }}
               >
                 <span>
-                  {isRtl
-                    ? `سيتم إرسال ${selectedQuestions.length} سؤال بالتتابع مع الالتزام الصارم بحدود ومعدلات تليجرام لمنع الحظر.`
-                    : `Will sequentially broadcast ${selectedQuestions.length} questions.`}
+                  {broadcastScheduledAt
+                    ? (isRtl
+                        ? `سيتم حفظ ${selectedQuestions.length} سؤال في قائمة الجدولة وإرسالها تلقائياً في الموعد المحدد.`
+                        : `Will schedule ${selectedQuestions.length} questions for automatic dispatch.`)
+                    : (isRtl
+                        ? `سيتم إرسال ${selectedQuestions.length} سؤال بالتتابع مع الالتزام الصارم بحدود ومعدلات تليجرام لمنع الحظر.`
+                        : `Will sequentially broadcast ${selectedQuestions.length} questions.`)}
                 </span>
               </div>
             </div>
@@ -3702,7 +3740,11 @@ export default function CurriculumPage() {
                 style={{ gap: 8, background: "var(--clr-success)", color: "#fff" }}
               >
                 {broadcasting ? <RefreshCw size={16} className="spin" /> : <Send size={16} />}
-                <span>{isRtl ? "بدء الإرسال الآن" : "Start Broadcast"}</span>
+                <span>
+                  {broadcastScheduledAt
+                    ? (isRtl ? "جدولة الإرسال الآن" : "Schedule Broadcast")
+                    : (isRtl ? "بدء الإرسال الآن" : "Start Broadcast")}
+                </span>
               </button>
             </div>
           </div>

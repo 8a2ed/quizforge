@@ -28,7 +28,11 @@ async function ensureTemplateGroup(userId: string): Promise<string> {
       })
     );
     await withRetry(() =>
-      prisma.groupMember.create({ data: { userId, groupId: group!.id, role: "OWNER" } })
+      prisma.groupMember.upsert({
+        where: { userId_groupId: { userId, groupId: group!.id } },
+        create: { userId, groupId: group!.id, role: "OWNER" },
+        update: {},
+      })
     );
   }
   return group.id;

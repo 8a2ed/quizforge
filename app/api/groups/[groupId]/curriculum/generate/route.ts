@@ -142,14 +142,17 @@ export async function POST(
 
     // Call Gemini with strict Zero-Hallucination prompt
     const requestedModel = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : (settings.defaultModel || DEFAULT_GEMINI_MODEL);
+    const resolvedCount = body.questionCount !== undefined ? (Number(body.questionCount) || 5) : (settings.defaultCount || 5);
+    const resolvedDifficulty = (body.difficulty && String(body.difficulty).trim()) || settings.defaultDifficulty || "mixed";
+
     const result = await generateCurriculumQuestions({
       apiKey,
       model: requestedModel,
       textExcerpt,
       materialTitle,
       topic,
-      questionCount: Number(questionCount) || 5,
-      difficulty,
+      questionCount: resolvedCount,
+      difficulty: resolvedDifficulty,
       strictGrounding: settings.strictGrounding,
       systemInstruction: [settings.systemInstruction, customInstructions].filter(Boolean).join("\n"),
     });
@@ -176,7 +179,7 @@ export async function POST(
       questionCount: result.questions.length,
       modelUsed: result.modelUsed,
       estimatedTokens: result.estimatedTokens,
-      difficulty,
+      difficulty: resolvedDifficulty,
       timestamp: new Date().toISOString(),
       success: true,
       questionsSummary: result.questions.map((q) => ({

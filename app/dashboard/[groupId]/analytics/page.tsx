@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 const COLORS = ["#4f7fff","#a78bfa","#34d399","#fbbf24","#f87171","#38bdf8","#fb923c","#e879f9"];
@@ -23,6 +24,15 @@ interface AnalyticsData {
     publicAnswers: number;
     anonAvgAnswers: number;
     publicAvgAnswers: number;
+  };
+  aiAnalytics?: {
+    totalGenerations: number;
+    totalQuestions: number;
+    totalTokens: number;
+    activeUsersCount: number;
+    difficultyBreakdown: { EASY: number; MEDIUM: number; HARD: number };
+    materialsUsage: Array<{ materialTitle: string; generationsCount: number; questionsCount: number }>;
+    userLeaderboard: Array<{ userId: string; userName: string; userUsername?: string; questionsCount: number }>;
   };
   byTopic: { topicName: string | null; _count: { id: number } }[];
   bySender: { sentById: string; _count: { id: number }; user: { firstName: string; username: string | null } | null }[];
@@ -164,6 +174,63 @@ export default function AnalyticsPage() {
               <p style={{ margin: 0, fontSize: "0.74rem", color: "var(--clr-text-muted)", lineHeight: 1.4 }}>
                 الكويزات المجهولة تشجع الطلاب على المحاولة دون خوف من نظرة زملائهم عند الخطأ، مع تزويد المعلم بكافة نسب الحل والخيارات بدقة تامة.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI & Curriculum Analytics Card */}
+      {data.aiAnalytics && (
+        <div className="card animate-fade-up animate-delay-1" style={{
+          background: "linear-gradient(135deg, rgba(79,127,255,0.06) 0%, rgba(167,139,250,0.05) 100%)",
+          border: "1px solid rgba(79,127,255,0.25)",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: "1.2rem" }}>🤖</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "0.95rem" }}>إحصائيات الذكاء الاصطناعي والمناهج (AI & Curriculum Generation)</h3>
+                <p style={{ margin: "2px 0 0", fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>
+                  إجمالي الأسئلة والمناهج المعتمدة ونشاط الطلاب عبر البوت /qs والتوليد الذكي
+                </p>
+              </div>
+            </div>
+            <Link
+              href={`/dashboard/${groupId}/curriculum`}
+              className="btn btn-sm btn-primary"
+              style={{ fontSize: "0.78rem", gap: 6 }}
+            >
+              📚 تفاصيل المناهج والتحليلات
+            </Link>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 12 }}>
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginBottom: 4 }}>إجمالي عمليات التوليد</div>
+              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--clr-brand)" }}>{data.aiAnalytics.totalGenerations}</div>
+              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-secondary)", marginTop: 2 }}>عبر لوحة التحكم وبوت تليجرام</div>
+            </div>
+
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginBottom: 4 }}>الأسئلة الأكاديمية المولدة</div>
+              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--clr-success)" }}>{data.aiAnalytics.totalQuestions}</div>
+              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-secondary)", marginTop: 2 }}>مطابقة لمعايير Zero-Hallucination</div>
+            </div>
+
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginBottom: 4 }}>الرموز المستهلكة (Tokens)</div>
+              <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "#a78bfa" }}>{data.aiAnalytics.totalTokens.toLocaleString()}</div>
+              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-secondary)", marginTop: 2 }}>استهلاك اقتصادي ومحسن</div>
+            </div>
+
+            <div style={{ padding: 12, background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--clr-border)" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginBottom: 4 }}>توزيع الصعوبة الأكاديمية</div>
+              <div style={{ display: "flex", gap: 8, fontSize: "0.78rem", fontWeight: 700, marginTop: 4 }}>
+                <span style={{ color: "var(--clr-success)" }}>🟢 {data.aiAnalytics.difficultyBreakdown?.EASY || 0}</span>
+                <span style={{ color: "#f59e0b" }}>🟡 {data.aiAnalytics.difficultyBreakdown?.MEDIUM || 0}</span>
+                <span style={{ color: "var(--clr-danger)" }}>🔴 {data.aiAnalytics.difficultyBreakdown?.HARD || 0}</span>
+              </div>
+              <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)", marginTop: 4 }}>سهل · متوسط · متقدم</div>
             </div>
           </div>
         </div>

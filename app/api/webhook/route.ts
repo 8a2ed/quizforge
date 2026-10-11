@@ -666,6 +666,7 @@ export async function POST(req: NextRequest) {
           chatId: msg.chat.id,
           userId: String(msg.from?.id || ""),
           userName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "طالب",
+          userUsername: msg.from?.username || undefined,
           messageId: msg.message_id,
           messageThreadId: msg.message_thread_id || undefined,
           groupId: group?.id || undefined,

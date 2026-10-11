@@ -17,6 +17,9 @@ async function authorize(req: NextRequest, groupId: string) {
   });
 }
 
+import { getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate } from "@/lib/aiStorage";
+import { normalizeModelName } from "@/lib/gemini";
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
@@ -25,9 +28,10 @@ export async function GET(
   const membership = await authorize(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const [config, webhookStatus] = await Promise.all([
+  const [config, webhookStatus, aiSettings] = await Promise.all([
     prisma.botConfig.findUnique({ where: { groupId } }),
     telegram.getWebhookInfo().catch(() => null),
+    getGroupAISettings(groupId).catch(() => null),
   ]);
 
   let botInfo = null;
@@ -35,7 +39,7 @@ export async function GET(
     botInfo = await telegram.getMe();
   } catch {}
 
-  return NextResponse.json({ config, botInfo, webhookStatus });
+  return NextResponse.json({ config, botInfo, webhookStatus, aiSettings });
 }
 
 export async function PATCH(
@@ -59,5 +63,30 @@ export async function PATCH(
     },
   });
 
-  return NextResponse.json({ ok: true, config: updated });
+  // Also support updating AI curriculum settings if provided
+  let updatedAISettings = null;
+  const aiData = body.aiSettings || body;
+  const aiUpdates: Parameters<typeof updateGroupAISettings>[1] = {};
+
+  if (aiData.geminiApiKey !== undefined) {
+    const key = String(aiData.geminiApiKey).trim();
+    if (isValidApiKeyCandidate(key)) {
+      aiUpdates.geminiApiKey = key;
+    }
+  }
+  if (aiData.defaultModel) aiUpdates.defaultModel = normalizeModelName(aiData.defaultModel);
+  if (aiData.defaultDifficulty) aiUpdates.defaultDifficulty = aiData.defaultDifficulty;
+  if (aiData.defaultCount !== undefined) aiUpdates.defaultCount = Number(aiData.defaultCount) || 5;
+  if (aiData.strictGrounding !== undefined) aiUpdates.strictGrounding = Boolean(aiData.strictGrounding);
+  if (aiData.systemInstruction !== undefined) aiUpdates.systemInstruction = String(aiData.systemInstruction);
+
+  if (Object.keys(aiUpdates).length > 0) {
+    try {
+      updatedAISettings = await updateGroupAISettings(groupId, aiUpdates);
+    } catch (e) {
+      console.warn("[settings PATCH] AI settings update notice:", e);
+    }
+  }
+
+  return NextResponse.json({ ok: true, config: updated, aiSettings: updatedAISettings });
 }

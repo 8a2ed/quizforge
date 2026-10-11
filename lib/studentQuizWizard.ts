@@ -21,6 +21,8 @@ const SESSION_TTL_MS = 10 * 60 * 1000;
 export interface StudentQuizSession {
   userId: string;
   userName: string;
+  userUsername?: string;
+  userPhoto?: string;
   chatId: number | string;
   messageThreadId?: number;
   messageId?: number;
@@ -181,33 +183,50 @@ function getMaterialKeyboard(materials: CurriculumMaterial[]): Array<Array<{ tex
   return keyboard;
 }
 
-function getCountKeyboard(): Array<Array<{ text: string; callback_data: string }>> {
-  return [
-    [
-      { text: "⚡ 3 أسئلة (سريع)", callback_data: "qs_cnt:3" },
-      { text: "🎯 5 أسئلة (موصى به)", callback_data: "qs_cnt:5" },
-    ],
-    [
-      { text: "📝 10 أسئلة (شامل)", callback_data: "qs_cnt:10" },
-    ],
-    [
-      { text: "🔙 رجوع للمواد", callback_data: "qs_back:material" },
-      { text: "❌ إلغاء", callback_data: "qs_cancel" },
-    ],
-  ];
+function getCountKeyboard(defaultCount = 5): Array<Array<{ text: string; callback_data: string }>> {
+  const counts = [3, 5, 10];
+  if (!counts.includes(defaultCount) && defaultCount > 0 && defaultCount <= 20) {
+    counts.push(defaultCount);
+    counts.sort((a, b) => a - b);
+  }
+  const buttons = counts.map((cnt) => ({
+    text: cnt === defaultCount
+      ? `🎯 ${cnt} أسئلة (موصى به)`
+      : cnt === 3
+      ? `⚡ 3 أسئلة (سريع)`
+      : cnt === 10
+      ? `📝 10 أسئلة (شامل)`
+      : `📄 ${cnt} أسئلة`,
+    callback_data: `qs_cnt:${cnt}`,
+  }));
+
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+  rows.push([
+    { text: "🔙 رجوع للمواد", callback_data: "qs_back:material" },
+    { text: "❌ إلغاء", callback_data: "qs_cancel" },
+  ]);
+  return rows;
 }
 
-function getDifficultyKeyboard(): Array<Array<{ text: string; callback_data: string }>> {
+function getDifficultyKeyboard(defaultDifficulty = "mixed"): Array<Array<{ text: string; callback_data: string }>> {
+  const isMixed = defaultDifficulty === "mixed";
+  const isEasy = defaultDifficulty === "easy";
+  const isMedium = defaultDifficulty === "medium";
+  const isHard = defaultDifficulty === "hard";
+
   return [
     [
-      { text: "⚖️ متوازن (شامل وتدريجي)", callback_data: "qs_dif:mixed" },
+      { text: `⚖️ متوازن (شامل وتدريجي)${isMixed ? " ★" : ""}`, callback_data: "qs_dif:mixed" },
     ],
     [
-      { text: "🟢 مباشر وسهل (تذكر ومفاهيم)", callback_data: "qs_dif:easy" },
-      { text: "🟡 متوسط (فهم وتطبيق)", callback_data: "qs_dif:medium" },
+      { text: `🟢 مباشر وسهل (تذكر ومفاهيم)${isEasy ? " ★" : ""}`, callback_data: "qs_dif:easy" },
+      { text: `🟡 متوسط (فهم وتطبيق)${isMedium ? " ★" : ""}`, callback_data: "qs_dif:medium" },
     ],
     [
-      { text: "🔴 متقدم (تحليل ومهارات عليا)", callback_data: "qs_dif:hard" },
+      { text: `🔴 متقدم (تحليل ومهارات عليا)${isHard ? " ★" : ""}`, callback_data: "qs_dif:hard" },
     ],
     [
       { text: "🔙 رجوع", callback_data: "qs_back:count" },
@@ -258,12 +277,14 @@ export async function handleStudentQuizCommand(params: {
   chatId: number | string;
   userId: string;
   userName: string;
+  userUsername?: string;
+  userPhoto?: string;
   messageId: number;
   messageThreadId?: number;
   groupId?: string;
   groupTitle?: string;
 }): Promise<void> {
-  const { chatId, userId, userName, messageId, messageThreadId, groupId, groupTitle } = params;
+  const { chatId, userId, userName, userUsername, userPhoto, messageId, messageThreadId, groupId, groupTitle } = params;
 
   // 1. Check Rate Limit
   const limitCheck = checkUserRateLimit(userId);
@@ -327,6 +348,8 @@ export async function handleStudentQuizCommand(params: {
   const session: StudentQuizSession = {
     userId,
     userName,
+    userUsername,
+    userPhoto,
     chatId,
     messageThreadId,
     groupId,
@@ -444,6 +467,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
 
     if (to === "count") {
       session.step = "count";
+      const aiSettings = await getGroupAISettings(session.groupId || "global");
       await telegram.editMessageText({
         chat_id: chatId,
         message_id: msg.message_id,
@@ -452,13 +476,14 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
           `📚 <b>المادة المختارة:</b> ${escapeHtml(session.materialTitle || "")}\n\n` +
           `🔢 <b>الخطوة 2: كم عدد الأسئلة التي تريد اختبار نفسك بها؟</b>`,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: getCountKeyboard() },
+        reply_markup: { inline_keyboard: getCountKeyboard(aiSettings.defaultCount) },
       });
       return true;
     }
 
     if (to === "difficulty") {
       session.step = "difficulty";
+      const aiSettings = await getGroupAISettings(session.groupId || "global");
       await telegram.editMessageText({
         chat_id: chatId,
         message_id: msg.message_id,
@@ -468,7 +493,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
           `🔢 <b>العدد:</b> ${session.questionCount || 5} أسئلة\n\n` +
           `🎯 <b>الخطوة 3: اختر مستوى الصعوبة الأكاديمي:</b>`,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: getDifficultyKeyboard() },
+        reply_markup: { inline_keyboard: getDifficultyKeyboard(aiSettings.defaultDifficulty) },
       });
       return true;
     }
@@ -484,11 +509,16 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
       return true;
     }
 
+    if (!session.groupId && material.groupId && material.groupId !== "global") {
+      session.groupId = material.groupId;
+    }
+
     session.materialId = material.id;
     session.materialTitle = material.title;
     session.step = "count";
     await telegram.answerCallbackQuery(cbId, `تم اختيار: ${material.title}`);
 
+    const aiSettings = await getGroupAISettings(session.groupId || "global");
     await telegram.editMessageText({
       chat_id: chatId,
       message_id: msg.message_id,
@@ -498,7 +528,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
         `📖 <b>الموضوع:</b> ${escapeHtml(material.subject || "عام")}\n\n` +
         `🔢 <b>الخطوة 2: كم عدد الأسئلة التي تريد اختبار نفسك بها؟</b>`,
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: getCountKeyboard() },
+      reply_markup: { inline_keyboard: getCountKeyboard(aiSettings.defaultCount) },
     });
     return true;
   }
@@ -510,6 +540,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
     session.step = "difficulty";
     await telegram.answerCallbackQuery(cbId, `${count} أسئلة`);
 
+    const aiSettings = await getGroupAISettings(session.groupId || "global");
     await telegram.editMessageText({
       chat_id: chatId,
       message_id: msg.message_id,
@@ -519,7 +550,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
         `🔢 <b>العدد:</b> ${count} أسئلة\n\n` +
         `🎯 <b>الخطوة 3: اختر مستوى الصعوبة الأكاديمي:</b>`,
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: getDifficultyKeyboard() },
+      reply_markup: { inline_keyboard: getDifficultyKeyboard(aiSettings.defaultDifficulty) },
     });
     return true;
   }
@@ -614,6 +645,18 @@ async function executeGeneration(
       throw new Error("تعذر الوصول إلى محتوى المادة الدراسية.");
     }
 
+    // Auto-bind group if session didn't have groupId
+    if (!session.groupId) {
+      if (material.groupId && material.groupId !== "global") {
+        session.groupId = material.groupId;
+      } else {
+        try {
+          const firstGroup = await withRetry(() => prisma.group.findFirst({ select: { id: true } }));
+          if (firstGroup) session.groupId = firstGroup.id;
+        } catch {}
+      }
+    }
+
     let textExcerpt = material.cleanedText;
     let materialTitle = material.title;
 
@@ -630,14 +673,14 @@ async function executeGeneration(
     }
 
     // 3. Resolve API settings & keys
-    const settings = session.groupId
-      ? await getGroupAISettings(session.groupId)
-      : { geminiApiKey: process.env.GEMINI_API_KEY, defaultModel: "gemini-3.8-flash", strictGrounding: true };
-
+    const settings = await getGroupAISettings(session.groupId || "global");
     const apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("لم يتم ضبط مفتاح Gemini API Key في النظام بعد. يرجى إدخال المفتاح في لوحة التحكم.");
     }
+
+    const resolvedCount = session.questionCount || settings.defaultCount || 5;
+    const resolvedDifficulty = session.difficulty || settings.defaultDifficulty || "mixed";
 
     // 4. Generate with Auto-Fallback and transient retry
     let genResult: { questions: ValidatedQuestion[]; modelUsed: string; estimatedTokens: number } | null = null;
@@ -650,10 +693,10 @@ async function executeGeneration(
           model: settings.defaultModel || "gemini-3.8-flash",
           textExcerpt,
           materialTitle,
-          questionCount: session.questionCount || 5,
-          difficulty: session.difficulty || "mixed",
+          questionCount: resolvedCount,
+          difficulty: resolvedDifficulty,
           strictGrounding: settings.strictGrounding ?? true,
-          systemInstruction: (settings as any).systemInstruction || undefined,
+          systemInstruction: settings.systemInstruction || undefined,
         });
 
         if (genResult && genResult.questions && genResult.questions.length > 0) {
@@ -703,6 +746,21 @@ async function executeGeneration(
           })
         );
         instructorUserId = adminMember?.userId || null;
+        if (!instructorUserId) {
+          const anyMember = await withRetry(() =>
+            prisma.groupMember.findFirst({
+              where: { groupId: session.groupId },
+              select: { userId: true },
+            })
+          );
+          instructorUserId = anyMember?.userId || null;
+        }
+        if (!instructorUserId) {
+          const anyUser = await withRetry(() =>
+            prisma.user.findFirst({ select: { id: true } })
+          );
+          instructorUserId = anyUser?.id || null;
+        }
       } catch {}
     }
 
@@ -743,7 +801,7 @@ async function executeGeneration(
                 pollId: sentPoll.poll?.id || null,
                 messageId: sentPoll.message_id,
                 sentAt: new Date(),
-                tags: ["qs-bot", session.difficulty || "mixed"],
+                tags: ["AI_CURRICULUM", "qs-bot", resolvedDifficulty],
               },
             })
           ).catch((e) => console.warn("[StudentQuizWizard] DB save quiz warning:", e));
@@ -758,28 +816,29 @@ async function executeGeneration(
       }
     }
 
-    // 7. Audit log
-    if (session.groupId) {
-      await recordGenerationLog({
-        id: `gen_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        groupId: session.groupId,
-        userId: session.userId,
-        userName: session.userName,
-        materialId: session.materialId,
-        materialTitle: session.materialTitle || "مادة دراسية",
-        questionCount: questions.length,
-        modelUsed: genResult.modelUsed,
-        estimatedTokens: genResult.estimatedTokens,
-        difficulty: session.difficulty || "mixed",
-        timestamp: new Date().toISOString(),
-        success: true,
-        questionsSummary: questions.map((q) => ({
-          question: q.question,
-          difficulty: q.difficulty,
-          topic: q.topic,
-        })),
-      }).catch(() => {});
-    }
+    // 7. Audit log (always record to ensure curriculum & group analytics reflect all generations)
+    const logGroupId = session.groupId || (material.groupId && material.groupId !== "global" ? material.groupId : "") || "global";
+    await recordGenerationLog({
+      id: `gen_bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      groupId: logGroupId,
+      userId: session.userId,
+      userName: session.userName,
+      userUsername: session.userUsername,
+      userPhoto: session.userPhoto,
+      materialId: session.materialId,
+      materialTitle: session.materialTitle || material.title || "مادة دراسية",
+      questionCount: questions.length,
+      modelUsed: genResult.modelUsed,
+      estimatedTokens: genResult.estimatedTokens,
+      difficulty: resolvedDifficulty,
+      timestamp: new Date().toISOString(),
+      success: true,
+      questionsSummary: questions.map((q) => ({
+        question: q.question,
+        difficulty: q.difficulty,
+        topic: q.topic,
+      })),
+    }).catch(() => {});
 
     quizSessions.delete(sKey);
   } catch (err: any) {
