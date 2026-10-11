@@ -3,11 +3,13 @@ import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 import {
   getMaterialById,
+  saveMaterial,
   getGroupAISettings,
   updateGroupAISettings,
   isValidApiKeyCandidate,
   recordGenerationLog,
   GenerationLog,
+  CurriculumMaterial,
 } from "@/lib/aiStorage";
 import { generateCurriculumQuestions, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
 
@@ -78,14 +80,21 @@ export async function POST(
     let materialTitle = "نص مخصص";
 
     if (materialId) {
-      const material = await getMaterialById(groupId, materialId);
+      let material: CurriculumMaterial | null = await getMaterialById(groupId, materialId);
+      if (!material && body.fallbackMaterial) {
+        const fallback = body.fallbackMaterial as CurriculumMaterial;
+        material = fallback;
+        try {
+          await saveMaterial(fallback);
+        } catch {}
+      }
       if (!material) {
         return NextResponse.json({ error: "المادة الدراسية المحددة غير موجودة" }, { status: 404 });
       }
       materialTitle = material.title;
 
       if (sectionId && material.sections) {
-        const sec = material.sections.find((s) => s.id === sectionId);
+        const sec = material.sections.find((s: any) => s.id === sectionId);
         if (sec) {
           textExcerpt = sec.content;
           materialTitle = `${material.title} (${sec.title})`;
@@ -132,9 +141,10 @@ export async function POST(
     }
 
     // Call Gemini with strict Zero-Hallucination prompt
+    const requestedModel = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : (settings.defaultModel || DEFAULT_GEMINI_MODEL);
     const result = await generateCurriculumQuestions({
       apiKey,
-      model: settings.defaultModel || DEFAULT_GEMINI_MODEL,
+      model: requestedModel,
       textExcerpt,
       materialTitle,
       topic,

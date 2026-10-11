@@ -162,6 +162,27 @@ export function isModelNotFoundError(status: number, message: string): boolean {
 }
 
 /**
+ * Checks if model should trigger fallback: either 404 (model not found/deprecated)
+ * or 429 quota exhaustion specifically on the requested model (e.g. limit: 20 per day).
+ */
+export function shouldTriggerModelFallback(status: number, message: string): boolean {
+  if (isModelNotFoundError(status, message)) return true;
+  if (status === 429) {
+    const lower = (message || "").toLowerCase();
+    if (
+      lower.includes("quota exceeded") ||
+      lower.includes("free_tier_requests") ||
+      lower.includes("resource_exhausted") ||
+      lower.includes("limit:") ||
+      lower.includes("retry in")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Known legacy models that have been deprecated or failed with 404 in Google Gemini API.
  */
 export const KNOWN_DEPRECATED_MODELS = new Set([
@@ -417,8 +438,8 @@ export async function generateCurriculumQuestions(
   let fallbackUsed = false;
   let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
 
-  // If model fails with 404 or deprecation, trigger intelligent fallback
-  if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
+  // If model fails with 404, deprecation, or quota exhaustion (429), trigger intelligent fallback
+  if (!apiRes.ok && shouldTriggerModelFallback(apiRes.status, apiRes.errorDetails)) {
     console.warn(
       `[Gemini] Model '${requestedModel}' failed with (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
     );
@@ -788,7 +809,7 @@ export async function extractDocumentTextWithGemini(
   let fallbackUsed = false;
   let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
 
-  if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
+  if (!apiRes.ok && shouldTriggerModelFallback(apiRes.status, apiRes.errorDetails)) {
     console.warn(
       `[Gemini OCR] Model '${requestedModel}' failed (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
     );
@@ -935,7 +956,7 @@ Never summarize, omit, or truncate any visible content.`;
     apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
   }
 
-  if (!apiRes.ok && isModelNotFoundError(apiRes.status, apiRes.errorDetails)) {
+  if (!apiRes.ok && shouldTriggerModelFallback(apiRes.status, apiRes.errorDetails)) {
     console.warn(
       `[Gemini Chunk OCR] Model '${requestedModel}' failed (${apiRes.status}): ${apiRes.errorDetails}. Initiating auto-fallback...`
     );

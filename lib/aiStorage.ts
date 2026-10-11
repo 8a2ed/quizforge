@@ -94,7 +94,17 @@ export interface AIAnalyticsSummary {
   recentLogs: GenerationLog[];
 }
 
-const DATA_DIR = path.join(process.cwd(), "data", "ai_curriculum");
+const IS_SERVERLESS = Boolean(
+  process.env.VERCEL ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.NETLIFY
+);
+
+const DATA_DIR = IS_SERVERLESS
+  ? path.join("/tmp", "ai_curriculum")
+  : path.join(process.cwd(), "data", "ai_curriculum");
+
+const STATIC_SEED_DIR = path.join(process.cwd(), "data", "ai_curriculum");
 const MATERIALS_FILE = path.join(DATA_DIR, "materials.json");
 const LOGS_FILE = path.join(DATA_DIR, "generation_logs.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
@@ -118,6 +128,19 @@ async function safeReadJson<T>(filePath: string, fallback: T): Promise<T> {
       return JSON.parse(data) as T;
     } catch (err: any) {
       if (err?.code === "ENOENT") {
+        if (IS_SERVERLESS) {
+          try {
+            const seedPath = path.join(STATIC_SEED_DIR, path.basename(filePath));
+            const seedData = await fs.readFile(seedPath, "utf-8");
+            if (seedData && seedData.trim()) {
+              const parsed = JSON.parse(seedData) as T;
+              try {
+                await fs.writeFile(filePath, seedData, "utf-8");
+              } catch {}
+              return parsed;
+            }
+          } catch {}
+        }
         return fallback;
       }
       if (attempt < 2) {

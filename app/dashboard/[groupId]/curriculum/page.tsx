@@ -60,6 +60,7 @@ interface CurriculumMaterial {
   ocrUsed?: boolean;
   digitalFallback?: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 interface ValidatedQuestion {
@@ -143,6 +144,27 @@ function isValidApiKey(k?: string | null): boolean {
   if (trimmed.includes("***") || trimmed.includes("*")) return false;
   if (trimmed === "undefined" || trimmed === "null") return false;
   return true;
+}
+
+function getUserMaterialsFromStorage(gid: string): CurriculumMaterial[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(`qf_user_materials_${gid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function saveUserMaterialsToStorage(gid: string, mats: CurriculumMaterial[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`qf_user_materials_${gid}`, JSON.stringify(mats));
+  } catch (err) {
+    console.warn("Could not write user materials to localStorage", err);
+  }
 }
 
 export default function CurriculumPage() {
@@ -246,11 +268,24 @@ export default function CurriculumPage() {
         d = resText ? JSON.parse(resText) : null;
       } catch {}
 
+      const localUserMats = getUserMaterialsFromStorage(groupId);
+
       if (res.ok && d) {
-        const loaded = d.materials || [];
-        setMaterials(loaded);
+        const loaded: CurriculumMaterial[] = d.materials || [];
+        // Merge user materials with server materials so custom uploads are never wiped on serverless resets
+        const mergedMap = new Map<string, CurriculumMaterial>();
+        for (const m of localUserMats) {
+          mergedMap.set(m.id, m);
+        }
+        for (const m of loaded) {
+          if (!mergedMap.has(m.id)) {
+            mergedMap.set(m.id, m);
+          }
+        }
+        const merged = Array.from(mergedMap.values());
+        setMaterials(merged);
         try {
-          const lightweight = loaded.map((m: any) => ({
+          const lightweight = merged.map((m: any) => ({
             id: m.id,
             groupId: m.groupId,
             title: m.title,
@@ -269,43 +304,42 @@ export default function CurriculumPage() {
           }));
           localStorage.setItem(`qf_materials_${groupId}`, JSON.stringify(lightweight));
         } catch {}
-        if (loaded.length > 0) {
+        if (merged.length > 0) {
           setSelectedMaterialId((prev) => {
-            if (prev && loaded.some((m: any) => m.id === prev)) return prev;
-            return loaded[0].id;
+            if (prev && merged.some((m: any) => m.id === prev)) return prev;
+            return merged[0].id;
           });
         }
       } else {
-        // Fallback to client cache if network was delayed or error
+        // Fallback to local user materials + cached
+        const mergedMap = new Map<string, CurriculumMaterial>();
+        for (const m of localUserMats) mergedMap.set(m.id, m);
         try {
           const cached = localStorage.getItem(`qf_materials_${groupId}`);
           if (cached) {
             const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setMaterials(parsed);
-              setSelectedMaterialId((prev) => {
-                if (prev && parsed.some((m: any) => m.id === prev)) return prev;
-                return parsed[0].id;
-              });
+            if (Array.isArray(parsed)) {
+              for (const m of parsed) {
+                if (!mergedMap.has(m.id)) mergedMap.set(m.id, m);
+              }
             }
           }
         } catch {}
+        const fallbackList = Array.from(mergedMap.values());
+        if (fallbackList.length > 0) {
+          setMaterials(fallbackList);
+          setSelectedMaterialId((prev) => {
+            if (prev && fallbackList.some((m: any) => m.id === prev)) return prev;
+            return fallbackList[0].id;
+          });
+        }
       }
     } catch (e) {
       console.error(e);
-      try {
-        const cached = localStorage.getItem(`qf_materials_${groupId}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setMaterials(parsed);
-            setSelectedMaterialId((prev) => {
-              if (prev && parsed.some((m: any) => m.id === prev)) return prev;
-              return parsed[0].id;
-            });
-          }
-        }
-      } catch {}
+      const localUserMats = getUserMaterialsFromStorage(groupId);
+      if (localUserMats.length > 0) {
+        setMaterials(localUserMats);
+      }
     }
   };
 
@@ -393,15 +427,24 @@ export default function CurriculumPage() {
 
   useEffect(() => {
     setLoading(true);
-    // Optimistically load cached materials from localStorage for instant render
+    // Optimistically load persistent user materials + cached materials from localStorage for instant render
     try {
+      const localUserMats = getUserMaterialsFromStorage(groupId);
       const cached = localStorage.getItem(`qf_materials_${groupId}`);
+      const mergedMap = new Map<string, CurriculumMaterial>();
+      for (const m of localUserMats) mergedMap.set(m.id, m);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMaterials(parsed);
-          setSelectedMaterialId(parsed[0].id);
+        if (Array.isArray(parsed)) {
+          for (const m of parsed) {
+            if (!mergedMap.has(m.id)) mergedMap.set(m.id, m);
+          }
         }
+      }
+      const initialList = Array.from(mergedMap.values());
+      if (initialList.length > 0) {
+        setMaterials(initialList);
+        setSelectedMaterialId(initialList[0].id);
       }
     } catch {}
 
@@ -432,6 +475,7 @@ export default function CurriculumPage() {
         questionCount: genCount,
         difficulty: genDifficulty,
         customInstructions: customInstructions.trim(),
+        model: settings?.defaultModel || "gemini-3.8-flash",
       };
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
@@ -443,6 +487,27 @@ export default function CurriculumPage() {
       if (sourceMode === "material") {
         payload.materialId = selectedMaterialId;
         if (selectedSectionId) payload.sectionId = selectedSectionId;
+        if (currentMaterial) {
+          payload.fallbackMaterial = {
+            id: currentMaterial.id,
+            groupId: currentMaterial.groupId,
+            title: currentMaterial.title,
+            cleanedText: currentMaterial.cleanedText,
+            rawText: currentMaterial.rawText,
+            sections: currentMaterial.sections,
+            subject: currentMaterial.subject,
+            grade: currentMaterial.grade,
+            topics: currentMaterial.topics,
+            fileName: currentMaterial.fileName,
+            fileType: currentMaterial.fileType,
+            fileSize: currentMaterial.fileSize,
+            wordCount: currentMaterial.wordCount,
+            charCount: currentMaterial.charCount,
+            uploadedBy: currentMaterial.uploadedBy,
+            createdAt: currentMaterial.createdAt,
+            updatedAt: currentMaterial.updatedAt,
+          };
+        }
       } else {
         payload.customText = directText.trim();
         payload.materialTitle = directTitle.trim() || (isRtl ? "نص دراسي مباشر" : "Direct Curriculum Text");
@@ -885,6 +950,8 @@ export default function CurriculumPage() {
 
           if (data?.material) {
             const newMat = data.material;
+            const currentStored = getUserMaterialsFromStorage(groupId);
+            saveUserMaterialsToStorage(groupId, [newMat, ...currentStored.filter((m) => m.id !== newMat.id)]);
             setMaterials((prev) => [newMat, ...prev.filter((m) => m.id !== newMat.id)]);
             setSelectedMaterialId(newMat.id);
           } else if (data?.material?.id) {
@@ -1084,6 +1151,8 @@ export default function CurriculumPage() {
 
       if (data?.material) {
         const newMat = data.material;
+        const currentStored = getUserMaterialsFromStorage(groupId);
+        saveUserMaterialsToStorage(groupId, [newMat, ...currentStored.filter((m) => m.id !== newMat.id)]);
         setMaterials((prev) => [newMat, ...prev.filter((m) => m.id !== newMat.id)]);
         setSelectedMaterialId(newMat.id);
       } else if (data?.material?.id) {
@@ -1117,13 +1186,17 @@ export default function CurriculumPage() {
   const handleDeleteMaterial = async (id: string) => {
     if (!confirm(isRtl ? "هل أنت متأكد من حذف هذه المادة الدراسية؟" : "Delete this material?")) return;
     try {
+      const currentStored = getUserMaterialsFromStorage(groupId);
+      saveUserMaterialsToStorage(groupId, currentStored.filter((m) => m.id !== id));
+      setMaterials((prev) => prev.filter((m) => m.id !== id));
+      if (selectedMaterialId === id) {
+        setSelectedMaterialId("");
+      }
+
       const res = await fetch(`/api/groups/${groupId}/curriculum/materials/${id}`, {
         method: "DELETE",
       });
       if (res.ok) {
-        if (selectedMaterialId === id) {
-          setSelectedMaterialId("");
-        }
         await loadMaterials();
         showToast("info", isRtl ? "تم حذف المادة بنجاح" : "Material deleted");
       }
@@ -1731,6 +1804,38 @@ export default function CurriculumPage() {
                   onChange={(e) => setCustomInstructions(e.target.value)}
                   style={{ width: "100%" }}
                 />
+              </div>
+
+              <div>
+                <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                  {isRtl ? "محرك الذكاء الاصطناعي (AI Model):" : "AI Model Engine:"}
+                </label>
+                <select
+                  className="select"
+                  value={settings?.defaultModel || "gemini-3.8-flash"}
+                  onChange={(e) => {
+                    const chosen = e.target.value;
+                    setSettings((prev) => (prev ? { ...prev, defaultModel: chosen } : null));
+                  }}
+                  style={{ width: "100%", fontWeight: 600 }}
+                >
+                  <option value="gemini-3.8-flash">
+                    gemini-3.8-flash ({isRtl ? "الأسرع والأحدث" : "Fastest & Latest"})
+                  </option>
+                  <option value="gemini-2.5-flash">
+                    gemini-2.5-flash ({isRtl ? "بديل ممتاز وسريع (حصة مستقلة)" : "Fast (Independent Quota)"})
+                  </option>
+                  <option value="gemini-2.5-pro">
+                    gemini-2.5-pro ({isRtl ? "تفكير تحليلي متقدم" : "Advanced Reasoning"})
+                  </option>
+                  {availableModels
+                    .filter((m) => !["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro"].includes(m.id))
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id}
+                      </option>
+                    ))}
+                </select>
               </div>
             </div>
 
