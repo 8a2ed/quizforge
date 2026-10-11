@@ -183,6 +183,8 @@ export default function CurriculumPage() {
   } | null>(null);
 
   // ── Upload Material State ──
+  const [uploadMode, setUploadMode] = useState<"file" | "paste">("file");
+  const [pastedText, setPastedText] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadSubject, setUploadSubject] = useState("");
@@ -721,13 +723,37 @@ export default function CurriculumPage() {
   // ── Action: Upload Material ──
   const handleUploadMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile) {
-      showToast("error", isRtl ? "يرجى اختيار ملف" : "Select a file");
+    const activeFile =
+      uploadMode === "paste"
+        ? pastedText.trim()
+          ? new File(
+              [pastedText.trim()],
+              `${(uploadTitle || "curriculum_notes").trim().replace(/[/\\?%*:|"<>]/g, "_")}.txt`,
+              { type: "text/plain" }
+            )
+          : null
+        : uploadFile;
+
+    if (!activeFile) {
+      showToast(
+        "error",
+        uploadMode === "paste"
+          ? (isRtl ? "يرجى لصق نص المنهج أو الفصل (20 حرفاً على الأقل)" : "Please paste curriculum text")
+          : (isRtl ? "يرجى اختيار ملف" : "Select a file")
+      );
+      return;
+    }
+
+    if (uploadMode === "paste" && pastedText.trim().length < 20) {
+      showToast(
+        "error",
+        isRtl ? "نص المنهج قصير جداً. يرجى لصق نص كافٍ (20 حرفاً على الأقل)" : "Text is too short"
+      );
       return;
     }
 
     // Client-side file size guard: college textbooks over 50MB should warn user early
-    if (uploadFile.size > 50 * 1024 * 1024) {
+    if (activeFile.size > 50 * 1024 * 1024) {
       showToast(
         "error",
         isRtl
@@ -737,7 +763,7 @@ export default function CurriculumPage() {
       return;
     }
 
-    const sizeMb = (uploadFile.size / (1024 * 1024)).toFixed(1);
+    const sizeMb = (activeFile.size / (1024 * 1024)).toFixed(1);
     const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
     const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
 
@@ -745,17 +771,19 @@ export default function CurriculumPage() {
     // Extract clean text & chapters directly in the browser using native Web APIs.
     // For scanned PDFs without text layers, automatically slices pages into offscreen canvas batches
     // and processes them sequentially with Gemini multimodal chunk OCR.
-    const canExtractInBrowser = isBrowserExtractable(uploadFile);
-    const isLargeFile = uploadFile.size >= 3.5 * 1024 * 1024;
+    const canExtractInBrowser = isBrowserExtractable(activeFile);
+    const isLargeFile = activeFile.size >= 3.5 * 1024 * 1024;
     const shouldUseBrowserExtraction = canExtractInBrowser;
 
     if (shouldUseBrowserExtraction) {
       setUploading(true);
       setUploadProgressPercent(15);
       setUploadProgressStep(
-        isRtl
-          ? "⚡ جاري قراءة واستخراج فصول الكتاب في المتصفح..."
-          : "⚡ Reading and extracting textbook chapters in browser..."
+        uploadMode === "paste"
+          ? (isRtl ? "⚡ جاري تقسيم وفهرسة نصوص المنهج..." : "⚡ Indexing curriculum sections...")
+          : (isRtl
+              ? "⚡ جاري قراءة واستخراج فصول الكتاب في المتصفح..."
+              : "⚡ Reading and extracting textbook chapters in browser...")
       );
 
       let extracted: any = null;
@@ -765,11 +793,11 @@ export default function CurriculumPage() {
           .map((t) => t.trim())
           .filter(Boolean);
 
-        extracted = await extractMaterialInBrowser(uploadFile, {
+        extracted = await extractMaterialInBrowser(activeFile, {
           groupId,
           apiKey: keyToSend || undefined,
-          forceOcr,
-          pageRange: pageRange.trim() || undefined,
+          forceOcr: uploadMode === "paste" ? false : forceOcr,
+          pageRange: uploadMode === "paste" ? undefined : pageRange.trim() || undefined,
           title: uploadTitle.trim(),
           subject: uploadSubject.trim() || (isRtl ? "عام" : "General"),
           grade: uploadGrade.trim(),
@@ -846,6 +874,7 @@ export default function CurriculumPage() {
 
           // Reset form
           setUploadFile(null);
+          setPastedText("");
           setPdfPageCount(null);
           setPageRange("");
           setUploadTitle("");
@@ -901,7 +930,7 @@ export default function CurriculumPage() {
 
     try {
       const formData = new FormData();
-      formData.append("file", uploadFile);
+      formData.append("file", activeFile);
       formData.append("title", uploadTitle.trim());
       formData.append("subject", uploadSubject.trim() || (isRtl ? "عام" : "General"));
       formData.append("grade", uploadGrade.trim());
@@ -1003,7 +1032,7 @@ export default function CurriculumPage() {
 
       if (!res.ok) {
         if (res.status === 413 || (resText && resText.toLowerCase().includes("request entity too large"))) {
-          const isFileReallyOver50Mb = uploadFile.size > 50 * 1024 * 1024;
+          const isFileReallyOver50Mb = activeFile.size > 50 * 1024 * 1024;
           if (isFileReallyOver50Mb) {
             throw new Error(
               data?.error ||
@@ -2055,140 +2084,41 @@ export default function CurriculumPage() {
           <div className="card" style={{ padding: "var(--space-6)" }}>
             <h3 style={{ fontSize: "1.15rem", marginBottom: "var(--space-4)", display: "flex", alignItems: "center", gap: 8 }}>
               <Upload size={20} color="var(--clr-brand)" />
-              <span>{isRtl ? "رفع كتاب أو مذكرة جديدة (PDF / DOCX / TXT / صور خط يد)" : "Upload New Study Material"}</span>
+              <span>{isRtl ? "إضافة منهج أو كتاب دراسي جديد" : "Add New Curriculum Material"}</span>
             </h3>
 
-            <form onSubmit={handleUploadMaterial}>
-              {/* Drag & Drop File Zone */}
-              <div
-                style={{
-                  border: isDragging ? "2px dashed var(--clr-brand)" : "2px dashed var(--clr-border-active)",
-                  borderRadius: "var(--radius-lg)",
-                  padding: "var(--space-8)",
-                  textAlign: "center",
-                  background: isDragging ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.03)",
-                  cursor: "pointer",
-                  marginBottom: "var(--space-4)",
-                  transition: "all 0.2s ease",
-                }}
-                onClick={() => document.getElementById("filePicker")?.click()}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={(e) => {
-                  e.preventDefault();
-                  setIsDragging(false);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragging(false);
-                  const f = e.dataTransfer.files?.[0];
-                  if (f) {
-                    setUploadFile(f);
-                    if (!uploadTitle) {
-                      setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
-                    }
-                    setPageRange("");
-                    if (f.name.toLowerCase().endsWith(".pdf")) {
-                      setReadingPdfInfo(true);
-                      getPdfPageCount(f)
-                        .then((count) => setPdfPageCount(count > 0 ? count : null))
-                        .catch(() => setPdfPageCount(null))
-                        .finally(() => setReadingPdfInfo(false));
-                    } else {
-                      setPdfPageCount(null);
-                    }
-                  }
-                }}
+            {/* Mode Switcher: File Upload vs Direct Text Input */}
+            <div style={{ display: "flex", gap: 10, marginBottom: "var(--space-4)" }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${uploadMode === "file" ? "btn-brand" : "btn-secondary"}`}
+                onClick={() => setUploadMode("file")}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, padding: "7px 14px" }}
               >
-                <input
-                  id="filePicker"
-                  type="file"
-                  accept=".pdf,.docx,.txt,.md,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setUploadFile(f);
-                      if (!uploadTitle) {
-                        setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
-                      }
-                      setPageRange("");
-                      if (f.name.toLowerCase().endsWith(".pdf")) {
-                        setReadingPdfInfo(true);
-                        getPdfPageCount(f)
-                          .then((count) => setPdfPageCount(count > 0 ? count : null))
-                          .catch(() => setPdfPageCount(null))
-                          .finally(() => setReadingPdfInfo(false));
-                      } else {
-                        setPdfPageCount(null);
-                      }
-                    }
-                  }}
-                />
-                <FileCheck size={40} color="var(--clr-brand)" style={{ margin: "0 auto 12px" }} />
-                {uploadFile ? (
-                  <div>
-                    <h4 style={{ margin: "0 0 4px", color: "var(--clr-text-primary)" }}>{uploadFile.name}</h4>
-                    <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                      {uploadFile.size > 1024 * 1024
-                        ? `${(uploadFile.size / (1024 * 1024)).toFixed(1)} MB`
-                        : `${(uploadFile.size / 1024).toFixed(1)} KB`}
-                      {pdfPageCount ? ` • ${pdfPageCount} ${isRtl ? "صفحة" : "pages"}` : readingPdfInfo ? ` • ${isRtl ? "جاري قراءة عدد الصفحات..." : "Reading pages..."}` : ""}{" "}
-                      — {isRtl ? "جاهز للاستخراج والتحليل" : "Ready to parse"}
-                    </span>
-                  </div>
-                ) : (
-                  <div>
-                    <h4 style={{ margin: "0 0 6px", color: "var(--clr-text-primary)" }}>
-                      {isRtl ? "اضغط هنا لاختيار ملف أو اسحبه وأفلته" : "Click to select or drag & drop"}
-                    </h4>
-                    <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: "0 0 10px" }}>
-                      {isRtl
-                        ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) والصور عالية الدقة (حتى 50 ميجابايت)"
-                        : "Supports PDF, DOCX, TXT, and high-res images (up to 50MB)"}
-                    </p>
-                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span
-                        className="badge"
-                        style={{
-                          fontSize: "0.82rem",
-                          padding: "5px 14px",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                          background: "rgba(99, 102, 241, 0.12)",
-                          color: "var(--clr-brand)",
-                          border: "1px solid rgba(99, 102, 241, 0.3)",
-                          borderRadius: "var(--radius-full)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        📸 صور ومستندات ممسوحة / خط يد (OCR مدعوم بالذكاء الاصطناعي)
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
+                <Upload size={16} />
+                <span>{isRtl ? "📁 رفع ملف (PDF / Word / TXT)" : "📁 Upload File"}</span>
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${uploadMode === "paste" ? "btn-brand" : "btn-secondary"}`}
+                onClick={() => setUploadMode("paste")}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, padding: "7px 14px" }}
+              >
+                <FileText size={16} />
+                <span>{isRtl ? "📝 لصق نص المنهج أو الفصل مباشرة (فوري بدون كوتا)" : "📝 Paste Text Directly (Instant)"}</span>
+              </button>
+            </div>
 
-              {/* Page Range Selector (when PDF selected) */}
-              {uploadFile && uploadFile.name.toLowerCase().endsWith(".pdf") && (
-                <div
-                  style={{
-                    marginBottom: "var(--space-4)",
-                    padding: "12px 14px",
-                    borderRadius: "var(--radius-md)",
-                    background: "var(--clr-bg-elevated)",
-                    border: "1px solid var(--clr-border)",
-                  }}
-                >
+            <form onSubmit={handleUploadMaterial}>
+              {uploadMode === "paste" ? (
+                /* Direct Text Paste Area */
+                <div style={{ marginBottom: "var(--space-4)" }}>
                   <label
-                    htmlFor="pageRangeInput"
+                    htmlFor="pastedTextInput"
                     style={{
                       display: "flex",
-                      alignItems: "center",
                       justifyContent: "space-between",
+                      alignItems: "center",
                       marginBottom: 6,
                       fontSize: "0.88rem",
                       fontWeight: 600,
@@ -2197,132 +2127,312 @@ export default function CurriculumPage() {
                   >
                     <span>
                       {isRtl
-                        ? "📄 نطاق الصفحات (اختياري، مثلاً: 1-30 أو اتركه فارغاً لكامل الكتاب):"
-                        : "📄 Page Range (optional, e.g., 1-30 or leave empty for full book):"}
+                        ? "📝 الصق نص الفصل، المحاضرة، أو نصوص الكتاب هنا:"
+                        : "📝 Paste Chapter, Lecture, or Textbook Text Here:"}
                     </span>
-                    {pdfPageCount ? (
-                      <span
-                        style={{
-                          fontSize: "0.78rem",
-                          color: "var(--clr-brand)",
-                          background: "rgba(99, 102, 241, 0.1)",
-                          padding: "2px 8px",
-                          borderRadius: "var(--radius-full)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {isRtl ? `إجمالي الكتاب: ${pdfPageCount} صفحة` : `Total: ${pdfPageCount} pages`}
-                      </span>
-                    ) : readingPdfInfo ? (
-                      <span style={{ fontSize: "0.75rem", color: "var(--clr-text-secondary)" }}>
-                        {isRtl ? "⏳ جاري قراءة عدد الصفحات..." : "Reading pages..."}
-                      </span>
-                    ) : null}
+                    <span style={{ fontSize: "0.8rem", color: "var(--clr-text-secondary)" }}>
+                      {pastedText.trim()
+                        ? `${pastedText.trim().split(/\s+/).filter(Boolean).length} ${isRtl ? "كلمة" : "words"} • ${pastedText.length} ${isRtl ? "حرف" : "chars"}`
+                        : isRtl ? "النص جاهز للمعالجة الفورية" : "Ready for instant processing"}
+                    </span>
                   </label>
-                  <input
-                    id="pageRangeInput"
-                    type="text"
+                  <textarea
+                    id="pastedTextInput"
                     className="input"
-                    dir="ltr"
+                    dir="auto"
+                    rows={8}
                     placeholder={
-                      pdfPageCount
-                        ? `1-${pdfPageCount} (${isRtl ? "مثلاً: 1-30 أو 20-50" : "e.g. 1-30"})`
-                        : isRtl
-                        ? "مثال: 1-30 أو اتركه فارغاً لكامل الكتاب"
-                        : "e.g., 1-30 or leave empty for full book"
+                      isRtl
+                        ? "الصق نصوص المنهج أو الفصل هنا مباشرة (مثلاً: نصوص منسوخة من مستندات Google، ملف Word، ملخص، أو كتاب). سيتم حفظه وتقسيمه وتوليد الأسئلة منه في ثانية واحدة بدون استهلاك أي كوتا أو انتظار."
+                        : "Paste chapter text directly here. Instant processing with 0 API calls or cooldown."
                     }
-                    value={pageRange}
-                    onChange={(e) => setPageRange(e.target.value)}
-                    style={{ width: "100%", fontSize: "0.88rem" }}
+                    value={pastedText}
+                    onChange={(e) => {
+                      setPastedText(e.target.value);
+                      if (!uploadTitle && e.target.value.trim().length > 0) {
+                        const firstLine = e.target.value.trim().split("\n")[0].substring(0, 40).replace(/[#*_-]/g, "").trim();
+                        if (firstLine.length >= 3) {
+                          setUploadTitle(firstLine);
+                        }
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      fontSize: "0.88rem",
+                      fontFamily: "inherit",
+                      lineHeight: 1.6,
+                      resize: "vertical",
+                    }}
                   />
-                  {pageRange.trim() ? (
-                    (() => {
-                      const parsed = parsePageRange(pageRange, pdfPageCount || undefined);
-                      if (!parsed) {
-                        return (
+                </div>
+              ) : (
+                /* Drag & Drop File Zone and PDF controls */
+                <>
+                  <div
+                    style={{
+                      border: isDragging ? "2px dashed var(--clr-brand)" : "2px dashed var(--clr-border-active)",
+                      borderRadius: "var(--radius-lg)",
+                      padding: "var(--space-8)",
+                      textAlign: "center",
+                      background: isDragging ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.03)",
+                      cursor: "pointer",
+                      marginBottom: "var(--space-4)",
+                      transition: "all 0.2s ease",
+                    }}
+                    onClick={() => document.getElementById("filePicker")?.click()}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      const f = e.dataTransfer.files?.[0];
+                      if (f) {
+                        setUploadFile(f);
+                        if (!uploadTitle) {
+                          setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
+                        }
+                        setPageRange("");
+                        if (f.name.toLowerCase().endsWith(".pdf")) {
+                          setReadingPdfInfo(true);
+                          getPdfPageCount(f)
+                            .then((count) => setPdfPageCount(count > 0 ? count : null))
+                            .catch(() => setPdfPageCount(null))
+                            .finally(() => setReadingPdfInfo(false));
+                        } else {
+                          setPdfPageCount(null);
+                        }
+                      }
+                    }}
+                  >
+                    <input
+                      id="filePicker"
+                      type="file"
+                      accept=".pdf,.docx,.txt,.md,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) {
+                          setUploadFile(f);
+                          if (!uploadTitle) {
+                            setUploadTitle(f.name.replace(/\.[^/.]+$/, ""));
+                          }
+                          setPageRange("");
+                          if (f.name.toLowerCase().endsWith(".pdf")) {
+                            setReadingPdfInfo(true);
+                            getPdfPageCount(f)
+                              .then((count) => setPdfPageCount(count > 0 ? count : null))
+                              .catch(() => setPdfPageCount(null))
+                              .finally(() => setReadingPdfInfo(false));
+                          } else {
+                            setPdfPageCount(null);
+                          }
+                        }
+                      }}
+                    />
+                    <FileCheck size={40} color="var(--clr-brand)" style={{ margin: "0 auto 12px" }} />
+                    {uploadFile ? (
+                      <div>
+                        <h4 style={{ margin: "0 0 4px", color: "var(--clr-text-primary)" }}>{uploadFile.name}</h4>
+                        <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                          {uploadFile.size > 1024 * 1024
+                            ? `${(uploadFile.size / (1024 * 1024)).toFixed(1)} MB`
+                            : `${(uploadFile.size / 1024).toFixed(1)} KB`}
+                          {pdfPageCount ? ` • ${pdfPageCount} ${isRtl ? "صفحة" : "pages"}` : readingPdfInfo ? ` • ${isRtl ? "جاري قراءة عدد الصفحات..." : "Reading pages..."}` : ""}{" "}
+                          — {isRtl ? "جاهز للاستخراج والتحليل" : "Ready to parse"}
+                        </span>
+                      </div>
+                    ) : (
+                      <div>
+                        <h4 style={{ margin: "0 0 6px", color: "var(--clr-text-primary)" }}>
+                          {isRtl ? "اضغط هنا لاختيار ملف أو اسحبه وأفلته" : "Click to select or drag & drop"}
+                        </h4>
+                        <p style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: "0 0 10px" }}>
+                          {isRtl
+                            ? "يدعم ملفات PDF و Word (.docx) والنصوص (.txt) والصور عالية الدقة (حتى 50 ميجابايت)"
+                            : "Supports PDF, DOCX, TXT, and high-res images (up to 50MB)"}
+                        </p>
+                        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <span
+                            className="badge"
                             style={{
-                              display: "block",
-                              fontSize: "0.75rem",
-                              color: "#f59e0b",
-                              marginTop: 4,
-                              fontWeight: 500,
+                              fontSize: "0.82rem",
+                              padding: "5px 14px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              background: "rgba(99, 102, 241, 0.12)",
+                              color: "var(--clr-brand)",
+                              border: "1px solid rgba(99, 102, 241, 0.3)",
+                              borderRadius: "var(--radius-full)",
+                              fontWeight: 600,
                             }}
                           >
-                            {isRtl
-                              ? "⚠️ تعذر التعرف على النطاق، سيتم استخراج المستند كاملاً (صيغ مدعومة: 1-30 أو ١-٣٠ أو 15 أو 10-)"
-                              : "⚠️ Range not recognized, entire document will be extracted (supported: 1-30, 15, 10-)"}
+                            📸 صور ومستندات ممسوحة / خط يد (OCR مدعوم بالذكاء الاصطناعي)
                           </span>
-                        );
-                      }
-                      const count = parsed.endPage - parsed.startPage + 1;
-                      return (
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Page Range Selector (when PDF selected) */}
+                  {uploadFile && uploadFile.name.toLowerCase().endsWith(".pdf") && (
+                    <div
+                      style={{
+                        marginBottom: "var(--space-4)",
+                        padding: "12px 14px",
+                        borderRadius: "var(--radius-md)",
+                        background: "var(--clr-bg-elevated)",
+                        border: "1px solid var(--clr-border)",
+                      }}
+                    >
+                      <label
+                        htmlFor="pageRangeInput"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: 6,
+                          fontSize: "0.88rem",
+                          fontWeight: 600,
+                          color: "var(--clr-text-primary)",
+                        }}
+                      >
+                        <span>
+                          {isRtl
+                            ? "📄 نطاق الصفحات (اختياري، مثلاً: 1-30 أو اتركه فارغاً لكامل الكتاب):"
+                            : "📄 Page Range (optional, e.g., 1-30 or leave empty for full book):"}
+                        </span>
+                        {pdfPageCount ? (
+                          <span
+                            style={{
+                              fontSize: "0.78rem",
+                              color: "var(--clr-brand)",
+                              background: "rgba(99, 102, 241, 0.1)",
+                              padding: "2px 8px",
+                              borderRadius: "var(--radius-full)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {isRtl ? `إجمالي الكتاب: ${pdfPageCount} صفحة` : `Total: ${pdfPageCount} pages`}
+                          </span>
+                        ) : readingPdfInfo ? (
+                          <span style={{ fontSize: "0.75rem", color: "var(--clr-text-secondary)" }}>
+                            {isRtl ? "⏳ جاري قراءة عدد الصفحات..." : "Reading pages..."}
+                          </span>
+                        ) : null}
+                      </label>
+                      <input
+                        id="pageRangeInput"
+                        type="text"
+                        className="input"
+                        dir="ltr"
+                        placeholder={
+                          pdfPageCount
+                            ? `1-${pdfPageCount} (${isRtl ? "مثلاً: 1-30 أو 20-50" : "e.g. 1-30"})`
+                            : isRtl
+                            ? "مثال: 1-30 أو اتركه فارغاً لكامل الكتاب"
+                            : "e.g., 1-30 or leave empty for full book"
+                        }
+                        value={pageRange}
+                        onChange={(e) => setPageRange(e.target.value)}
+                        style={{ width: "100%", fontSize: "0.88rem" }}
+                      />
+                      {pageRange.trim() ? (
+                        (() => {
+                          const parsed = parsePageRange(pageRange, pdfPageCount || undefined);
+                          if (!parsed) {
+                            return (
+                              <span
+                                style={{
+                                  display: "block",
+                                  fontSize: "0.75rem",
+                                  color: "#f59e0b",
+                                  marginTop: 4,
+                                  fontWeight: 500,
+                                }}
+                              >
+                                {isRtl
+                                  ? "⚠️ تعذر التعرف على النطاق، سيتم استخراج المستند كاملاً (صيغ مدعومة: 1-30 أو ١-٣٠ أو 15 أو 10-)"
+                                  : "⚠️ Range not recognized, entire document will be extracted (supported: 1-30, 15, 10-)"}
+                              </span>
+                            );
+                          }
+                          const count = parsed.endPage - parsed.startPage + 1;
+                          return (
+                            <span
+                              style={{
+                                display: "block",
+                                fontSize: "0.75rem",
+                                color: "#10b981",
+                                marginTop: 4,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {isRtl
+                                ? `✓ سيتم استخراج ${count} ${count === 1 ? "صفحة" : "صفحات"} (من ${parsed.startPage} إلى ${parsed.endPage})`
+                                : `✓ Will extract ${count} pages (pages ${parsed.startPage} to ${parsed.endPage})`}
+                            </span>
+                          );
+                        })()
+                      ) : (
                         <span
                           style={{
                             display: "block",
                             fontSize: "0.75rem",
-                            color: "#10b981",
+                            color: "var(--clr-text-secondary)",
                             marginTop: 4,
-                            fontWeight: 600,
                           }}
                         >
                           {isRtl
-                            ? `✓ سيتم استخراج ${count} ${count === 1 ? "صفحة" : "صفحات"} (من ${parsed.startPage} إلى ${parsed.endPage})`
-                            : `✓ Will extract ${count} pages (pages ${parsed.startPage} to ${parsed.endPage})`}
+                            ? "يمكنك تحديد صفحات فصل محدد فقط لتسريع التوليد والاختبار، أو اتركه فارغاً لتحليل المستند بالكامل."
+                            : "Specify a chapter range to speed up processing, or leave empty for the entire book."}
                         </span>
-                      );
-                    })()
-                  ) : (
-                    <span
-                      style={{
-                        display: "block",
-                        fontSize: "0.75rem",
-                        color: "var(--clr-text-secondary)",
-                        marginTop: 4,
-                      }}
-                    >
-                      {isRtl
-                        ? "يمكنك تحديد صفحات فصل محدد فقط لتسريع التوليد والاختبار، أو اتركه فارغاً لتحليل المستند بالكامل."
-                        : "Specify a chapter range to speed up processing, or leave empty for the entire book."}
-                    </span>
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
 
-              {/* Force OCR Option */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  marginBottom: "var(--space-5)",
-                  padding: "10px 14px",
-                  borderRadius: "var(--radius-md)",
-                  background: forceOcr ? "rgba(99, 102, 241, 0.08)" : "var(--clr-bg-elevated)",
-                  border: forceOcr ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
-                  cursor: "pointer",
-                  transition: "all 0.2s ease",
-                }}
-                onClick={() => setForceOcr(!forceOcr)}
-              >
-                <input
-                  type="checkbox"
-                  id="forceOcrToggle"
-                  checked={forceOcr}
-                  onChange={(e) => setForceOcr(e.target.checked)}
-                  style={{ width: 18, height: 18, cursor: "pointer" }}
-                />
-                <label htmlFor="forceOcrToggle" style={{ fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", margin: 0, flex: 1 }}>
-                  {isRtl
-                    ? "✨ تفعيل التعرف البصري الذكي المتقدم (NotebookLM OCR) على كامل المستند"
-                    : "✨ Force Intelligent AI Visual OCR (NotebookLM Mode)"}
-                  <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-secondary)", marginTop: 2 }}>
-                    {isRtl
-                      ? "يضمن استخراج نصوص خط اليد والجداول والرسومات في المستندات الممسوحة ضوئياً. (إذا كان الكتاب يحتوي على نصوص رقمية أصلية، يتم استخراجها فورياً في ثوانٍ بدقة 100% لتجنب الانتظار وحدود معدل الطلبات)."
-                      : "Ensures extraction of handwriting, diagrams, and tables in scanned documents. (If textbook has authentic digital text, it is extracted instantly in seconds with 100% precision to bypass rate limits)."}
-                  </span>
-                </label>
-              </div>
+                  {/* Force OCR Option */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      marginBottom: "var(--space-4)",
+                      padding: "12px 14px",
+                      borderRadius: "var(--radius-md)",
+                      background: forceOcr ? "rgba(99, 102, 241, 0.08)" : "var(--clr-bg-elevated)",
+                      border: forceOcr ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                    }}
+                    onClick={() => setForceOcr(!forceOcr)}
+                  >
+                    <input
+                      type="checkbox"
+                      id="forceOcrToggle"
+                      checked={forceOcr}
+                      onChange={(e) => setForceOcr(e.target.checked)}
+                      style={{ width: 18, height: 18, cursor: "pointer" }}
+                    />
+                    <label htmlFor="forceOcrToggle" style={{ fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", margin: 0, flex: 1 }}>
+                      {isRtl
+                        ? "✨ تفعيل التعرف البصري الذكي المتقدم (NotebookLM OCR) على كامل المستند"
+                        : "✨ Force Intelligent AI Visual OCR (NotebookLM Mode)"}
+                      <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 400, color: "var(--clr-text-secondary)", marginTop: 2 }}>
+                        {isRtl
+                          ? "يضمن استخراج نصوص خط اليد والجداول والرسومات في المستندات الممسوحة ضوئياً. (إذا كان الكتاب يحتوي على نصوص رقمية أصلية، يتم استخراجها فورياً في ثوانٍ بدقة 100% لتجنب الانتظار وحدود معدل الطلبات)."
+                          : "Ensures extraction of handwriting, diagrams, and tables in scanned documents. (If textbook has authentic digital text, it is extracted instantly in seconds with 100% precision to bypass rate limits)."}
+                      </span>
+                    </label>
+                  </div>
+                </>
+              )}
 
               {/* Metadata Inputs */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
@@ -2433,24 +2543,66 @@ export default function CurriculumPage() {
               <div style={{ marginTop: "var(--space-5)", display: "flex", justifyContent: "flex-end" }}>
                 <button
                   type="submit"
-                  disabled={uploading || !uploadFile}
+                  disabled={uploading || (uploadMode === "paste" ? !pastedText.trim() : !uploadFile)}
                   className="btn btn-brand"
                   style={{ padding: "10px 24px", gap: 8 }}
                 >
                   {uploading ? (
                     <>
                       <RefreshCw size={18} className="spin" />
-                      <span>{uploadProgressStep || (isRtl ? "جاري الرفع واستخراج النصوص..." : "Uploading & Extracting...")}</span>
+                      <span>{uploadProgressStep || (isRtl ? "جاري المعالجة واستخراج النصوص..." : "Processing & Extracting...")}</span>
+                    </>
+                  ) : uploadMode === "paste" ? (
+                    <>
+                      <Save size={18} />
+                      <span>{isRtl ? "💾 حفظ المنهج وفهرسته فوراً" : "💾 Save & Index Curriculum"}</span>
                     </>
                   ) : (
                     <>
                       <Upload size={18} />
-                      <span>{isRtl ? "رفع وتحليل المنهج" : "Upload & Parse"}</span>
+                      <span>{isRtl ? "🚀 رفع وتحليل المنهج" : "🚀 Upload & Parse"}</span>
                     </>
                   )}
                 </button>
               </div>
             </form>
+
+            {/* Helpful Guide for Large Books */}
+            <div
+              style={{
+                marginTop: "var(--space-4)",
+                padding: "14px 18px",
+                borderRadius: "var(--radius-md)",
+                background: "rgba(99, 102, 241, 0.05)",
+                border: "1px solid rgba(99, 102, 241, 0.2)",
+                fontSize: "0.86rem",
+                lineHeight: 1.6,
+              }}
+            >
+              <strong style={{ color: "var(--clr-brand)", display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <Sparkles size={16} />
+                {isRtl ? "💡 نصيحة لكتب الكليات الكبيرة والممسوحة ضوئياً (صور بدون طبقة نصوص):" : "💡 Tip for Large Scanned Textbooks (Images without text layer):"}
+              </strong>
+              <p style={{ margin: "0 0 8px", color: "var(--clr-text-secondary)" }}>
+                {isRtl
+                  ? "لأن معالجة 133 صفحة صور بالذكاء الاصطناعي تستنزف الكوتا المجانية وتتطلب وقتاً طويلاً، إليك أفضل حلين بديلين يوفران وقتك تماماً:"
+                  : "Because visual OCR on 133 image pages exhausts free AI quotas, here are the two fastest alternatives:"}
+              </p>
+              <ul style={{ margin: 0, paddingInlineStart: 20, color: "var(--clr-text-primary)" }}>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>{isRtl ? "⚡ طريقة مستندات Google المجانية (دقيقة واحدة فقط - موصى به):" : "⚡ Google Docs OCR (1 min - Recommended):"}</strong>{" "}
+                  {isRtl
+                    ? "ارفع الـ PDF على Google Drive ثم اضغط كليك يمين واختر 'فتح باستخدام مستندات Google'. سيقوم جوجل بقراءة الـ 133 صفحة واستخراج كل نصوصها مجاناً في دقيقة! نزله كملف Word (.docx) وارفعه هنا، أو انسخ نصوصه والصقها في خيار 'لصق النص'."
+                    : "Upload PDF to Google Drive -> Open with Google Docs -> Download as Word (.docx) or copy-paste text here directly."}
+                </li>
+                <li>
+                  <strong>{isRtl ? "📄 تحديد نطاق الصفحات (فصل بفصل):" : "📄 Page Range (Chapter by Chapter):"}</strong>{" "}
+                  {isRtl
+                    ? "حدد أرقام صفحات الفصل المطلوب فقط (مثلاً: 1-15 أو 20-35) في خانة 'نطاق الصفحات' ليتم استخراج صفحات الامتحان فقط في ثوانٍ دون استهلاك الكوتا."
+                    : "Specify the exact chapter pages (e.g. 1-15) in the Page Range input to process just that chapter in seconds."}
+                </li>
+              </ul>
+            </div>
           </div>
 
           {/* Materials Grid */}
