@@ -571,9 +571,92 @@ export async function POST(req: NextRequest) {
         await tgCall("sendMessage", { chat_id: msg.chat.id, text: "Active exam session cancelled." });
       }
 
-      const resolveGroup = () => prisma.group.findFirst({
-        where: { OR: [{ chatId }, { chatId: `-100${chatId.replace(/^-/, "")}` }] },
-      });
+      const resolveGroup = async () => {
+        let grp = await prisma.group.findFirst({
+          where: { OR: [{ chatId }, { chatId: `-100${chatId.replace(/^-/, "")}` }] },
+        });
+
+        // If in private DM with bot and chatId didn't match a group chatId:
+        if (!grp && msg.chat?.type === "private" && msg.from?.id) {
+          const telegramId = String(msg.from.id);
+
+          // 1. Try finding group via User's memberships
+          try {
+            const membership = await prisma.groupMember.findFirst({
+              where: {
+                user: {
+                  OR: [
+                    { telegramId },
+                    ...(msg.from.username ? [{ username: msg.from.username }] : []),
+                  ],
+                },
+              },
+              include: { group: true },
+              orderBy: { joinedAt: "desc" },
+            });
+            if (membership?.group) {
+              grp = membership.group;
+            }
+          } catch {}
+
+          // 2. Try finding group via student's recent poll answers
+          if (!grp) {
+            try {
+              const pollAns = await prisma.pollAnswer.findFirst({
+                where: { telegramUserId: telegramId },
+                include: { quiz: { include: { group: true } } },
+                orderBy: { answeredAt: "desc" },
+              });
+              if (pollAns?.quiz?.group) {
+                grp = pollAns.quiz.group;
+              }
+            } catch {}
+          }
+
+          // 3. Try finding group via student's recent exam results
+          if (!grp) {
+            try {
+              const examRes = await prisma.examResult.findFirst({
+                where: { telegramId },
+                orderBy: { completedAt: "desc" },
+              });
+              if (examRes?.examId) {
+                const examObj = await prisma.exam.findUnique({
+                  where: { id: examRes.examId },
+                  include: { group: true },
+                });
+                if (examObj?.group) {
+                  grp = examObj.group;
+                }
+              }
+            } catch {}
+          }
+
+          // 4. Try finding group that has uploaded curriculum materials in DB
+          if (!grp) {
+            try {
+              const matRows = await prisma.$queryRawUnsafe<any[]>(
+                `SELECT group_id FROM ai_curriculum_materials ORDER BY updated_at DESC LIMIT 1`
+              );
+              if (matRows?.[0]?.group_id) {
+                grp = await prisma.group.findUnique({ where: { id: matRows[0].group_id } });
+              }
+            } catch {}
+          }
+
+          // 5. If only 1 group exists in system, bind to it
+          if (!grp) {
+            try {
+              const totalGroups = await prisma.group.count();
+              if (totalGroups === 1) {
+                grp = await prisma.group.findFirst();
+              }
+            } catch {}
+          }
+        }
+
+        return grp;
+      };
 
       // Interactive student curriculum quiz generator command: /qs or /qs@BotUsername
       const qsCmdMatch = text.trim().match(/^[/!]qs(?:@\w+)?$/i);

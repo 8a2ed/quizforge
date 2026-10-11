@@ -352,67 +352,155 @@ HTTP Status Codes:
   },
 ];
 
-// ─── Materials CRUD ────────────────────────────────────────────────────────────
+// ─── Materials CRUD (PostgreSQL + Serverless File Fallback) ───────────────────
 
-export async function getMaterials(groupId: string): Promise<CurriculumMaterial[]> {
-  // Always read from file to avoid cross-worker / reload state desynchronization
-  let allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
-
-  // Only seed sample materials on first initialization if file does not exist on disk
-  if (allMaterials.length === 0) {
-    try {
-      const stat = await fs.stat(MATERIALS_FILE).catch(() => null);
-      if (!stat || stat.size === 0) {
-        allMaterials = [...SAMPLE_MATERIALS];
-        await safeWriteJson(MATERIALS_FILE, allMaterials);
-      }
-    } catch {}
+let dbTablesInitialized = false;
+async function ensureAiDatabaseTables(prismaClient: any) {
+  if (dbTablesInitialized) return;
+  try {
+    await prismaClient.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_curriculum_materials (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        subject TEXT,
+        grade TEXT,
+        file_name TEXT,
+        file_type TEXT,
+        file_size INT,
+        raw_text TEXT,
+        cleaned_text TEXT,
+        word_count INT,
+        char_count INT,
+        topics JSONB,
+        sections JSONB,
+        uploaded_by JSONB,
+        ocr_used BOOLEAN DEFAULT false,
+        digital_fallback BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await prismaClient.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS idx_ai_curriculum_materials_group ON ai_curriculum_materials(group_id)
+    `);
+    dbTablesInitialized = true;
+  } catch (err) {
+    console.warn("[aiStorage] Failed to ensure DB table:", err);
   }
+}
 
-  const cleanGid = String(groupId || "").trim();
-
-  // Combine stored materials with global sample materials in memory without mutating disk
-  const combined = [...allMaterials];
-  for (const sample of SAMPLE_MATERIALS) {
-    if (!combined.some((m) => m.id === sample.id)) {
-      combined.push(sample);
+function parseJsonField<T>(val: any, fallback: T): T {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === "object") return val as T;
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val) as T;
+    } catch {
+      return fallback;
     }
   }
+  return fallback;
+}
 
-  // Include group-specific materials and global sample materials
-  return combined.filter(
-    (m) => String(m.groupId || "").trim() === cleanGid || m.groupId === "global"
+function mapDbRowToMaterial(r: any): CurriculumMaterial {
+  return {
+    id: r.id,
+    groupId: r.group_id,
+    title: r.title,
+    subject: r.subject || "عام",
+    grade: r.grade || "",
+    fileName: r.file_name || "",
+    fileType: r.file_type || "manual",
+    fileSize: Number(r.file_size) || 0,
+    rawText: r.raw_text || "",
+    cleanedText: r.cleaned_text || "",
+    wordCount: Number(r.word_count) || 0,
+    charCount: Number(r.char_count) || 0,
+    topics: parseJsonField<string[]>(r.topics, []),
+    sections: parseJsonField<any[]>(r.sections, []),
+    uploadedBy: parseJsonField<any>(r.uploaded_by, { id: "system", name: "المعلم" }),
+    ocrUsed: Boolean(r.ocr_used),
+    digitalFallback: Boolean(r.digital_fallback),
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+    updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+  };
+}
+
+export async function getMaterials(groupId: string): Promise<CurriculumMaterial[]> {
+  const cleanGid = String(groupId || "").trim();
+
+  // 1. Try reading from PostgreSQL database first (shared across all Vercel instances & bot webhooks)
+  try {
+    const { prisma } = await import("./db");
+    await ensureAiDatabaseTables(prisma);
+    const rows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
+      cleanGid
+    );
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows.map(mapDbRowToMaterial);
+    }
+  } catch (dbErr) {
+    console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
+  }
+
+  // 2. Fallback to local files
+  let allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  const customGroupMaterials = allMaterials.filter(
+    (m) => String(m.groupId || "").trim() === cleanGid && m.groupId !== "global"
   );
+  if (customGroupMaterials.length > 0) {
+    return customGroupMaterials;
+  }
+
+  // 3. Fallback to sample materials only if zero custom materials exist
+  return allMaterials.filter((m) => m.groupId === "global");
 }
 
 export async function getAllCurriculumMaterials(groupId?: string): Promise<CurriculumMaterial[]> {
-  let allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
-  if (allMaterials.length === 0) {
-    try {
-      const stat = await fs.stat(MATERIALS_FILE).catch(() => null);
-      if (!stat || stat.size === 0) {
-        allMaterials = [...SAMPLE_MATERIALS];
-        await safeWriteJson(MATERIALS_FILE, allMaterials);
+  const cleanGid = String(groupId || "").trim();
+
+  // 1. Try reading from PostgreSQL database first
+  try {
+    const { prisma } = await import("./db");
+    await ensureAiDatabaseTables(prisma);
+
+    if (cleanGid) {
+      const rows = await prisma.$queryRawUnsafe<any[]>(
+        `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
+        cleanGid
+      );
+      if (Array.isArray(rows) && rows.length > 0) {
+        return rows.map(mapDbRowToMaterial);
       }
-    } catch {}
-  }
-
-  const combined = [...allMaterials];
-  for (const sample of SAMPLE_MATERIALS) {
-    if (!combined.some((m) => m.id === sample.id)) {
-      combined.push(sample);
     }
-  }
 
-  if (groupId) {
-    const cleanGid = String(groupId).trim();
-    const groupSpecific = combined.filter(
-      (m) => String(m.groupId || "").trim() === cleanGid || m.groupId === "global"
+    // If no group specified or group had no custom materials, check all custom materials in DB
+    const allRows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
     );
-    if (groupSpecific.length > 0) return groupSpecific;
+    if (Array.isArray(allRows) && allRows.length > 0) {
+      return allRows.map(mapDbRowToMaterial);
+    }
+  } catch (dbErr) {
+    console.warn("[aiStorage] DB query error (falling back to disk):", dbErr);
   }
 
-  return combined;
+  // 2. Fallback to local files
+  const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  if (cleanGid) {
+    const groupMaterials = allMaterials.filter(
+      (m) => String(m.groupId || "").trim() === cleanGid && m.groupId !== "global"
+    );
+    if (groupMaterials.length > 0) return groupMaterials;
+  }
+
+  const anyCustom = allMaterials.filter((m) => m.groupId !== "global");
+  if (anyCustom.length > 0) return anyCustom;
+
+  // 3. Last-resort fallback to sample materials
+  return SAMPLE_MATERIALS;
 }
 
 export async function getAnyMaterialById(materialId: string): Promise<CurriculumMaterial | null> {
@@ -431,22 +519,135 @@ export async function getMaterialById(
 }
 
 export async function saveMaterial(material: CurriculumMaterial): Promise<void> {
-  const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  // 1. Persist to PostgreSQL database (ensures Vercel serverless persistence across all instances & bot webhooks)
+  try {
+    const { prisma } = await import("./db");
+    await ensureAiDatabaseTables(prisma);
 
+    try {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO ai_curriculum_materials (
+          id, group_id, title, subject, grade, file_name, file_type, file_size,
+          raw_text, cleaned_text, word_count, char_count, topics, sections,
+          uploaded_by, ocr_used, digital_fallback, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, CAST($13 AS jsonb), CAST($14 AS jsonb),
+          CAST($15 AS jsonb), $16, $17, $18, $19
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          title = EXCLUDED.title,
+          subject = EXCLUDED.subject,
+          grade = EXCLUDED.grade,
+          raw_text = EXCLUDED.raw_text,
+          cleaned_text = EXCLUDED.cleaned_text,
+          word_count = EXCLUDED.word_count,
+          char_count = EXCLUDED.char_count,
+          topics = EXCLUDED.topics,
+          sections = EXCLUDED.sections,
+          ocr_used = EXCLUDED.ocr_used,
+          digital_fallback = EXCLUDED.digital_fallback,
+          updated_at = NOW()`,
+        material.id,
+        material.groupId,
+        material.title,
+        material.subject || "عام",
+        material.grade || "",
+        material.fileName || "",
+        material.fileType || "manual",
+        material.fileSize || 0,
+        material.rawText || "",
+        material.cleanedText || "",
+        material.wordCount || 0,
+        material.charCount || 0,
+        JSON.stringify(material.topics || []),
+        JSON.stringify(material.sections || []),
+        JSON.stringify(material.uploadedBy || {}),
+        Boolean(material.ocrUsed),
+        Boolean(material.digitalFallback),
+        new Date(material.createdAt || Date.now()),
+        new Date(material.updatedAt || Date.now())
+      );
+    } catch {
+      // Fallback query without jsonb cast if column type differs
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO ai_curriculum_materials (
+          id, group_id, title, subject, grade, file_name, file_type, file_size,
+          raw_text, cleaned_text, word_count, char_count, topics, sections,
+          uploaded_by, ocr_used, digital_fallback, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, $18, $19
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          title = EXCLUDED.title,
+          subject = EXCLUDED.subject,
+          grade = EXCLUDED.grade,
+          raw_text = EXCLUDED.raw_text,
+          cleaned_text = EXCLUDED.cleaned_text,
+          word_count = EXCLUDED.word_count,
+          char_count = EXCLUDED.char_count,
+          topics = EXCLUDED.topics,
+          sections = EXCLUDED.sections,
+          ocr_used = EXCLUDED.ocr_used,
+          digital_fallback = EXCLUDED.digital_fallback,
+          updated_at = NOW()`,
+        material.id,
+        material.groupId,
+        material.title,
+        material.subject || "عام",
+        material.grade || "",
+        material.fileName || "",
+        material.fileType || "manual",
+        material.fileSize || 0,
+        material.rawText || "",
+        material.cleanedText || "",
+        material.wordCount || 0,
+        material.charCount || 0,
+        JSON.stringify(material.topics || []),
+        JSON.stringify(material.sections || []),
+        JSON.stringify(material.uploadedBy || {}),
+        Boolean(material.ocrUsed),
+        Boolean(material.digitalFallback),
+        new Date(material.createdAt || Date.now()),
+        new Date(material.updatedAt || Date.now())
+      );
+    }
+  } catch (dbErr) {
+    console.warn("[aiStorage] DB save error (falling back to disk):", dbErr);
+  }
+
+  // 2. Also write to local file storage
+  const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
   const existingIndex = allMaterials.findIndex((m) => m.id === material.id);
   if (existingIndex >= 0) {
     allMaterials[existingIndex] = material;
   } else {
     allMaterials.unshift(material);
   }
-
   await safeWriteJson(MATERIALS_FILE, allMaterials);
 }
 
 export async function deleteMaterial(groupId: string, materialId: string): Promise<boolean> {
+  const cleanGid = String(groupId || "").trim();
+
+  // 1. Delete from PostgreSQL database
+  try {
+    const { prisma } = await import("./db");
+    await ensureAiDatabaseTables(prisma);
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM ai_curriculum_materials WHERE id = $1 AND group_id = $2`,
+      materialId,
+      cleanGid
+    );
+  } catch (dbErr) {
+    console.warn("[aiStorage] DB delete error:", dbErr);
+  }
+
+  // 2. Delete from local cache
   const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
   const initialLength = allMaterials.length;
-  const cleanGid = String(groupId || "").trim();
 
   // Disallow deleting global sample materials; only group-owned materials matching groupId can be deleted
   const filtered = allMaterials.filter(
@@ -457,7 +658,7 @@ export async function deleteMaterial(groupId: string, materialId: string): Promi
     await safeWriteJson(MATERIALS_FILE, filtered);
     return true;
   }
-  return false;
+  return true;
 }
 
 // ─── AI Generation Logs & Analytics ───────────────────────────────────────────

@@ -218,7 +218,7 @@ export async function POST(
       const fileSize = reportedSize > 0 ? reportedSize : Buffer.byteLength(raw, "utf-8");
 
       const material: CurriculumMaterial = {
-        id: `mat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: body.id || `mat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         groupId,
         title: title || fileName.replace(/\.[^/.]+$/, "") || "منهج دراسي جديد",
         subject: subject || "عام",
@@ -240,7 +240,7 @@ export async function POST(
           username: auth.user.username || undefined,
           photoUrl: auth.user.photoUrl || undefined,
         },
-        createdAt: new Date().toISOString(),
+        createdAt: body.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 

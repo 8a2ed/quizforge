@@ -284,6 +284,19 @@ export default function CurriculumPage() {
         }
         const merged = Array.from(mergedMap.values());
         setMaterials(merged);
+
+        // Auto-sync any client-side materials that the server/database is missing
+        const serverIds = new Set(loaded.map((m: any) => m.id));
+        const missingOnServer = localUserMats.filter((m: any) => !serverIds.has(m.id));
+        if (missingOnServer.length > 0) {
+          for (const mat of missingOnServer) {
+            fetch(`/api/groups/${groupId}/curriculum/materials`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(mat),
+            }).catch((e) => console.warn("[curriculum] auto-sync failed:", e));
+          }
+        }
         try {
           const lightweight = merged.map((m: any) => ({
             id: m.id,
