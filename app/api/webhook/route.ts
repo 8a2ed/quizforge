@@ -9,6 +9,10 @@ import {
   type MasterExamQuestion,
 } from "@/lib/examConfig";
 import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
+import {
+  handleStudentQuizCommand,
+  handleStudentQuizCallback,
+} from "@/lib/studentQuizWizard";
 
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
@@ -571,6 +575,21 @@ export async function POST(req: NextRequest) {
         where: { OR: [{ chatId }, { chatId: `-100${chatId.replace(/^-/, "")}` }] },
       });
 
+      // Interactive student curriculum quiz generator command: /qs or /qs@BotUsername
+      const qsCmdMatch = text.trim().match(/^[/!]qs(?:@\w+)?$/i);
+      if (qsCmdMatch) {
+        const group = await resolveGroup();
+        await handleStudentQuizCommand({
+          chatId: msg.chat.id,
+          userId: String(msg.from?.id || ""),
+          userName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "طالب",
+          messageId: msg.message_id,
+          messageThreadId: msg.message_thread_id || undefined,
+          groupId: group?.id || undefined,
+          groupTitle: group?.title || msg.chat?.title || undefined,
+        });
+      }
+
       // In-chat /stats or /status command
       const statsCmdMatch = text.trim().match(/^\/(?:stats|quizstats|status)(?:@\w+)?$/i);
       if (statsCmdMatch) {
@@ -682,6 +701,11 @@ export async function POST(req: NextRequest) {
     if (update.callback_query) {
       const cb   = update.callback_query as Record<string, unknown>;
       const data = (cb.data as string) || "";
+
+      if (data.startsWith("qs_")) {
+        const handled = await handleStudentQuizCallback(cb);
+        if (handled) return NextResponse.json({ ok: true });
+      }
 
       if (data.startsWith("exam_start:")) {
         await handleExamStart(cb, data.slice("exam_start:".length));

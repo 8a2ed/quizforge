@@ -219,6 +219,17 @@ export const telegram = {
     return call("stopPoll", { chat_id, message_id }, SEND_TIMEOUT_MS);
   },
 
+  editMessageText(params: {
+    chat_id?: string | number;
+    message_id?: number;
+    inline_message_id?: string;
+    text: string;
+    parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+    reply_markup?: Record<string, unknown>;
+  }): Promise<TelegramMessage | boolean> {
+    return call("editMessageText", params as unknown as Record<string, unknown>, SEND_TIMEOUT_MS);
+  },
+
   answerCallbackQuery(callback_query_id: string, text?: string, show_alert?: boolean): Promise<boolean> {
     return call("answerCallbackQuery", {
       callback_query_id,

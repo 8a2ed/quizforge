@@ -385,12 +385,49 @@ export async function getMaterials(groupId: string): Promise<CurriculumMaterial[
   );
 }
 
+export async function getAllCurriculumMaterials(groupId?: string): Promise<CurriculumMaterial[]> {
+  let allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  if (allMaterials.length === 0) {
+    try {
+      const stat = await fs.stat(MATERIALS_FILE).catch(() => null);
+      if (!stat || stat.size === 0) {
+        allMaterials = [...SAMPLE_MATERIALS];
+        await safeWriteJson(MATERIALS_FILE, allMaterials);
+      }
+    } catch {}
+  }
+
+  const combined = [...allMaterials];
+  for (const sample of SAMPLE_MATERIALS) {
+    if (!combined.some((m) => m.id === sample.id)) {
+      combined.push(sample);
+    }
+  }
+
+  if (groupId) {
+    const cleanGid = String(groupId).trim();
+    const groupSpecific = combined.filter(
+      (m) => String(m.groupId || "").trim() === cleanGid || m.groupId === "global"
+    );
+    if (groupSpecific.length > 0) return groupSpecific;
+  }
+
+  return combined;
+}
+
+export async function getAnyMaterialById(materialId: string): Promise<CurriculumMaterial | null> {
+  const all = await getAllCurriculumMaterials();
+  return all.find((m) => m.id === materialId) || null;
+}
+
 export async function getMaterialById(
   groupId: string,
   materialId: string
 ): Promise<CurriculumMaterial | null> {
   const materials = await getMaterials(groupId);
-  return materials.find((m) => m.id === materialId) || null;
+  const found = materials.find((m) => m.id === materialId);
+  if (found) return found;
+  return getAnyMaterialById(materialId);
 }
 
 export async function saveMaterial(material: CurriculumMaterial): Promise<void> {
