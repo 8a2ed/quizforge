@@ -457,7 +457,7 @@ export async function generateCurriculumQuestions(
   }
 
   const requestedModel = normalizeModelName(options.model || DEFAULT_GEMINI_MODEL);
-  const count = Math.min(Math.max(options.questionCount || 5, 1), 25);
+  const count = Math.min(Math.max(options.questionCount || 5, 1), 30);
   const difficulty = options.difficulty || "mixed";
 
   let prompt = `يرجى توليد عدد (${count}) أسئلة اختيار من متعدد (MCQs) فائقة الدقة بالاعتماد الصارم والحصري على النص الدراسي التالي فقط.\n\n`;

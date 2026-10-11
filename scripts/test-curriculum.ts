@@ -4,6 +4,7 @@ import { validateAndSanitizeQuestion, TELEGRAM_LIMITS } from "../lib/questionVal
 import {
   getMaterials,
   saveMaterial,
+  updateMaterial,
   deleteMaterial,
   recordGenerationLog,
   getAIAnalytics,
@@ -626,7 +627,76 @@ All questions grounded in text.
   if (!recheckedMaterials.some((m) => m.id === customMat.id)) {
     throw new Error("Repeated getMaterials calls wiped or lost the custom material!");
   }
-  console.log("  ✓ Non-destructive reads verified: multiple read queries preserve all custom materials without wiping");
+  // Verify updateMaterial: edit material later (text, title, topics, sections)
+  const updatedMaterial = await updateMaterial(testGroupId, customMat.id, {
+    title: "مذكرة الأحياء المحدثة والمنقحة",
+    subject: "علم الأحياء والخلية",
+    grade: "الصف الثالث الثانوي",
+    cleanedText: "الخلية هي الوحدة الأساسية للحياة في جميع الكائنات الحية. تحتوي الخلية النباتية على جدار خلوي وبلاستيدات خضراء تقوم بعملية البناء الضوئي.",
+    topics: ["الخلية النباتية", "الميتوكوندريا", "البناء الضوئي"],
+    sections: [
+      { id: "sec-mod-1", title: "مقدمة الخلية النباتية", content: "الخلية هي الوحدة الأساسية للحياة ولها جدار خلوي.", wordCount: 10 },
+      { id: "sec-mod-2", title: "البلاستيدات الخضراء", content: "تقوم بعملية البناء الضوئي وإنتاج الغذاء.", wordCount: 7 },
+    ],
+  });
+
+  if (!updatedMaterial || updatedMaterial.title !== "مذكرة الأحياء المحدثة والمنقحة") {
+    throw new Error("updateMaterial failed to update title!");
+  }
+  if (updatedMaterial.topics.length !== 3 || !updatedMaterial.topics.includes("البناء الضوئي")) {
+    throw new Error("updateMaterial failed to update topics!");
+  }
+  if (updatedMaterial.sections.length !== 2 || updatedMaterial.sections[0].title !== "مقدمة الخلية النباتية") {
+    throw new Error("updateMaterial failed to update sections!");
+  }
+  if (updatedMaterial.wordCount < 15) {
+    throw new Error(`updateMaterial failed to recalculate word count! Got ${updatedMaterial.wordCount}`);
+  }
+
+  // Verify updated material persists and is returned by getMaterials
+  const materialsAfterUpdate = await getMaterials(testGroupId);
+  const foundUpdated = materialsAfterUpdate.find((m) => m.id === customMat.id);
+  if (!foundUpdated || foundUpdated.title !== "مذكرة الأحياء المحدثة والمنقحة") {
+    throw new Error("Updated material was not reflected in getMaterials!");
+  }
+  console.log("  ✓ updateMaterial verified: full text, title, topics, sections, and word counts cleanly updated");
+
+  // Verify editing global material forks group-specific copy cleanly
+  const forkedGlobal = await updateMaterial(testGroupId, "sample-science-ar", {
+    title: "نسخة مخصصة من منهج العلوم للفيزياء",
+  });
+  if (!forkedGlobal || forkedGlobal.groupId !== testGroupId || forkedGlobal.id === "sample-science-ar") {
+    throw new Error("Editing global material should fork a group-owned copy with new unique ID!");
+  }
+  await deleteMaterial(testGroupId, forkedGlobal.id);
+  console.log("  ✓ Editing global material cleanly forks group-owned material preserving global templates");
+
+  // Verify cross-group update protection: other group CANNOT update customMat
+  const unauthorizedUpdate = await updateMaterial("different-group-id", customMat.id, {
+    title: "محاولة تعديل غير مصرح بها من مجموعة أخرى",
+  });
+  if (unauthorizedUpdate !== null) {
+    throw new Error("Security flaw: Different group was able to update custom material owned by another group!");
+  }
+  console.log("  ✓ Strict group ownership verified: cross-group modification rejected");
+
+  // Verify empty title input protection (retains valid title instead of blanking out)
+  const emptyTitleUpdate = await updateMaterial(testGroupId, customMat.id, {
+    title: "   ",
+  });
+  if (!emptyTitleUpdate || emptyTitleUpdate.title !== "مذكرة الأحياء المحدثة والمنقحة") {
+    throw new Error("updateMaterial blanked out title when given empty/whitespace string!");
+  }
+  console.log("  ✓ Empty title input protection verified: blank title gracefully rejected");
+
+  // Verify section fallback when empty sections array is supplied
+  const sectionFallbackUpdate = await updateMaterial(testGroupId, customMat.id, {
+    sections: [],
+  });
+  if (!sectionFallbackUpdate || !sectionFallbackUpdate.sections || sectionFallbackUpdate.sections.length === 0) {
+    throw new Error("updateMaterial failed to regenerate sections when empty array was passed!");
+  }
+  console.log("  ✓ Section fallback verified: auto-splits from text when empty sections passed");
 
   // Verify cross-group delete protection: other group CANNOT delete customMat
   const unauthorizedDelete = await deleteMaterial("different-group-id", customMat.id);

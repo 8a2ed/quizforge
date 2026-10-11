@@ -1,3 +1,4 @@
+export { cleanText, splitIntoSections, extractSuggestedTopics, type ExtractedSection } from "./textCleaner";
 import { cleanText, splitIntoSections, extractSuggestedTopics, ExtractedSection } from "./textCleaner";
 
 export interface PreExtractedMaterial {

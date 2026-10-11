@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { ValidatedQuestion } from "./questionValidator";
+import { cleanText, splitIntoSections } from "./textCleaner";
 
 export interface CurriculumMaterial {
   id: string;
@@ -561,8 +562,12 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
 }
 
 export async function getAnyMaterialById(materialId: string): Promise<CurriculumMaterial | null> {
+  const sample = SAMPLE_MATERIALS.find((m) => m.id === materialId);
+  if (sample) return sample;
   const all = await getAllCurriculumMaterials();
-  return all.find((m) => m.id === materialId) || null;
+  const found = all.find((m) => m.id === materialId);
+  if (found) return found;
+  return null;
 }
 
 export async function getMaterialById(
@@ -572,6 +577,8 @@ export async function getMaterialById(
   const materials = await getMaterials(groupId);
   const found = materials.find((m) => m.id === materialId);
   if (found) return found;
+  const sample = SAMPLE_MATERIALS.find((m) => m.id === materialId);
+  if (sample) return sample;
   return getAnyMaterialById(materialId);
 }
 
@@ -687,6 +694,110 @@ export async function saveMaterial(material: CurriculumMaterial): Promise<void> 
     allMaterials.unshift(material);
   }
   await safeWriteJson(MATERIALS_FILE, allMaterials);
+}
+
+export async function updateMaterial(
+  groupId: string,
+  materialId: string,
+  updates: Partial<CurriculumMaterial>
+): Promise<CurriculumMaterial | null> {
+  const cleanGid = String(groupId || "").trim();
+  const existing = await getMaterialById(cleanGid, materialId);
+  if (!existing) return null;
+
+  const isGlobal = existing.groupId === "global" || SAMPLE_MATERIALS.some((s) => s.id === existing.id);
+
+  // Cross-group authorization check: if not global and belongs to another group, reject
+  if (!isGlobal && existing.groupId && existing.groupId !== cleanGid) {
+    return null;
+  }
+
+  // If editing a global sample material, create a group-specific copy so global remains pristine
+  const targetId = isGlobal ? `mat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}` : existing.id;
+  const targetGroupId = isGlobal ? cleanGid : existing.groupId;
+
+  // Validate title if provided
+  let newTitle = existing.title;
+  if (updates.title !== undefined) {
+    const trimmedTitle = String(updates.title).trim();
+    if (trimmedTitle) {
+      newTitle = trimmedTitle;
+    }
+  }
+
+  // Compute text updates
+  let newCleanedText = existing.cleanedText;
+  let newRawText = existing.rawText;
+
+  if (updates.cleanedText !== undefined || updates.rawText !== undefined) {
+    const rawInput = updates.rawText !== undefined ? String(updates.rawText) : String(updates.cleanedText || "");
+    const cleanedInput = cleanText(updates.cleanedText !== undefined ? String(updates.cleanedText) : rawInput);
+    if (cleanedInput) {
+      newCleanedText = cleanedInput;
+      newRawText = rawInput || cleanedInput;
+    }
+  }
+
+  // Recalculate wordCount & charCount
+  const wordCount = newCleanedText
+    ? newCleanedText.split(/\s+/).filter(Boolean).length
+    : existing.wordCount;
+  const charCount = newCleanedText ? newCleanedText.length : existing.charCount;
+
+  // Process sections
+  let newSections = updates.sections !== undefined ? updates.sections : existing.sections;
+  if (Array.isArray(newSections) && newSections.length > 0) {
+    newSections = newSections
+      .map((s: any, idx: number) => {
+        const c = cleanText(String(s.content || ""));
+        return {
+          id: String(s.id || `sec-${idx + 1}`),
+          title: String(s.title || `القسم ${idx + 1}`).trim() || `القسم ${idx + 1}`,
+          content: c,
+          wordCount:
+            typeof s.wordCount === "number" && s.wordCount > 0
+              ? s.wordCount
+              : c
+              ? c.split(/\s+/).filter(Boolean).length
+              : 0,
+        };
+      })
+      .filter((s) => s.content.length > 0);
+  }
+
+  if (!Array.isArray(newSections) || newSections.length === 0) {
+    newSections = splitIntoSections(newCleanedText);
+  }
+
+  // Process topics
+  let newTopics = existing.topics;
+  if (updates.topics !== undefined) {
+    newTopics = Array.isArray(updates.topics)
+      ? updates.topics.map((t: any) => String(t).trim()).filter(Boolean)
+      : typeof updates.topics === "string"
+      ? (updates.topics as string).split(",").map((t: string) => t.trim()).filter(Boolean)
+      : existing.topics;
+  }
+
+  const updated: CurriculumMaterial = {
+    ...existing,
+    id: targetId,
+    groupId: targetGroupId,
+    title: newTitle,
+    subject: updates.subject !== undefined && String(updates.subject).trim() ? String(updates.subject).trim() : existing.subject,
+    grade: updates.grade !== undefined ? String(updates.grade).trim() : existing.grade,
+    fileName: updates.fileName !== undefined && String(updates.fileName).trim() ? String(updates.fileName).trim() : existing.fileName,
+    rawText: newRawText,
+    cleanedText: newCleanedText,
+    wordCount,
+    charCount,
+    topics: newTopics,
+    sections: newSections,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await saveMaterial(updated);
+  return updated;
 }
 
 export async function deleteMaterial(groupId: string, materialId: string): Promise<boolean> {

@@ -142,8 +142,16 @@ export async function POST(
 
     // Call Gemini with strict Zero-Hallucination prompt
     const requestedModel = (typeof body.model === "string" && body.model.trim()) ? body.model.trim() : (settings.defaultModel || DEFAULT_GEMINI_MODEL);
-    const resolvedCount = body.questionCount !== undefined ? (Number(body.questionCount) || 5) : (settings.defaultCount || 5);
-    const resolvedDifficulty = (body.difficulty && String(body.difficulty).trim()) || settings.defaultDifficulty || "mixed";
+    const parsedCount = Number(body.questionCount);
+    const resolvedCount = !isNaN(parsedCount) && parsedCount > 0
+      ? Math.max(1, Math.min(30, Math.round(parsedCount)))
+      : (settings.defaultCount || 5);
+
+    const validDiffs = ["mixed", "easy", "medium", "hard"];
+    const rawDiff = String(body.difficulty || settings.defaultDifficulty || "mixed").toLowerCase().trim();
+    const resolvedDifficulty: "mixed" | "easy" | "medium" | "hard" = validDiffs.includes(rawDiff)
+      ? (rawDiff as "mixed" | "easy" | "medium" | "hard")
+      : "mixed";
 
     const result = await generateCurriculumQuestions({
       apiKey,

@@ -33,8 +33,10 @@ import {
   Layers,
   HelpCircle,
   TrendingUp,
+  Pencil,
+  Edit3,
 } from "lucide-react";
-import { isBrowserExtractable, extractMaterialInBrowser, getPdfPageCount, parsePageRange } from "@/lib/browserTextExtractor";
+import { isBrowserExtractable, extractMaterialInBrowser, getPdfPageCount, parsePageRange, splitIntoSections } from "@/lib/browserTextExtractor";
 
 interface CurriculumMaterial {
   id: string;
@@ -221,6 +223,18 @@ export default function CurriculumPage() {
   const [uploadProgressStep, setUploadProgressStep] = useState<string>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
   const [previewMaterial, setPreviewMaterial] = useState<CurriculumMaterial | null>(null);
+
+  // Edit Material Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState<CurriculumMaterial | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editSubject, setEditSubject] = useState("");
+  const [editGrade, setEditGrade] = useState("");
+  const [editTopics, setEditTopics] = useState("");
+  const [editText, setEditText] = useState("");
+  const [editSections, setEditSections] = useState<Array<{ id: string; title: string; content: string; wordCount: number }>>([]);
+  const [activeEditTab, setActiveEditTab] = useState<"info" | "text" | "sections">("info");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // ── Modals State ──
   // Exam Modal
@@ -1236,6 +1250,183 @@ export default function CurriculumPage() {
     }
   };
 
+  // ── Action: Open Edit Material Modal ──
+  const handleOpenEditModal = (mat: CurriculumMaterial) => {
+    setEditingMaterial(mat);
+    setEditTitle(mat.title || "");
+    setEditSubject(mat.subject || "");
+    setEditGrade(mat.grade || "");
+    setEditTopics(Array.isArray(mat.topics) ? mat.topics.join(", ") : "");
+    setEditText(mat.cleanedText || mat.rawText || "");
+    setEditSections(
+      Array.isArray(mat.sections) && mat.sections.length > 0
+        ? mat.sections.map((s, idx) => ({
+            id: s.id || `sec-${idx + 1}`,
+            title: s.title || `القسم ${idx + 1}`,
+            content: s.content || "",
+            wordCount: s.wordCount || 0,
+          }))
+        : []
+    );
+    setActiveEditTab("info");
+    setShowEditModal(true);
+  };
+
+  const handleAddEditSection = () => {
+    setEditSections((prev) => [
+      ...prev,
+      {
+        id: `sec-${Date.now()}`,
+        title: isRtl ? `فصل جديد ${prev.length + 1}` : `New Chapter ${prev.length + 1}`,
+        content: "",
+        wordCount: 0,
+      },
+    ]);
+  };
+
+  const handleUpdateEditSection = (index: number, field: "title" | "content", val: string) => {
+    setEditSections((prev) => {
+      const next = [...prev];
+      if (!next[index]) return prev;
+      const updated = { ...next[index], [field]: val };
+      if (field === "content") {
+        updated.wordCount = val ? val.split(/\s+/).filter(Boolean).length : 0;
+      }
+      next[index] = updated;
+      return next;
+    });
+  };
+
+  const handleRemoveEditSection = (index: number) => {
+    setEditSections((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleAutoSplitEditSections = () => {
+    if (!editText.trim()) {
+      showToast("error", isRtl ? "نص المنهج فارغ، لا يمكن تقسيمه" : "Curriculum text is empty");
+      return;
+    }
+    const generated = splitIntoSections(editText.trim());
+    if (generated.length === 0) {
+      showToast("info", isRtl ? "لم يتم العثور على عناوين فصول مميزة، تم الاحتفاظ بالتقسيم الحالي" : "No distinct chapter headers found");
+      return;
+    }
+    setEditSections(generated);
+    showToast("success", isRtl ? `تم تقسيم وتنسيق ${generated.length} فصول بنجاح من النص!` : `Auto-split into ${generated.length} sections!`);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMaterial) return;
+    if (!editTitle.trim()) {
+      showToast("error", isRtl ? "عنوان المنهج أو الكتاب مطلوب" : "Title is required");
+      return;
+    }
+
+    let cleanedContent = editText.trim();
+    if (!cleanedContent && editSections.length > 0) {
+      cleanedContent = editSections
+        .map((s) => s.content.trim())
+        .filter(Boolean)
+        .join("\n\n");
+      setEditText(cleanedContent);
+    }
+
+    if (!cleanedContent) {
+      showToast("error", isRtl ? "نص المنهج الدراسي لا يمكن أن يكون فارغاً" : "Text cannot be empty");
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const topicsList = editTopics
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      const validSections = editSections
+        .map((s, idx) => ({
+          id: s.id || `sec-${idx + 1}`,
+          title: s.title.trim() || `القسم ${idx + 1}`,
+          content: s.content.trim(),
+          wordCount: s.content ? s.content.split(/\s+/).filter(Boolean).length : 0,
+        }))
+        .filter((s) => s.content.length > 0);
+
+      const payload = {
+        title: editTitle.trim(),
+        subject: editSubject.trim() || (isRtl ? "عام" : "General"),
+        grade: editGrade.trim(),
+        topics: topicsList,
+        cleanedText: cleanedContent,
+        rawText: cleanedContent,
+        sections: validSections.length > 0 ? validSections : splitIntoSections(cleanedContent),
+      };
+
+      const res = await fetch(`/api/groups/${groupId}/curriculum/materials/${editingMaterial.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const resText = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(resText); } catch {}
+
+      if (!res.ok) {
+        throw new Error(data?.error || (isRtl ? "فشل حفظ وتحديث المنهج" : "Failed to update material"));
+      }
+
+      const updatedMat: CurriculumMaterial = data?.material || {
+        ...editingMaterial,
+        ...payload,
+        wordCount: cleanedContent.split(/\s+/).filter(Boolean).length,
+        charCount: cleanedContent.length,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Synchronize with local storage and component state
+      const currentStored = getUserMaterialsFromStorage(groupId);
+      const updatedStored = [
+        updatedMat,
+        ...currentStored.filter((m) => m.id !== updatedMat.id && m.id !== editingMaterial.id),
+      ];
+      saveUserMaterialsToStorage(groupId, updatedStored);
+
+      // Synchronize cached materials
+      try {
+        const cachedRaw = localStorage.getItem(`qf_materials_${groupId}`);
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          if (Array.isArray(parsed)) {
+            const updatedCached = updatedMat.id !== editingMaterial.id
+              ? [updatedMat, ...parsed]
+              : parsed.map((m: any) => (m.id === editingMaterial.id ? updatedMat : m));
+            localStorage.setItem(`qf_materials_${groupId}`, JSON.stringify(updatedCached));
+          }
+        }
+      } catch {}
+
+      setMaterials((prev) => {
+        if (updatedMat.id !== editingMaterial.id) {
+          return [updatedMat, ...prev];
+        }
+        return prev.map((m) => (m.id === editingMaterial.id ? updatedMat : m));
+      });
+
+      if (selectedMaterialId === editingMaterial.id || !selectedMaterialId) {
+        setSelectedMaterialId(updatedMat.id);
+      }
+
+      setShowEditModal(false);
+      setEditingMaterial(null);
+      showToast("success", isRtl ? "تم حفظ وتحديث المنهج الدراسي بنجاح!" : "Curriculum updated successfully!");
+    } catch (e: any) {
+      showToast("error", e.message || (isRtl ? "فشل حفظ التعديلات" : "Failed to save edits"));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   // ── Action: Save & Test Settings ──
   const handleSaveSettings = async () => {
     setSavingSettings(true);
@@ -1712,9 +1903,23 @@ export default function CurriculumPage() {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
                   <div>
-                    <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <label style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: 0 }}>
                       {isRtl ? "اختر الكتاب أو المذكرة المرفوعة:" : "Select Textbook/Document:"}
                     </label>
+                    {currentMaterial && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditModal(currentMaterial)}
+                        className="btn btn-ghost btn-sm"
+                        style={{ padding: "2px 8px", fontSize: "0.78rem", gap: 4, color: "var(--clr-brand)" }}
+                        title={isRtl ? "تعديل نصوص وفصول هذا الكتاب" : "Edit this material"}
+                      >
+                        <Pencil size={12} />
+                        <span>{isRtl ? "تعديل الكتاب" : "Edit Book"}</span>
+                      </button>
+                    )}
+                  </div>
                   <select
                     className="select"
                     value={selectedMaterialId}
@@ -1734,22 +1939,34 @@ export default function CurriculumPage() {
 
                 {/* Sub-section or topic selector */}
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                    {isRtl ? "القسم أو الدرس المستهدف:" : "Target Section/Lesson:"}
-                  </label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <label style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)", margin: 0 }}>
+                      {isRtl ? "القسم أو الفصل المستهدف:" : "Target Section/Lesson:"}
+                    </label>
+                    {currentMaterial?.sections && currentMaterial.sections.length > 0 && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>
+                        {currentMaterial.sections.length} {isRtl ? "فصول متوفرة" : "sections"}
+                      </span>
+                    )}
+                  </div>
                   <select
                     className="select"
                     value={selectedSectionId}
                     onChange={(e) => setSelectedSectionId(e.target.value)}
                     style={{ width: "100%" }}
                   >
-                    <option value="">{isRtl ? "كامل النص الدراسي المعتمد" : "All Available Text"}</option>
+                    <option value="">{isRtl ? "📖 كامل الكتاب / المنهج المعتمد" : "All Available Text"}</option>
                     {currentMaterial?.sections?.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.title} ({s.wordCount} {isRtl ? "كلمة" : "words"})
+                        📑 {s.title} ({s.wordCount} {isRtl ? "كلمة" : "words"})
                       </option>
                     ))}
                   </select>
+                  {selectedSectionId && (
+                    <div style={{ marginTop: 6, fontSize: "0.78rem", color: "var(--clr-brand)", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>🎯 {isRtl ? "سيتم توليد الأسئلة حصرياً من هذا الفصل المحدد بدقة متناهية." : "Strictly generated from this section."}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               )
@@ -2875,6 +3092,15 @@ export default function CurriculumPage() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => handleOpenEditModal(m)}
+                        className="btn btn-ghost btn-icon btn-sm"
+                        style={{ color: "var(--clr-brand)" }}
+                        title={isRtl ? "تعديل المنهج أو نصوص الكتاب" : "Edit Material"}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setPreviewMaterial(m)}
                         className="btn btn-ghost btn-icon btn-sm"
                         title={isRtl ? "معاينة النص المستخرج" : "Preview text"}
@@ -3808,9 +4034,368 @@ export default function CurriculumPage() {
               {previewMaterial.cleanedText}
             </div>
 
-            <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn btn-brand btn-sm"
+                style={{ gap: 6 }}
+                onClick={() => {
+                  const target = previewMaterial;
+                  setPreviewMaterial(null);
+                  if (target) handleOpenEditModal(target);
+                }}
+              >
+                <Pencil size={15} />
+                <span>{isRtl ? "تعديل هذا المنهج / الكتاب" : "Edit this material"}</span>
+              </button>
               <button className="btn btn-ghost" onClick={() => setPreviewMaterial(null)}>
                 {isRtl ? "إغلاق" : "Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          MODAL 4: EDIT CURRICULUM MATERIAL
+      ═══════════════════════════════════════════════════════════ */}
+      {showEditModal && editingMaterial && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(8px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: "100%",
+              maxWidth: 820,
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+              padding: 24,
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8, fontSize: "1.25rem" }}>
+                  <Pencil size={20} color="var(--clr-brand)" />
+                  <span>{isRtl ? "تعديل وتخصيص المنهج / الكتاب" : "Edit Curriculum Material"}</span>
+                </h3>
+                <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                  {editingMaterial.title} • {editText.split(/\s+/).filter(Boolean).length} {isRtl ? "كلمة" : "words"} • {editSections.length} {isRtl ? "فصول وأقسام" : "sections"}
+                </span>
+              </div>
+              <button className="btn btn-ghost btn-icon" onClick={() => setShowEditModal(false)}>
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Navigation Tabs */}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                borderBottom: "1px solid var(--clr-border)",
+                paddingBottom: 8,
+                marginBottom: 16,
+              }}
+            >
+              <button
+                type="button"
+                className={`btn btn-sm ${activeEditTab === "info" ? "btn-brand" : "btn-ghost"}`}
+                onClick={() => setActiveEditTab("info")}
+                style={{ gap: 6 }}
+              >
+                <span>{isRtl ? "📌 المعلومات الأساسية" : "Basic Info"}</span>
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${activeEditTab === "text" ? "btn-brand" : "btn-ghost"}`}
+                onClick={() => setActiveEditTab("text")}
+                style={{ gap: 6 }}
+              >
+                <span>{isRtl ? "📝 نص الكتاب الكامل" : "Full Text"}</span>
+                <span className="badge badge-brand" style={{ padding: "1px 6px", fontSize: "0.7rem" }}>
+                  {editText.split(/\s+/).filter(Boolean).length} {isRtl ? "كلمة" : "words"}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${activeEditTab === "sections" ? "btn-brand" : "btn-ghost"}`}
+                onClick={() => setActiveEditTab("sections")}
+                style={{ gap: 6 }}
+              >
+                <span>{isRtl ? "📑 فصول وأقسام المنهج" : "Chapters & Sections"}</span>
+                <span className="badge badge-brand" style={{ padding: "1px 6px", fontSize: "0.7rem" }}>
+                  {editSections.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Tab 1: Basic Info */}
+            {activeEditTab === "info" && (
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, paddingRight: 4 }}>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", fontWeight: 600 }}>
+                    {isRtl ? "عنوان الكتاب / المنهج الدراسي:" : "Document Title:"}
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    style={{ width: "100%" }}
+                    placeholder={isRtl ? "مثال: كتاب الفيزياء الحديثة - الفصل الأول" : "Title"}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", fontWeight: 600 }}>
+                      {isRtl ? "المادة الدراسية:" : "Subject:"}
+                    </label>
+                    <input
+                      type="text"
+                      className="input"
+                      value={editSubject}
+                      onChange={(e) => setEditSubject(e.target.value)}
+                      style={{ width: "100%" }}
+                      placeholder={isRtl ? "مثال: فيزياء، أحياء، تاريخ" : "Subject"}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", fontWeight: 600 }}>
+                      {isRtl ? "الصف / المرحلة الدراسية:" : "Grade / Stage:"}
+                    </label>
+                    <input
+                      type="text"
+                      className="input"
+                      value={editGrade}
+                      onChange={(e) => setEditGrade(e.target.value)}
+                      style={{ width: "100%" }}
+                      placeholder={isRtl ? "مثال: الصف الثاني الثانوي" : "Grade"}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", fontWeight: 600 }}>
+                    {isRtl ? "الموضوعات والكلمات الدلالية (مفصولة بفواصل):" : "Topics (comma-separated):"}
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={editTopics}
+                    onChange={(e) => setEditTopics(e.target.value)}
+                    style={{ width: "100%" }}
+                    placeholder={isRtl ? "قوانين نيوتن, القصور الذاتي, السرعة" : "topics"}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    background: "rgba(99, 102, 241, 0.06)",
+                    border: "1px solid rgba(99, 102, 241, 0.2)",
+                    borderRadius: "var(--radius-md)",
+                    padding: "12px 16px",
+                    fontSize: "0.85rem",
+                    color: "var(--clr-text-secondary)",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {isRtl
+                    ? "💡 يمكنك أيضاً الانتقال إلى تبويب 'نص الكتاب الكامل' لتعديل محتوى الكتاب كنص وإضافة فقرات جديدة، أو تبويب 'فصول وأقسام المنهج' لتحديد وتعديل أجزاء الكتاب بدقة متناهية."
+                    : "💡 You can also switch to 'Full Text' to edit paragraphs or 'Chapters & Sections' to organize individual lessons."}
+                </div>
+              </div>
+            )}
+
+            {/* Tab 2: Full Text Editor */}
+            {activeEditTab === "text" && (
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                    {isRtl
+                      ? "📝 نص المنهج المعتمد (يمكنك كتابة وتعديل النص بحرية تامة، وسيتم توليد الأسئلة منه بدقة 100%):"
+                      : "Curriculum text (editable):"}
+                  </span>
+                  <span style={{ fontSize: "0.8rem", color: "var(--clr-brand)", fontWeight: 600 }}>
+                    {editText.split(/\s+/).filter(Boolean).length} {isRtl ? "كلمة" : "words"} • {editText.length} {isRtl ? "حرف" : "chars"}
+                  </span>
+                </div>
+                <textarea
+                  className="textarea"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  rows={14}
+                  style={{
+                    width: "100%",
+                    fontSize: "0.9rem",
+                    lineHeight: 1.7,
+                    fontFamily: "inherit",
+                    resize: "vertical",
+                  }}
+                  placeholder={isRtl ? "اكتب أو الصق نص المنهج هنا..." : "Enter text here..."}
+                />
+              </div>
+            )}
+
+            {/* Tab 3: Chapters & Sections Manager */}
+            {activeEditTab === "sections" && (
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                  <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
+                    {isRtl
+                      ? "📑 فصول وأقسام الكتاب (تتيح للطلاب والمعلمين استهداف فصل بعينه أثناء توليد الاختبارات):"
+                      : "Chapters and sections for granular targeted generation:"}
+                  </span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleAutoSplitEditSections}
+                      style={{ gap: 6, fontSize: "0.8rem" }}
+                      title={isRtl ? "إعادة استخراج وتقسيم الفصول تلقائياً من نص الكتاب" : "Auto-split from text"}
+                    >
+                      <Sparkles size={14} />
+                      <span>{isRtl ? "⚡ تقسيم تلقائي من النص" : "Auto-Split"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-brand btn-sm"
+                      onClick={handleAddEditSection}
+                      style={{ gap: 6, fontSize: "0.8rem" }}
+                    >
+                      <Plus size={14} />
+                      <span>{isRtl ? "إضافة فصل جديد" : "Add Section"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {editSections.length === 0 ? (
+                  <div
+                    style={{
+                      padding: 24,
+                      textAlign: "center",
+                      background: "var(--clr-bg-elevated)",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px dashed var(--clr-border)",
+                    }}
+                  >
+                    <p style={{ margin: "0 0 10px", color: "var(--clr-text-secondary)", fontSize: "0.9rem" }}>
+                      {isRtl ? "لم يتم تعريف فصول منفصلة لهذا المنهج بعد." : "No distinct sections defined yet."}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleAutoSplitEditSections}
+                      style={{ gap: 6 }}
+                    >
+                      <Sparkles size={14} />
+                      <span>{isRtl ? "توليد الفصول تلقائياً من النص" : "Auto-generate sections"}</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {editSections.map((sec, sIdx) => (
+                      <div
+                        key={sec.id || sIdx}
+                        style={{
+                          background: "var(--clr-bg-elevated)",
+                          borderRadius: "var(--radius-md)",
+                          padding: 12,
+                          border: "1px solid var(--clr-border)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--clr-brand)" }}>
+                              #{sIdx + 1}
+                            </span>
+                            <input
+                              type="text"
+                              className="input"
+                              value={sec.title}
+                              onChange={(e) => handleUpdateEditSection(sIdx, "title", e.target.value)}
+                              placeholder={isRtl ? `عنوان الفصل ${sIdx + 1}` : `Section title`}
+                              style={{ flex: 1, padding: "4px 8px", fontSize: "0.88rem", fontWeight: 600 }}
+                            />
+                            <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", whiteSpace: "nowrap" }}>
+                              {sec.wordCount || sec.content.split(/\s+/).filter(Boolean).length} {isRtl ? "كلمة" : "words"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-icon btn-sm"
+                            onClick={() => handleRemoveEditSection(sIdx)}
+                            style={{ color: "var(--clr-danger)" }}
+                            title={isRtl ? "حذف هذا الفصل" : "Remove section"}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                        <textarea
+                          className="textarea"
+                          value={sec.content}
+                          onChange={(e) => handleUpdateEditSection(sIdx, "content", e.target.value)}
+                          rows={3}
+                          placeholder={isRtl ? "نص ومحتوى هذا الفصل أو الدرس..." : "Section text..."}
+                          style={{ width: "100%", fontSize: "0.85rem", lineHeight: 1.6 }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div
+              style={{
+                marginTop: 16,
+                paddingTop: 12,
+                borderTop: "1px solid var(--clr-border)",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 10,
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setShowEditModal(false)}
+                disabled={savingEdit}
+              >
+                {isRtl ? "إلغاء" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-brand"
+                onClick={handleSaveEdit}
+                disabled={savingEdit}
+                style={{ gap: 8, padding: "8px 24px" }}
+              >
+                {savingEdit ? (
+                  <>
+                    <RefreshCw size={16} className="spin" />
+                    <span>{isRtl ? "جاري الحفظ والتحديث..." : "Saving..."}</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={16} />
+                    <span>{isRtl ? "حفظ التعديلات في المنهج" : "Save Changes"}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
