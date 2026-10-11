@@ -661,6 +661,83 @@ All questions grounded in text.
   }
   console.log("  ✓ updateMaterial verified: full text, title, topics, sections, and word counts cleanly updated");
 
+  // Verify chapter / section reordering: reverse sequence and verify persistence
+  const reorderedMaterial = await updateMaterial(testGroupId, customMat.id, {
+    sections: [
+      { id: "sec-mod-2", title: "البلاستيدات الخضراء", content: "تقوم بعملية البناء الضوئي وإنتاج الغذاء.", wordCount: 7 },
+      { id: "sec-mod-1", title: "مقدمة الخلية النباتية", content: "الخلية هي الوحدة الأساسية للحياة ولها جدار خلوي.", wordCount: 10 },
+    ],
+  });
+  if (!reorderedMaterial || reorderedMaterial.sections[0].id !== "sec-mod-2" || reorderedMaterial.sections[1].id !== "sec-mod-1") {
+    throw new Error("updateMaterial failed to reorder sections!");
+  }
+
+  // Verify reordered sequence persists in getMaterials
+  const materialsAfterReorder = await getMaterials(testGroupId);
+  const foundReordered = materialsAfterReorder.find((m) => m.id === customMat.id);
+  if (!foundReordered || foundReordered.sections[0].id !== "sec-mod-2" || foundReordered.sections[1].id !== "sec-mod-1") {
+    throw new Error("Reordered chapters sequence did not persist in storage!");
+  }
+
+  // Verify smart synchronization of full text with new chapter order
+  const formatForSync = (s: { title: string; content: string }, idx: number) => {
+    const t = s.title.trim() || `الفصل ${idx + 1}`;
+    const c = s.content.trim();
+    if (!c) return `## ${t}`;
+    const lines = c.split("\n");
+    const firstLine = lines[0].trim();
+    if (/^#{1,6}\s+/.test(firstLine)) {
+      const headerText = firstLine.replace(/^#{1,6}\s+/, "").trim();
+      if (headerText.toLowerCase() === t.toLowerCase()) return c;
+      const rest = lines.slice(1).join("\n").trim();
+      return rest ? `## ${t}\n\n${rest}` : `## ${t}`;
+    }
+    if (firstLine.toLowerCase() === t.toLowerCase()) {
+      const rest = lines.slice(1).join("\n").trim();
+      return rest ? `## ${t}\n\n${rest}` : `## ${t}`;
+    }
+    return `## ${t}\n\n${c}`;
+  };
+
+  const syncedFullText = foundReordered.sections.map(formatForSync).join("\n\n");
+  const materialWithSyncedText = await updateMaterial(testGroupId, customMat.id, {
+    cleanedText: syncedFullText,
+    rawText: syncedFullText,
+    sections: foundReordered.sections,
+  });
+  if (!materialWithSyncedText || !materialWithSyncedText.cleanedText.startsWith("## البلاستيدات الخضراء")) {
+    throw new Error("Smart sync full text failed to reflect new chapter order in cleanedText!");
+  }
+
+  // Multi-chapter permutation test (3 chapters: reorder [A, B, C] -> [C, A, B])
+  const threeChapters = [
+    { id: "sec-a", title: "الفصل الأول: الحركة", content: "قوانين نيوتن للحركة.", wordCount: 4 },
+    { id: "sec-b", title: "الفصل الثاني: الطاقة", content: "الطاقة لا تفنى ولا تستحدث.", wordCount: 5 },
+    { id: "sec-c", title: "الفصل الثالث: القوة", content: "مفهوم القوة والتسارع.", wordCount: 4 },
+  ];
+  const reorderedThree = await updateMaterial(testGroupId, customMat.id, {
+    sections: [threeChapters[2], threeChapters[0], threeChapters[1]], // [C, A, B]
+  });
+  if (
+    !reorderedThree ||
+    reorderedThree.sections[0].id !== "sec-c" ||
+    reorderedThree.sections[1].id !== "sec-a" ||
+    reorderedThree.sections[2].id !== "sec-b"
+  ) {
+    throw new Error("Multi-chapter 3-way permutation failed!");
+  }
+
+  // Verify reordered 3-way smart sync text formatting with updated title
+  const reorderedWithEditedTitle = [
+    { id: "sec-c", title: "الفصل 1: القوة والتسارع", content: "## الفصل القديم\n\nمفهوم القوة والتسارع." },
+    { id: "sec-a", title: "الفصل 2: الحركة", content: "قوانين نيوتن للحركة." },
+  ];
+  const syncedThreeText = reorderedWithEditedTitle.map(formatForSync).join("\n\n");
+  if (!syncedThreeText.startsWith("## الفصل 1: القوة والتسارع\n\nمفهوم القوة والتسارع.")) {
+    throw new Error("Smart sync failed to replace stale heading with newly edited title!");
+  }
+  console.log("  ✓ Chapter reordering & text synchronization verified: exact order preserved across DB, disk, and retrieval");
+
   // Verify editing global material forks group-specific copy cleanly
   const forkedGlobal = await updateMaterial(testGroupId, "sample-science-ar", {
     title: "نسخة مخصصة من منهج العلوم للفيزياء",

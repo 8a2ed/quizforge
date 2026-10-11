@@ -762,7 +762,7 @@ export async function updateMaterial(
               : 0,
         };
       })
-      .filter((s) => s.content.length > 0);
+      .filter((s) => s.content.length > 0 || (s.title && s.title.trim().length > 0));
   }
 
   if (!Array.isArray(newSections) || newSections.length === 0) {

@@ -35,6 +35,9 @@ import {
   TrendingUp,
   Pencil,
   Edit3,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
 } from "lucide-react";
 import { isBrowserExtractable, extractMaterialInBrowser, getPdfPageCount, parsePageRange, splitIntoSections } from "@/lib/browserTextExtractor";
 
@@ -235,6 +238,8 @@ export default function CurriculumPage() {
   const [editSections, setEditSections] = useState<Array<{ id: string; title: string; content: string; wordCount: number }>>([]);
   const [activeEditTab, setActiveEditTab] = useState<"info" | "text" | "sections">("info");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // ── Modals State ──
   // Exam Modal
@@ -1269,6 +1274,8 @@ export default function CurriculumPage() {
         : []
     );
     setActiveEditTab("info");
+    setDraggedIndex(null);
+    setDragOverIndex(null);
     setShowEditModal(true);
   };
 
@@ -1298,7 +1305,10 @@ export default function CurriculumPage() {
   };
 
   const handleRemoveEditSection = (index: number) => {
+    const sec = editSections[index];
+    const title = sec?.title || (isRtl ? `الفصل ${index + 1}` : `Chapter ${index + 1}`);
     setEditSections((prev) => prev.filter((_, idx) => idx !== index));
+    showToast("info", isRtl ? `🗑️ تم حذف "${title}"` : `Removed "${title}"`);
   };
 
   const handleAutoSplitEditSections = () => {
@@ -1313,6 +1323,149 @@ export default function CurriculumPage() {
     }
     setEditSections(generated);
     showToast("success", isRtl ? `تم تقسيم وتنسيق ${generated.length} فصول بنجاح من النص!` : `Auto-split into ${generated.length} sections!`);
+  };
+
+  // ── Chapter / Section Reordering & Smart Sync Handlers ──
+  const moveSectionUp = (index: number) => {
+    if (index <= 0 || index >= editSections.length) return;
+    const title = editSections[index]?.title || (isRtl ? `الفصل ${index + 1}` : `Chapter ${index + 1}`);
+    setEditSections((prev) => {
+      const next = [...prev];
+      const targetItem = next[index];
+      const prevItem = next[index - 1];
+      next[index - 1] = targetItem;
+      next[index] = prevItem;
+      return next;
+    });
+    showToast("info", isRtl ? `⬆️ تم تقديم "${title}" لأعلى (الموضع #${index})` : `Moved "${title}" up to #${index}`);
+  };
+
+  const moveSectionDown = (index: number) => {
+    if (index < 0 || index >= editSections.length - 1) return;
+    const title = editSections[index]?.title || (isRtl ? `الفصل ${index + 1}` : `Chapter ${index + 1}`);
+    setEditSections((prev) => {
+      const next = [...prev];
+      const targetItem = next[index];
+      const nextItem = next[index + 1];
+      next[index + 1] = targetItem;
+      next[index] = nextItem;
+      return next;
+    });
+    showToast("info", isRtl ? `⬇️ تم تأخير "${title}" لأسفل (الموضع #${index + 2})` : `Moved "${title}" down to #${index + 2}`);
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", String(index));
+    } catch {}
+    // Defer state update so browser captures un-dimmed drag ghost image
+    setTimeout(() => {
+      setDraggedIndex(index);
+    }, 0);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent, index: number) => {
+    // If moving into another child element within the current card, do not clear dragOverIndex
+    if (e.currentTarget.contains(e.relatedTarget as Node)) {
+      return;
+    }
+    if (dragOverIndex === index) {
+      setDragOverIndex(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    const data = e.dataTransfer.getData("text/plain");
+    const sourceIndex = draggedIndex !== null ? draggedIndex : (data !== "" ? Number(data) : NaN);
+    if (
+      sourceIndex !== null &&
+      !isNaN(sourceIndex) &&
+      sourceIndex >= 0 &&
+      sourceIndex < editSections.length &&
+      targetIndex >= 0 &&
+      targetIndex < editSections.length &&
+      sourceIndex !== targetIndex
+    ) {
+      const movedItem = editSections[sourceIndex];
+      const movedTitle = movedItem?.title || (isRtl ? `الفصل ${sourceIndex + 1}` : `Chapter ${sourceIndex + 1}`);
+      setEditSections((prev) => {
+        const next = [...prev];
+        const [moved] = next.splice(sourceIndex, 1);
+        next.splice(targetIndex, 0, moved);
+        return next;
+      });
+      showToast(
+        "success",
+        isRtl
+          ? `🎯 تم تغيير الترتيب بنجاح: أصبح "${movedTitle}" في الموضع #${targetIndex + 1}`
+          : `Reordered: "${movedTitle}" is now #${targetIndex + 1}`
+      );
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleSyncTextWithSections = () => {
+    if (!editSections || editSections.length === 0) {
+      showToast("info", isRtl ? "لا توجد فصول لمزامنتها مع النص" : "No chapters to synchronize");
+      return;
+    }
+
+    const validSections = editSections.filter((s) => s.content.trim() || s.title.trim());
+    if (validSections.length === 0) {
+      showToast("error", isRtl ? "محتوى الفصول فارغ، لا يمكن مزامنة النص" : "Chapters are empty");
+      return;
+    }
+
+    const formattedParts = validSections.map((s, idx) => {
+      const t = s.title.trim() || (isRtl ? `الفصل ${idx + 1}` : `Chapter ${idx + 1}`);
+      const c = s.content.trim();
+      if (!c) return `## ${t}`;
+
+      const lines = c.split("\n");
+      const firstLine = lines[0].trim();
+      const isHeader = /^#{1,6}\s+/.test(firstLine);
+
+      if (isHeader) {
+        const headerText = firstLine.replace(/^#{1,6}\s+/, "").trim();
+        if (headerText.toLowerCase() === t.toLowerCase()) {
+          return c;
+        }
+        const rest = lines.slice(1).join("\n").trim();
+        return rest ? `## ${t}\n\n${rest}` : `## ${t}`;
+      }
+
+      if (firstLine.toLowerCase() === t.toLowerCase()) {
+        const rest = lines.slice(1).join("\n").trim();
+        return rest ? `## ${t}\n\n${rest}` : `## ${t}`;
+      }
+
+      return `## ${t}\n\n${c}`;
+    });
+
+    const synced = formattedParts.join("\n\n");
+    setEditText(synced);
+    showToast(
+      "success",
+      isRtl
+        ? `🔄 تم مزامنة نص الكتاب الكامل بنجاح مع الترتيب الجديد لـ ${validSections.length} فصل!`
+        : `🔄 Full text synchronized with the new chapter order!`
+    );
   };
 
   const handleSaveEdit = async () => {
@@ -1350,7 +1503,7 @@ export default function CurriculumPage() {
           content: s.content.trim(),
           wordCount: s.content ? s.content.split(/\s+/).filter(Boolean).length : 0,
         }))
-        .filter((s) => s.content.length > 0);
+        .filter((s) => s.content.length > 0 || s.title.length > 0);
 
       const payload = {
         title: editTitle.trim(),
@@ -1415,6 +1568,10 @@ export default function CurriculumPage() {
 
       if (selectedMaterialId === editingMaterial.id || !selectedMaterialId) {
         setSelectedMaterialId(updatedMat.id);
+      }
+
+      if (selectedSectionId && !updatedMat.sections?.some((s) => s.id === selectedSectionId)) {
+        setSelectedSectionId("");
       }
 
       setShowEditModal(false);
@@ -1956,9 +2113,9 @@ export default function CurriculumPage() {
                     style={{ width: "100%" }}
                   >
                     <option value="">{isRtl ? "📖 كامل الكتاب / المنهج المعتمد" : "All Available Text"}</option>
-                    {currentMaterial?.sections?.map((s) => (
+                    {currentMaterial?.sections?.map((s, idx) => (
                       <option key={s.id} value={s.id}>
-                        📑 {s.title} ({s.wordCount} {isRtl ? "كلمة" : "words"})
+                        📑 #{idx + 1} {s.title.startsWith("الفصل") || s.title.startsWith("Chapter") ? s.title : `${isRtl ? `الفصل: ` : `Chapter: `}${s.title}`} ({s.wordCount} {isRtl ? "كلمة" : "words"})
                       </option>
                     ))}
                   </select>
@@ -4010,6 +4167,7 @@ export default function CurriculumPage() {
                 <h3 style={{ margin: 0 }}>{previewMaterial.title}</h3>
                 <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
                   {previewMaterial.wordCount} {isRtl ? "كلمة" : "words"} • {previewMaterial.charCount} {isRtl ? "حرف" : "chars"}
+                  {previewMaterial.sections && previewMaterial.sections.length > 0 ? ` • ${previewMaterial.sections.length} ${isRtl ? "فصول" : "chapters"}` : ""}
                 </span>
               </div>
               <button className="btn btn-ghost btn-icon" onClick={() => setPreviewMaterial(null)}>
@@ -4252,14 +4410,48 @@ export default function CurriculumPage() {
 
             {/* Tab 3: Chapters & Sections Manager */}
             {activeEditTab === "sections" && (
-              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                  <span style={{ fontSize: "0.85rem", color: "var(--clr-text-secondary)" }}>
-                    {isRtl
-                      ? "📑 فصول وأقسام الكتاب (تتيح للطلاب والمعلمين استهداف فصل بعينه أثناء توليد الاختبارات):"
-                      : "Chapters and sections for granular targeted generation:"}
-                  </span>
-                  <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, paddingRight: 4 }}>
+                {/* Tab Toolbar & Quick Actions */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <span style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--clr-text-primary)", display: "block" }}>
+                      {isRtl
+                        ? "📑 فصول وأقسام الكتاب وترتيبها:"
+                        : "Chapters, sections, and sequence:"}
+                    </span>
+                    <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>
+                      {isRtl
+                        ? "يمكنك تغيير ترتيب الفصول بالسحب والإفلات أو أزرار الأسهم، ومزامنتها مع نص الكتاب الكامل."
+                        : "Reorder chapters via drag & drop or arrows, and sync with textbook text."}
+                    </span>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    {/* Smart Synchronization Button */}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleSyncTextWithSections}
+                      disabled={editSections.length === 0}
+                      style={{
+                        gap: 6,
+                        fontSize: "0.8rem",
+                        border: "1px solid rgba(99, 102, 241, 0.35)",
+                        background: "rgba(99, 102, 241, 0.08)",
+                        color: "var(--clr-brand)",
+                        fontWeight: 600,
+                      }}
+                      title={
+                        isRtl
+                          ? "إعادة ترتيب نص الكتاب الكامل في تبويب 'نص الكتاب الكامل' ليطابق الترتيب الحالي للفصول"
+                          : "Sync and reorder the full textbook text according to current chapter sequence"
+                      }
+                    >
+                      <RefreshCw size={14} />
+                      <span>{isRtl ? "🔄 مزامنة ترتيب النص الكامل مع الفصول الجديدة" : "🔄 Sync Full Text with Chapters"}</span>
+                    </button>
+
+                    {/* Auto-Split Button */}
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -4270,6 +4462,8 @@ export default function CurriculumPage() {
                       <Sparkles size={14} />
                       <span>{isRtl ? "⚡ تقسيم تلقائي من النص" : "Auto-Split"}</span>
                     </button>
+
+                    {/* Add Chapter Button */}
                     <button
                       type="button"
                       className="btn btn-brand btn-sm"
@@ -4282,78 +4476,379 @@ export default function CurriculumPage() {
                   </div>
                 </div>
 
+                {/* Helpful Reordering Guidance Banner */}
+                {editSections.length > 1 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "8px 14px",
+                      borderRadius: "var(--radius-md)",
+                      background: "rgba(99, 102, 241, 0.05)",
+                      border: "1px solid rgba(99, 102, 241, 0.16)",
+                      fontSize: "0.8rem",
+                      color: "var(--clr-text-secondary)",
+                      flexWrap: "wrap",
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <GripVertical size={16} color="var(--clr-brand)" />
+                      <span>
+                        {isRtl
+                          ? "💡 يمكنك سحب أي كارت وإفلاته عبر المقبض (⠿) لإعادة الترتيب فوراً، أو استخدام أزرار (↑) و (↓)."
+                          : "💡 Drag cards using handle (⠿) or use (↑) and (↓) to easily reorder chapters."}
+                      </span>
+                    </div>
+                    <span
+                      className="badge badge-brand"
+                      style={{ fontSize: "0.74rem", padding: "2px 8px" }}
+                    >
+                      {isRtl ? `إجمالي الفصول: ${editSections.length}` : `Total chapters: ${editSections.length}`}
+                    </span>
+                  </div>
+                )}
+
+                {/* Empty State */}
                 {editSections.length === 0 ? (
                   <div
                     style={{
-                      padding: 24,
+                      padding: 28,
                       textAlign: "center",
                       background: "var(--clr-bg-elevated)",
                       borderRadius: "var(--radius-md)",
                       border: "1px dashed var(--clr-border)",
                     }}
                   >
-                    <p style={{ margin: "0 0 10px", color: "var(--clr-text-secondary)", fontSize: "0.9rem" }}>
+                    <p style={{ margin: "0 0 12px", color: "var(--clr-text-secondary)", fontSize: "0.9rem" }}>
                       {isRtl ? "لم يتم تعريف فصول منفصلة لهذا المنهج بعد." : "No distinct sections defined yet."}
                     </p>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleAutoSplitEditSections}
-                      style={{ gap: 6 }}
-                    >
-                      <Sparkles size={14} />
-                      <span>{isRtl ? "توليد الفصول تلقائياً من النص" : "Auto-generate sections"}</span>
-                    </button>
+                    <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={handleAutoSplitEditSections}
+                        style={{ gap: 6 }}
+                      >
+                        <Sparkles size={14} />
+                        <span>{isRtl ? "توليد الفصول تلقائياً من النص" : "Auto-generate sections"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-brand btn-sm"
+                        onClick={handleAddEditSection}
+                        style={{ gap: 6 }}
+                      >
+                        <Plus size={14} />
+                        <span>{isRtl ? "إضافة أول فصل" : "Add first chapter"}</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
+                  /* Reorderable Chapter Cards List */
                   <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    {editSections.map((sec, sIdx) => (
-                      <div
-                        key={sec.id || sIdx}
-                        style={{
-                          background: "var(--clr-bg-elevated)",
-                          borderRadius: "var(--radius-md)",
-                          padding: 12,
-                          border: "1px solid var(--clr-border)",
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
-                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: "var(--clr-brand)" }}>
-                              #{sIdx + 1}
-                            </span>
-                            <input
-                              type="text"
-                              className="input"
-                              value={sec.title}
-                              onChange={(e) => handleUpdateEditSection(sIdx, "title", e.target.value)}
-                              placeholder={isRtl ? `عنوان الفصل ${sIdx + 1}` : `Section title`}
-                              style={{ flex: 1, padding: "4px 8px", fontSize: "0.88rem", fontWeight: 600 }}
-                            />
-                            <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", whiteSpace: "nowrap" }}>
-                              {sec.wordCount || sec.content.split(/\s+/).filter(Boolean).length} {isRtl ? "كلمة" : "words"}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={() => handleRemoveEditSection(sIdx)}
-                            style={{ color: "var(--clr-danger)" }}
-                            title={isRtl ? "حذف هذا الفصل" : "Remove section"}
+                    {editSections.map((sec, sIdx) => {
+                      const isDraggingThis = draggedIndex === sIdx;
+                      const isDropTargetThis = dragOverIndex === sIdx && draggedIndex !== sIdx;
+
+                      return (
+                        <div
+                          key={sec.id || sIdx}
+                          draggable={true}
+                          onDragStart={(e) => handleDragStart(e, sIdx)}
+                          onDragOver={(e) => handleDragOver(e, sIdx)}
+                          onDragLeave={(e) => handleDragLeave(e, sIdx)}
+                          onDrop={(e) => handleDrop(e, sIdx)}
+                          onDragEnd={handleDragEnd}
+                          style={{
+                            background: isDropTargetThis
+                              ? "rgba(99, 102, 241, 0.12)"
+                              : isDraggingThis
+                              ? "rgba(99, 102, 241, 0.05)"
+                              : "var(--clr-bg-elevated)",
+                            borderRadius: "var(--radius-md)",
+                            padding: 14,
+                            border: isDropTargetThis
+                              ? "2px dashed var(--clr-brand)"
+                              : isDraggingThis
+                              ? "2px dashed rgba(99, 102, 241, 0.45)"
+                              : "1px solid var(--clr-border)",
+                            opacity: isDraggingThis ? 0.45 : 1,
+                            transform: isDropTargetThis ? "translateY(-2px)" : "none",
+                            boxShadow: isDropTargetThis
+                              ? "0 4px 20px rgba(99, 102, 241, 0.22)"
+                              : "none",
+                            transition: "all 0.18s cubic-bezier(0.4, 0, 0.2, 1)",
+                            position: "relative",
+                          }}
+                        >
+                          {/* Drop Indicator Visual Banner */}
+                          {isDropTargetThis && (
+                            <div
+                              style={{
+                                marginBottom: 10,
+                                padding: "6px 12px",
+                                borderRadius: "var(--radius-sm)",
+                                background: "var(--grad-brand)",
+                                color: "#fff",
+                                fontSize: "0.78rem",
+                                fontWeight: 700,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 6,
+                                boxShadow: "0 2px 10px rgba(99, 102, 241, 0.3)",
+                                pointerEvents: "none",
+                              }}
+                            >
+                              <ArrowDown size={14} />
+                              <span>
+                                {isRtl
+                                  ? `🎯 إفلات هنا للنقل إلى الترتيب #${sIdx + 1}`
+                                  : `🎯 Drop here to place at #${sIdx + 1}`}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Card Header & Controls */}
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              marginBottom: 10,
+                              gap: 10,
+                              flexWrap: "wrap",
+                            }}
                           >
-                            <Trash2 size={15} />
-                          </button>
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                flex: 1,
+                                minWidth: 260,
+                              }}
+                            >
+                              {/* Draggable Grip Icon ⠿ */}
+                              <div
+                                style={{
+                                  cursor: isDraggingThis ? "grabbing" : "grab",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  gap: 3,
+                                  padding: "5px 8px",
+                                  borderRadius: "var(--radius-sm)",
+                                  color: isDraggingThis ? "var(--clr-brand)" : "var(--clr-text-secondary)",
+                                  background: "var(--clr-bg-surface)",
+                                  border: "1px solid var(--clr-border)",
+                                  userSelect: "none",
+                                  flexShrink: 0,
+                                }}
+                                title={
+                                  isRtl
+                                    ? "⠿ اسحب وأفلت لإعادة ترتيب هذا الفصل"
+                                    : "⠿ Drag & drop to reorder chapter"
+                                }
+                              >
+                                <span style={{ fontSize: "0.95rem", lineHeight: 1, userSelect: "none", fontWeight: 700 }}>⠿</span>
+                                <GripVertical size={14} />
+                              </div>
+
+                              {/* Clear Live Numbering Badge (الفصل 1, الفصل 2, ...) */}
+                              <span
+                                className="badge badge-brand"
+                                style={{
+                                  fontWeight: 700,
+                                  fontSize: "0.8rem",
+                                  padding: "4px 10px",
+                                  borderRadius: "var(--radius-full)",
+                                  background: "rgba(99, 102, 241, 0.14)",
+                                  color: "var(--clr-brand)",
+                                  border: "1px solid rgba(99, 102, 241, 0.3)",
+                                  whiteSpace: "nowrap",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {isRtl ? `الفصل ${sIdx + 1}` : `Chapter ${sIdx + 1}`}
+                              </span>
+
+                              {/* Chapter Title Input */}
+                              <input
+                                type="text"
+                                className="input"
+                                value={sec.title}
+                                draggable={false}
+                                onDragStart={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  handleUpdateEditSection(sIdx, "title", e.target.value)
+                                }
+                                placeholder={
+                                  isRtl
+                                    ? `عنوان الفصل ${sIdx + 1}`
+                                    : `Chapter ${sIdx + 1} title`
+                                }
+                                style={{
+                                  flex: 1,
+                                  padding: "5px 10px",
+                                  fontSize: "0.9rem",
+                                  fontWeight: 600,
+                                  minWidth: 140,
+                                }}
+                              />
+
+                              {/* Chapter Word Count */}
+                              <span
+                                style={{
+                                  fontSize: "0.75rem",
+                                  color: "var(--clr-text-muted)",
+                                  whiteSpace: "nowrap",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {sec.wordCount ||
+                                  sec.content.split(/\s+/).filter(Boolean).length}{" "}
+                                {isRtl ? "كلمة" : "words"}
+                              </span>
+                            </div>
+
+                            {/* Reordering Controls: Move Up, Move Down, Delete */}
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                flexShrink: 0,
+                              }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              {/* Move Up / Move Down Buttons */}
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 2,
+                                  background: "var(--clr-bg-surface)",
+                                  padding: "2px 4px",
+                                  borderRadius: "var(--radius-sm)",
+                                  border: "1px solid var(--clr-border)",
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-icon btn-sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveSectionUp(sIdx);
+                                  }}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  disabled={sIdx === 0}
+                                  style={{
+                                    width: 28,
+                                    height: 28,
+                                    padding: 0,
+                                    opacity: sIdx === 0 ? 0.3 : 1,
+                                    cursor: sIdx === 0 ? "not-allowed" : "pointer",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                  title={isRtl ? "تحريك لأعلى (↑)" : "Move Up (↑)"}
+                                  aria-label={isRtl ? "تحريك لأعلى" : "Move Up"}
+                                >
+                                  <ArrowUp size={15} />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-icon btn-sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveSectionDown(sIdx);
+                                  }}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  disabled={sIdx === editSections.length - 1}
+                                  style={{
+                                    width: 28,
+                                    height: 28,
+                                    padding: 0,
+                                    opacity:
+                                      sIdx === editSections.length - 1 ? 0.3 : 1,
+                                    cursor:
+                                      sIdx === editSections.length - 1
+                                        ? "not-allowed"
+                                        : "pointer",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                  title={isRtl ? "تحريك لأسفل (↓)" : "Move Down (↓)"}
+                                  aria-label={isRtl ? "تحريك لأسفل" : "Move Down"}
+                                >
+                                  <ArrowDown size={15} />
+                                </button>
+                              </div>
+
+                              {/* Delete Chapter Button */}
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-icon btn-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveEditSection(sIdx);
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                style={{
+                                  color: "var(--clr-danger)",
+                                  width: 28,
+                                  height: 28,
+                                  padding: 0,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                                title={isRtl ? "حذف هذا الفصل" : "Remove section"}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Chapter Content Editor */}
+                          <textarea
+                            className="textarea"
+                            value={sec.content}
+                            draggable={false}
+                            onDragStart={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              handleUpdateEditSection(sIdx, "content", e.target.value)
+                            }
+                            rows={3}
+                            placeholder={
+                              isRtl
+                                ? "نص ومحتوى هذا الفصل أو الدرس..."
+                                : "Section text..."
+                            }
+                            style={{
+                              width: "100%",
+                              fontSize: "0.85rem",
+                              lineHeight: 1.6,
+                            }}
+                          />
                         </div>
-                        <textarea
-                          className="textarea"
-                          value={sec.content}
-                          onChange={(e) => handleUpdateEditSection(sIdx, "content", e.target.value)}
-                          rows={3}
-                          placeholder={isRtl ? "نص ومحتوى هذا الفصل أو الدرس..." : "Section text..."}
-                          style={{ width: "100%", fontSize: "0.85rem", lineHeight: 1.6 }}
-                        />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
