@@ -211,6 +211,28 @@ export async function POST(
     });
   } catch (err: unknown) {
     console.error("[Curriculum Generate Error]", err);
+
+    // Record audit log for failed attempts so analytics show complete picture
+    try {
+      const failLog: GenerationLog = {
+        id: `gen_err_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        groupId,
+        userId: auth.userId,
+        userName: auth.user.firstName || "المعلم",
+        userUsername: auth.user.username || undefined,
+        userPhoto: auth.user.photoUrl || undefined,
+        materialId: undefined,
+        materialTitle: "محاولة توليد غير مكتملة",
+        questionCount: 0,
+        modelUsed: "gemini",
+        estimatedTokens: 0,
+        difficulty: "mixed",
+        timestamp: new Date().toISOString(),
+        success: false,
+      };
+      await recordGenerationLog(failLog);
+    } catch {}
+
     return NextResponse.json(
       {
         error: err instanceof Error ? err.message : "فشل توليد الأسئلة بواسطة الذكاء الاصطناعي",

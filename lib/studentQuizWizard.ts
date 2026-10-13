@@ -410,6 +410,16 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
     return true;
   }
 
+  // Concurrency & double-click guard during active generation
+  if (session.step === "generating") {
+    await telegram.answerCallbackQuery(
+      cbId,
+      "⏳ جاري تجهيز وتوليد الكويز بالفعل، لحظات قليلة...",
+      true
+    );
+    return true;
+  }
+
   // Session TTL check
   if (Date.now() - session.updatedAt > SESSION_TTL_MS) {
     quizSessions.delete(sKey);
@@ -421,7 +431,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
         text: "⏰ <i>انتهت مهلة الجلسة لعدم التفاعل. اكتب <code>/qs</code> أو <code>/boost</code> للبدء مجدداً.</i>",
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [] },
-      });
+      }).catch(() => {});
     } catch {}
     return true;
   }
@@ -645,16 +655,9 @@ async function executeGeneration(
       throw new Error("تعذر الوصول إلى محتوى المادة الدراسية.");
     }
 
-    // Auto-bind group if session didn't have groupId
-    if (!session.groupId) {
-      if (material.groupId && material.groupId !== "global") {
-        session.groupId = material.groupId;
-      } else {
-        try {
-          const firstGroup = await withRetry(() => prisma.group.findFirst({ select: { id: true } }));
-          if (firstGroup) session.groupId = firstGroup.id;
-        } catch {}
-      }
+    // Auto-bind group if material belongs to a specific group
+    if (!session.groupId && material.groupId && material.groupId !== "global") {
+      session.groupId = material.groupId;
     }
 
     let textExcerpt = material.cleanedText;
@@ -767,9 +770,20 @@ async function executeGeneration(
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
 
-      // Safe option truncation & uniqueness for Telegram
-      const sanitizedOptions: string[] = q.options.map((opt: string) => truncateText(opt, 98));
-      const cleanExplanation = q.explanation ? truncateText(q.explanation, 195) : undefined;
+      // Safe option truncation & uniqueness guarantee for Telegram
+      const seenOpts = new Set<string>();
+      const sanitizedOptions: string[] = q.options.map((opt: string, optIdx: number) => {
+        let t = truncateText(opt, 98);
+        if (seenOpts.has(t.toLowerCase())) {
+          t = truncateText(`${t} (${optIdx + 1})`, 98);
+        }
+        seenOpts.add(t.toLowerCase());
+        return t;
+      });
+
+      const cleanExplanation = q.explanation && q.explanation.trim()
+        ? truncateText(q.explanation.trim(), 195)
+        : undefined;
 
       try {
         const sentPoll = await telegram.sendPoll({
@@ -844,6 +858,27 @@ async function executeGeneration(
   } catch (err: any) {
     const errorMsg = String(err?.message || err || "حدث خطأ غير متوقع");
     console.error("[StudentQuizWizard] Generation error:", err);
+
+    // Apply generation cooldown to prevent immediate repeated spam
+    recordUserGeneration(session.userId);
+
+    // Record audit log for failed bot generation attempt
+    await recordGenerationLog({
+      id: `gen_bot_err_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      groupId: session.groupId || "global",
+      userId: session.userId,
+      userName: session.userName,
+      userUsername: session.userUsername,
+      userPhoto: session.userPhoto,
+      materialId: session.materialId,
+      materialTitle: session.materialTitle || "طلب كويز عبر البوت",
+      questionCount: 0,
+      modelUsed: "gemini",
+      estimatedTokens: 0,
+      difficulty: session.difficulty || "mixed",
+      timestamp: new Date().toISOString(),
+      success: false,
+    }).catch(() => {});
 
     const isQuotaExhausted =
       /quota|429|resource_exhausted|limit:\s*20|free_tier_requests|retry in/i.test(errorMsg);

@@ -35,24 +35,6 @@ export const RECOMMENDED_GEMINI_MODELS: ModelDescriptor[] = [
     labelEn: "gemini-2.5-pro (Advanced Reasoning)",
     description: "تفكير تحليلي متقدم",
   },
-  {
-    id: "gemini-2.0-flash",
-    labelAr: "gemini-2.0-flash (الجيل السابق)",
-    labelEn: "gemini-2.0-flash (Previous Generation)",
-    description: "الجيل السابق",
-  },
-  {
-    id: "gemini-1.5-flash",
-    labelAr: "gemini-1.5-flash (سريع مع نافذة سياق 1M Token)",
-    labelEn: "gemini-1.5-flash (Fast & Lightweight)",
-    description: "نافذة سياق 1M Token",
-  },
-  {
-    id: "gemini-1.5-pro",
-    labelAr: "gemini-1.5-pro (تفكير أكاديمي متقدم للكتب الضخمة)",
-    labelEn: "gemini-1.5-pro (Deep Academic Reasoning)",
-    description: "تفكير أكاديمي متقدم",
-  },
 ];
 
 export const BASE_GEMINI_MODELS = RECOMMENDED_GEMINI_MODELS.map((m) => m.id);
@@ -243,17 +225,8 @@ export function getFallbackCandidates(
   };
 
   addIfValid(DEFAULT_GEMINI_MODEL);
-  addIfValid("gemini-3.6-flash");
-  addIfValid("gemini-3.5-flash");
-  addIfValid("gemini-3.7-flash");
-  addIfValid("gemini-flash-latest");
   addIfValid("gemini-2.5-flash");
   addIfValid("gemini-2.5-pro");
-  addIfValid("gemini-pro-latest");
-  addIfValid("gemini-3-flash-preview");
-  addIfValid("gemini-3.5-flash-lite");
-  addIfValid("gemini-3.1-flash-lite");
-  addIfValid("gemini-flash-lite-latest");
 
   // Sort dynamic models so text flash models come first and non-text models are excluded
   const sortedDynamic = [...dynamicModels]
@@ -351,10 +324,10 @@ export async function fetchAvailableGeminiModels(apiKey: string): Promise<Availa
 }
 
 /**
- * Estimate token count approximately (4 chars ~ 1 token).
+ * Estimate token count approximately (for Arabic/multilingual text ~2.5 chars per token).
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil((text || "").length / 4);
+  return Math.ceil((text || "").length / 2.5);
 }
 
 /**
@@ -364,15 +337,18 @@ async function callGeminiGenerateContent(
   model: string,
   requestBody: any,
   apiKey: string,
-  timeoutMs: number = 60000
+  timeoutMs: number = 45000
 ): Promise<{ ok: boolean; status: number; text: string; errorDetails: string }> {
   const cleanModel = normalizeModelName(model);
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   try {
     let res = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -389,7 +365,10 @@ async function callGeminiGenerateContent(
       try {
         const retryRes = await fetch(endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
           body: JSON.stringify(fallbackBody),
           signal: AbortSignal.timeout(timeoutMs),
         });
@@ -411,20 +390,43 @@ async function callGeminiGenerateContent(
     }
 
     const data = await res.json();
-    const parts = data.candidates?.[0]?.content?.parts || [];
+
+    // Check Google safety prompt feedback
+    if (data.promptFeedback?.blockReason) {
+      return {
+        ok: false,
+        status: 400,
+        text: "",
+        errorDetails: `تم حجب الطلب بواسطة سياسة الأمان الخاصة بـ Google (${data.promptFeedback.blockReason})`,
+      };
+    }
+
+    const candidate = data.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
     // Exclude thought/reasoning parts so they don't break JSON parsing
     const contentParts = parts.filter((p: any) => !p.thought && typeof p.text === "string");
-    const rawText = (contentParts.length > 0 ? contentParts : parts)
+    const rawText = (contentParts.length > 0 ? contentParts : [])
       .map((p: any) => (typeof p.text === "string" ? p.text : ""))
       .join("");
 
-    if (!rawText && data.candidates?.[0]?.finishReason && data.candidates[0].finishReason !== "STOP") {
-      return {
-        ok: false,
-        status: 200,
-        text: "",
-        errorDetails: `النموذج أنهى التوليد بسبب (${data.candidates[0].finishReason})`,
-      };
+    if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+      const reason = candidate.finishReason;
+      if (reason === "SAFETY") {
+        return {
+          ok: false,
+          status: 400,
+          text: "",
+          errorDetails: "تم إيقاف التوليد لمخالفة معايير الأمان للنص المرفوع (SAFETY)",
+        };
+      }
+      if (!rawText) {
+        return {
+          ok: false,
+          status: 400,
+          text: "",
+          errorDetails: `النموذج أنهى التوليد مبكراً بسبب (${reason})`,
+        };
+      }
     }
     return { ok: true, status: 200, text: rawText, errorDetails: "" };
   } catch (err: any) {
@@ -456,6 +458,10 @@ export async function generateCurriculumQuestions(
     );
   }
 
+  if (!options.textExcerpt || !options.textExcerpt.trim()) {
+    throw new Error("نص المنهج الدراسي فارغ. يرجى توفير مقتطف نصي كافٍ لتوليد الأسئلة.");
+  }
+
   const requestedModel = normalizeModelName(options.model || DEFAULT_GEMINI_MODEL);
   const count = Math.min(Math.max(options.questionCount || 5, 1), 30);
   const difficulty = options.difficulty || "mixed";
@@ -467,6 +473,7 @@ export async function generateCurriculumQuestions(
   if (options.topic) {
     prompt += `التركيز على موضوع/فصل: ${options.topic}\n`;
   }
+
   prompt += `مستوى الصعوبة المطلوب: ${difficulty}\n`;
   if (options.systemInstruction) {
     prompt += `تعليمات إضافية من المعلم: ${options.systemInstruction}\n`;
@@ -729,9 +736,9 @@ export function cleanAndParseJson(rawText: string): any {
 
   let text = rawText.trim();
 
-  // Strip BOM and consecutive invisible/directional control characters
+  // Strip BOM and all invisible/directional control characters
   text = text.replace(/^\uFEFF/, "");
-  text = text.replace(/[\u200E\u200F\u202A-\u202E\u200B\u200C\u200D]{2,}/g, "");
+  text = text.replace(/[\u200E\u200F\u202A-\u202E\u200B\u200C\u200D]/g, "");
 
   // Strip <thought> or <thinking> blocks (both closed and unclosed before JSON)
   text = text.replace(/<(?:thought|thinking)>[\s\S]*?<\/(?:thought|thinking)>/gi, "").trim();

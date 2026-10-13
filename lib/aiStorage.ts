@@ -356,7 +356,8 @@ HTTP Status Codes:
 // ─── Materials CRUD (PostgreSQL + Serverless File Fallback) ───────────────────
 
 let dbTablesInitialized = false;
-let dbInitAttempted = false;
+let lastDbInitAttemptAt = 0;
+const DB_INIT_RETRY_COOLDOWN_MS = 15000;
 
 export function isDatabaseConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.trim());
@@ -365,7 +366,8 @@ export function isDatabaseConfigured(): boolean {
 async function ensureAiDatabaseTables(prismaClient: any): Promise<boolean> {
   if (dbTablesInitialized) return true;
   if (!isDatabaseConfigured()) return false;
-  if (dbInitAttempted) return false;
+  if (Date.now() - lastDbInitAttemptAt < DB_INIT_RETRY_COOLDOWN_MS) return false;
+  lastDbInitAttemptAt = Date.now();
   try {
     await prismaClient.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_curriculum_materials (
@@ -435,7 +437,6 @@ async function ensureAiDatabaseTables(prismaClient: any): Promise<boolean> {
     dbTablesInitialized = true;
     return true;
   } catch (err) {
-    dbInitAttempted = true;
     console.warn("[aiStorage] Failed to ensure DB table:", err);
     return false;
   }
@@ -530,9 +531,10 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
           if (Array.isArray(rows) && rows.length > 0) {
             return rows.map(mapDbRowToMaterial);
           }
+          return SAMPLE_MATERIALS;
         }
 
-        // If no group specified or group had no custom materials, check all custom materials in DB
+        // If no group specified (global context), return all custom materials up to 30
         const allRows = await prisma.$queryRawUnsafe<any[]>(
           `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
         );
@@ -552,6 +554,7 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
       (m) => String(m.groupId || "").trim() === cleanGid && m.groupId !== "global"
     );
     if (groupMaterials.length > 0) return groupMaterials;
+    return SAMPLE_MATERIALS;
   }
 
   const anyCustom = allMaterials.filter((m) => m.groupId !== "global");
