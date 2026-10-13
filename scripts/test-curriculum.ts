@@ -27,7 +27,7 @@ import {
   extractDocumentTextWithGemini,
   extractChunkTextWithGemini,
 } from "../lib/gemini";
-import { getSectionKeyboard, SECTIONS_PER_PAGE } from "../lib/studentQuizWizard";
+import { getSectionKeyboard, SECTIONS_PER_PAGE, formatExplanationWithCitation } from "../lib/studentQuizWizard";
 
 async function runTests() {
   console.log("=== RUNNING ENHANCED AI CURRICULUM VERIFICATION SUITE ===");
@@ -1413,6 +1413,61 @@ All questions grounded in text.
     throw new Error("Multi-page section keyboard Page 2 should NOT have Next button!");
   }
   console.log("  ✓ Telegram wizard chapter/section pagination verified: 15 sections smoothly split across 3 pages with active navigation");
+
+  // F. Source Citation & Explanation formatting <= 195 chars
+  // 1. Basic formatting: Appends citation tag
+  const expWithTopic = formatExplanationWithCitation("السرعة هي كمية قياسية متجهة", "الفصل الأول: الحركة", undefined);
+  if (!expWithTopic || !expWithTopic.includes("📍 [المرجع: الفصل الأول: الحركة]")) {
+    throw new Error("formatExplanationWithCitation failed to append citation tag!");
+  }
+  if (expWithTopic.length > 195) {
+    throw new Error(`Explanation exceeded 195 chars: ${expWithTopic.length}`);
+  }
+
+  // 2. Prevent duplicate citation if tag is already present in explanation
+  const expAlreadyCited = formatExplanationWithCitation("هذا الشرح موثق [المرجع: ص 24]", "الفصل الثاني", undefined);
+  if (!expAlreadyCited || (expAlreadyCited.match(/\[المرجع:/g) || []).length !== 1) {
+    throw new Error("formatExplanationWithCitation created duplicate citation tag!");
+  }
+
+  // 3. Very long explanation clamping <= 195 chars
+  const veryLongExp = "أ".repeat(180);
+  const clampedExp = formatExplanationWithCitation(veryLongExp, "موضوع تجريبي طويل نسبياً لتأكيد عدم تجاوز الحد الأقصى لتليجرام", undefined);
+  if (!clampedExp || clampedExp.length > 195) {
+    throw new Error(`Clamped explanation exceeded 195 chars! Length: ${clampedExp?.length}`);
+  }
+  if (!clampedExp.includes("📍 [المرجع:")) {
+    throw new Error("Clamped explanation missing citation tag!");
+  }
+
+  // 4. Empty explanation with topic returns citation
+  const expOnlyTopic = formatExplanationWithCitation("", "الفصل الثالث: القوانين", undefined);
+  if (!expOnlyTopic || !expOnlyTopic.startsWith("📍 [المرجع:")) {
+    throw new Error("formatExplanationWithCitation with empty explanation failed to return citation!");
+  }
+
+  // 5. Empty inputs return undefined
+  const expEmpty = formatExplanationWithCitation("", "", "");
+  if (expEmpty !== undefined) {
+    throw new Error("formatExplanationWithCitation with empty inputs must return undefined!");
+  }
+  console.log("  ✓ Telegram poll explanation citations verified: seamless appending, duplicate prevention, and strict 195-char clamping");
+
+  // 6. Test validator citation handling
+  const validatedWithCitation = validateAndSanitizeQuestion({
+    question: "ما هي وحدة السرعة في النظام الدولي؟",
+    options: ["متر/ثانية", "كيلوجرام", "نيوتن", "جول"],
+    correctOptionId: 0,
+    explanation: "وحدة قياس السرعة هي المسافة مقسومة على الزمن",
+    sourceReference: "الفصل الأول ص 15",
+  });
+  if (!validatedWithCitation.explanation.includes("[المصدر: الفصل الأول ص 15]")) {
+    throw new Error("validateAndSanitizeQuestion failed to append sourceReference!");
+  }
+  if (validatedWithCitation.explanation.length > TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
+    throw new Error("validateAndSanitizeQuestion explanation exceeded 200 chars!");
+  }
+  console.log("  ✓ validateAndSanitizeQuestion source citation integration verified");
 
   console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }

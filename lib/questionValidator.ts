@@ -49,6 +49,10 @@ export interface RawGeneratedQuestion {
   groundingQuote?: string;
   الاقتباس?: string;
   الدليل?: string;
+  sourceReference?: string;
+  citation?: string;
+  المرجع?: string;
+  المصدر?: string;
 }
 
 export interface ValidatedQuestion {
@@ -317,7 +321,7 @@ export function validateAndSanitizeQuestion(
   // 3. Correct Option ID resolution
   const correctOptionId = resolveCorrectOptionIndex(raw, processedOptions);
 
-  // 4. Explanation validation
+  // 4. Explanation & Citation validation
   let explanation = (
     raw.explanation ||
     raw.الشرح ||
@@ -326,6 +330,21 @@ export function validateAndSanitizeQuestion(
     raw.التوضيح ||
     ""
   ).trim();
+
+  const citation = (
+    raw.sourceReference ||
+    raw.citation ||
+    raw.المرجع ||
+    raw.المصدر ||
+    ""
+  ).trim();
+
+  if (citation && !explanation.includes(citation) && !/\[(?:المرجع|المصدر|مرجع|مصدر):/i.test(explanation)) {
+    const citationTag = ` [المصدر: ${citation}]`;
+    if (explanation.length + citationTag.length <= TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
+      explanation += citationTag;
+    }
+  }
 
   if (explanation.length > TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
     errors.push(`الشرح تجاوز 200 حرف (${explanation.length}/200) - تم اختصاره لتوافق تليجرام`);

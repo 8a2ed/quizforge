@@ -91,8 +91,8 @@ CRITICAL ZERO-HALLUCINATION & PSYCHOMETRIC DISTRACTOR RULES:
    - STRUCTURAL & LENGTH HOMOGENEITY (التجانس التام): All options in a question MUST be approximately equal in length, grammatical structure, and syntax. NEVER make the correct option noticeably longer, more detailed, or distinct from the distractors.
    - EXCLUSIVITY & NO META-OPTIONS: Strictly NEVER use "جميع ما سبق" (All of the above), "لا شيء مما سبق" (None of the above), "أ وب معاً", or "كل الخيارات صحيحة". Each option must be an independent, concrete concept.
 4. EXACT EVIDENCE: Every question MUST include "groundingQuote" quoting verbatim the exact phrase or sentence from the excerpt proving the answer.
-5. PEDAGOGICAL EXPLANATION:
-   - "explanation" (max 200 chars): Concisely explain why the correct option is true based on the text, and briefly pinpoint the misconception behind the distractors.
+5. PEDAGOGICAL EXPLANATION & CITATION:
+   - "explanation" (max 200 chars): Concisely explain why the correct option is true based on the text, and briefly pinpoint the misconception behind the distractors, ending with the source section reference: [المرجع: عنوان الفصل أو الموضوع].
 6. TELEGRAM CONSTRAINTS COMPLIANCE:
    - "question": Direct question stem containing the core problem, max 300 characters.
    - "options": Exactly 4 distinct options (or 2-4 if true/false). Max 100 characters per option. NO duplicate options.

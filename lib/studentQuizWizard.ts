@@ -68,6 +68,43 @@ function truncateText(s: string, maxLen: number): string {
 }
 
 /**
+ * Formats question explanation ensuring strict adherence to Telegram's 200-char explanation limit
+ * and appends citation / source reference if available and not already present.
+ */
+export function formatExplanationWithCitation(
+  rawExplanation?: string,
+  topic?: string,
+  sectionTitle?: string
+): string | undefined {
+  let baseText = (rawExplanation || "").trim();
+  const citationCandidate = (topic || sectionTitle || "").trim();
+  const hasCitationTag = /\[(?:المرجع|المصدر|مرجع|مصدر):/i.test(baseText);
+
+  if (citationCandidate && !hasCitationTag) {
+    const cleanCitation = truncateText(citationCandidate, 60);
+    const citationTag = ` 📍 [المرجع: ${cleanCitation}]`;
+
+    if (baseText) {
+      const allowedBaseLength = 195 - citationTag.length;
+      if (allowedBaseLength >= 25) {
+        if (baseText.length > allowedBaseLength) {
+          baseText = truncateText(baseText, allowedBaseLength);
+        }
+        baseText = `${baseText}${citationTag}`.trim();
+      } else {
+        baseText = truncateText(baseText, 195);
+      }
+    } else {
+      baseText = truncateText(citationTag.trim(), 195);
+    }
+  } else if (baseText) {
+    baseText = truncateText(baseText, 195);
+  }
+
+  return baseText.length > 0 ? baseText : undefined;
+}
+
+/**
  * Checks if a user is within the allowed rate limits.
  */
 function checkUserRateLimit(userId: string): {
@@ -692,21 +729,55 @@ async function executeGeneration(
   session.updatedAt = Date.now();
 
   const difficultyLabel = DIFFICULTY_NAMES[session.difficulty || "mixed"] || "متوازن";
+  const targetCount = session.questionCount || 5;
 
-  // 1. Show live loading state on wizard message
-  await telegram.editMessageText({
-    chat_id: session.chatId,
-    message_id: wizardMessageId,
-    text:
-      `⏳ <b>جاري إعداد وتوليد الكويز الذكي...</b>\n\n` +
-      `📚 <b>المادة:</b> ${escapeHtml(session.materialTitle || "")}\n` +
-      `📑 <b>القسم:</b> ${escapeHtml(session.sectionTitle || "كامل المنهج")}\n` +
-      `🎯 <b>المستوى:</b> ${difficultyLabel}\n` +
-      `🔢 <b>العدد:</b> ${session.questionCount || 5} أسئلة\n\n` +
-      `<i>الذكاء الاصطناعي يقرأ المنهج الآن ويصيغ أسئلة دقيقة ومعتمدة... لحظات من فضلك</i> 🤖`,
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: [] },
-  }).catch(() => {});
+  // 1. Live Progress Feedback Stages (تحديث حي لمراحل التوليد)
+  const progressStages = [
+    "📖 <b>المرحلة 1/3:</b> قراءة وتدقيق محتوى المنهج المستهدف... 🔍",
+    "🧠 <b>المرحلة 2/3:</b> استنباط الأسئلة وصياغة المشتتات الأكاديمية الذكية... ⚡",
+    "🎯 <b>المرحلة 3/3:</b> تدقيق الإجابات وتوثيق المراجع والشروحات التفسيرية... ✨",
+  ];
+
+  let currentStageIdx = 0;
+  let isGenerationDone = false;
+  let progressTimer: NodeJS.Timeout | null = null;
+
+  const updateProgressMessage = async (stageText: string) => {
+    if (isGenerationDone) return;
+    await telegram.editMessageText({
+      chat_id: session.chatId,
+      message_id: wizardMessageId,
+      text:
+        `⏳ <b>جاري إعداد وتوليد الكويز الذكي...</b>\n\n` +
+        `📚 <b>المادة:</b> ${escapeHtml(session.materialTitle || "")}\n` +
+        `📑 <b>القسم:</b> ${escapeHtml(session.sectionTitle || "كامل المنهج")}\n` +
+        `🎯 <b>المستوى:</b> ${difficultyLabel}\n` +
+        `🔢 <b>العدد:</b> ${targetCount} أسئلة\n\n` +
+        `${stageText}\n` +
+        `<i>جاري المعالجة السحابية بالذكاء الاصطناعي... لحظات من فضلك</i> 🤖`,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
+    }).catch(() => {});
+  };
+
+  // 1. Show live loading state on wizard message (Stage 1/3)
+  await updateProgressMessage(progressStages[0]);
+
+  // Periodic stage update every 3.8 seconds if generation is still in flight
+  progressTimer = setInterval(() => {
+    if (isGenerationDone) {
+      if (progressTimer) clearInterval(progressTimer);
+      progressTimer = null;
+      return;
+    }
+    currentStageIdx++;
+    if (currentStageIdx < progressStages.length) {
+      updateProgressMessage(progressStages[currentStageIdx]);
+    } else {
+      if (progressTimer) clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  }, 3800);
 
   try {
     // 2. Fetch Material & Text
@@ -781,6 +852,13 @@ async function executeGeneration(
 
     const questions: ValidatedQuestion[] = genResult.questions;
 
+    // Stop live progress timer before showing success message
+    isGenerationDone = true;
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
     // 5. Update Wizard Message with Success Banner
     await telegram.editMessageText({
       chat_id: session.chatId,
@@ -841,9 +919,12 @@ async function executeGeneration(
         return t;
       });
 
-      const cleanExplanation = q.explanation && q.explanation.trim()
-        ? truncateText(q.explanation.trim(), 195)
-        : undefined;
+      // Format explanation with source citation strictly within Telegram 200-char limit
+      const cleanExplanation = formatExplanationWithCitation(
+        q.explanation,
+        q.topic,
+        session.sectionTitle
+      );
 
       try {
         const sentPoll = await telegram.sendPoll({
@@ -916,6 +997,12 @@ async function executeGeneration(
 
     quizSessions.delete(sKey);
   } catch (err: any) {
+    isGenerationDone = true;
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
     const errorMsg = String(err?.message || err || "حدث خطأ غير متوقع");
     console.error("[StudentQuizWizard] Generation error:", err);
 
@@ -979,5 +1066,11 @@ async function executeGeneration(
     }
 
     quizSessions.delete(sKey);
+  } finally {
+    isGenerationDone = true;
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
   }
 }
