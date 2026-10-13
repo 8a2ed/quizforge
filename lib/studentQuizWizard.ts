@@ -35,6 +35,7 @@ export interface StudentQuizSession {
   difficulty?: "mixed" | "easy" | "medium" | "hard";
   sectionId?: string;
   sectionTitle?: string;
+  sectionPage?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -235,26 +236,47 @@ function getDifficultyKeyboard(defaultDifficulty = "mixed"): Array<Array<{ text:
   ];
 }
 
-function getSectionKeyboard(sections: Array<{ id: string; title: string }>): Array<Array<{ text: string; callback_data: string }>> {
+export const SECTIONS_PER_PAGE = 6;
+
+export function getSectionKeyboard(
+  sections: Array<{ id: string; title: string }>,
+  page: number = 0
+): Array<Array<{ text: string; callback_data: string }>> {
   const keyboard: Array<Array<{ text: string; callback_data: string }>> = [
     [{ text: "📖 كامل المنهج / الكتاب", callback_data: "qs_sec:all" }],
   ];
 
-  // List sections up to 8 max
-  const slice = sections.slice(0, 8);
+  const totalPages = Math.max(1, Math.ceil(sections.length / SECTIONS_PER_PAGE));
+  const currentPage = Math.max(0, Math.min(page, totalPages - 1));
+  const start = currentPage * SECTIONS_PER_PAGE;
+  const slice = sections.slice(start, start + SECTIONS_PER_PAGE);
+
   for (let i = 0; i < slice.length; i += 2) {
     const row: Array<{ text: string; callback_data: string }> = [];
     row.push({
-      text: `📑 ${truncateText(slice[i].title, 24)}`,
+      text: `📑 ${truncateText(slice[i].title, 22)}`,
       callback_data: `qs_sec:${slice[i].id}`,
     });
     if (i + 1 < slice.length) {
       row.push({
-        text: `📑 ${truncateText(slice[i + 1].title, 24)}`,
+        text: `📑 ${truncateText(slice[i + 1].title, 22)}`,
         callback_data: `qs_sec:${slice[i + 1].id}`,
       });
     }
     keyboard.push(row);
+  }
+
+  // Pagination navigation row if multiple pages exist
+  if (totalPages > 1) {
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (currentPage > 0) {
+      navRow.push({ text: "◀️ السابق", callback_data: `qs_sec_p:${currentPage - 1}` });
+    }
+    navRow.push({ text: `📄 ${currentPage + 1}/${totalPages}`, callback_data: "qs_sec_noop" });
+    if (currentPage < totalPages - 1) {
+      navRow.push({ text: "التالي ▶️", callback_data: `qs_sec_p:${currentPage + 1}` });
+    }
+    keyboard.push(navRow);
   }
 
   keyboard.push([
@@ -577,6 +599,7 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
     // If material has multiple sections, let user choose section
     if (sections.length > 1) {
       session.step = "section";
+      session.sectionPage = 0;
       await telegram.editMessageText({
         chat_id: chatId,
         message_id: msg.message_id,
@@ -587,8 +610,8 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
           `🎯 <b>الصعوبة:</b> ${DIFFICULTY_NAMES[diff]}\n\n` +
           `📑 <b>الخطوة 4: حدد الجزئية أو الفصل المطلوب:</b>`,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: getSectionKeyboard(sections) },
-      });
+        reply_markup: { inline_keyboard: getSectionKeyboard(sections, 0) },
+      }).catch(() => {});
       return true;
     }
 
@@ -596,6 +619,43 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
     session.sectionId = "all";
     session.sectionTitle = "كامل المنهج";
     await executeGeneration(session, msg.message_id, cbId);
+    return true;
+  }
+
+  // ── Step 4: Page Indicator Click (No-op info toast) ──
+  if (data === "qs_sec_noop") {
+    const material = await getMaterialById(session.groupId || "global", session.materialId!);
+    const sections = material?.sections || [];
+    const totalPages = Math.max(1, Math.ceil(sections.length / SECTIONS_PER_PAGE));
+    const curPage = (session.sectionPage || 0) + 1;
+    await telegram.answerCallbackQuery(cbId, `📄 صفحة ${curPage} من ${totalPages}`);
+    return true;
+  }
+
+  // ── Step 4: Switch Section Page ──
+  if (data.startsWith("qs_sec_p:")) {
+    const targetPage = parseInt(data.slice("qs_sec_p:".length), 10) || 0;
+    session.sectionPage = targetPage;
+    const material = await getMaterialById(session.groupId || "global", session.materialId!);
+    const sections = material?.sections || [];
+    const totalPages = Math.max(1, Math.ceil(sections.length / SECTIONS_PER_PAGE));
+    const safePage = Math.max(0, Math.min(targetPage, totalPages - 1));
+
+    await telegram.answerCallbackQuery(cbId, `الانتقال إلى صفحة ${safePage + 1}`);
+
+    const difficultyLabel = DIFFICULTY_NAMES[session.difficulty || "mixed"] || "متوازن";
+    await telegram.editMessageText({
+      chat_id: chatId,
+      message_id: msg.message_id,
+      text:
+        `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n` +
+        `📚 <b>المادة:</b> ${escapeHtml(session.materialTitle || "")}\n` +
+        `🔢 <b>العدد:</b> ${session.questionCount || 5} أسئلة\n` +
+        `🎯 <b>الصعوبة:</b> ${difficultyLabel}\n\n` +
+        `📑 <b>الخطوة 4: حدد الجزئية أو الفصل المطلوب:</b>`,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: getSectionKeyboard(sections, safePage) },
+    }).catch(() => {});
     return true;
   }
 

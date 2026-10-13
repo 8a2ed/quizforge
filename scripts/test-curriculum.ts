@@ -27,6 +27,7 @@ import {
   extractDocumentTextWithGemini,
   extractChunkTextWithGemini,
 } from "../lib/gemini";
+import { getSectionKeyboard, SECTIONS_PER_PAGE } from "../lib/studentQuizWizard";
 
 async function runTests() {
   console.log("=== RUNNING ENHANCED AI CURRICULUM VERIFICATION SUITE ===");
@@ -1374,6 +1375,44 @@ All questions grounded in text.
     throw new Error("Client scheduledAt ISO conversion validation failed!");
   }
   console.log("  ✓ Client datetime-local conversion to UTC ISO string validated");
+
+  // E. Telegram Wizard Chapter / Section Selection Pagination
+  const mockSectionsSmall = [
+    { id: "sec_1", title: "مقدمة عامة" },
+    { id: "sec_2", title: "الفصل الأول: الحركة" },
+    { id: "sec_3", title: "الفصل الثاني: القوة" },
+  ];
+  const kbSmall = getSectionKeyboard(mockSectionsSmall, 0);
+  // Row 0 is "كامل المنهج", Row 1 & 2 are sections, Last row is "رجوع" & "إلغاء". Total rows = 1 + 2 + 1 = 4 (no pagination row)
+  const hasSmallNavRow = kbSmall.some((r) => r.some((b) => b.callback_data.startsWith("qs_sec_p:")));
+  if (hasSmallNavRow) {
+    throw new Error("Small section list (< SECTIONS_PER_PAGE) should NOT display pagination navigation row!");
+  }
+  console.log("  ✓ Small section list (< 6 sections) cleanly rendered without pagination clutter");
+
+  const mockSectionsLarge = Array.from({ length: 15 }, (_, i) => ({
+    id: `sec_${i + 1}`,
+    title: `الفصل ${i + 1}: موضوع أكاديمي مفصل ${i + 1}`,
+  }));
+  // Page 0 (should have Next button and indicator 1/3)
+  const kbPage0 = getSectionKeyboard(mockSectionsLarge, 0);
+  const navRowPage0 = kbPage0.find((r) => r.some((b) => b.callback_data === "qs_sec_noop"));
+  if (!navRowPage0 || !navRowPage0.some((b) => b.text.includes("1/3")) || !navRowPage0.some((b) => b.callback_data === "qs_sec_p:1")) {
+    throw new Error("Multi-page section keyboard Page 0 failed to generate navigation row!");
+  }
+  // Page 1 (middle page: should have Prev, indicator 2/3, and Next)
+  const kbPage1 = getSectionKeyboard(mockSectionsLarge, 1);
+  const navRowPage1 = kbPage1.find((r) => r.some((b) => b.callback_data === "qs_sec_noop"));
+  if (!navRowPage1 || !navRowPage1.some((b) => b.callback_data === "qs_sec_p:0") || !navRowPage1.some((b) => b.callback_data === "qs_sec_p:2")) {
+    throw new Error("Multi-page section keyboard Page 1 failed to generate dual Prev/Next buttons!");
+  }
+  // Page 2 (last page: should have Prev and indicator 3/3, but NO Next)
+  const kbPage2 = getSectionKeyboard(mockSectionsLarge, 2);
+  const navRowPage2 = kbPage2.find((r) => r.some((b) => b.callback_data === "qs_sec_noop"));
+  if (!navRowPage2 || !navRowPage2.some((b) => b.callback_data === "qs_sec_p:1") || navRowPage2.some((b) => b.callback_data === "qs_sec_p:3")) {
+    throw new Error("Multi-page section keyboard Page 2 should NOT have Next button!");
+  }
+  console.log("  ✓ Telegram wizard chapter/section pagination verified: 15 sections smoothly split across 3 pages with active navigation");
 
   console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }

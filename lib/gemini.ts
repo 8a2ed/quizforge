@@ -79,19 +79,25 @@ export interface GeminiTestResult {
 }
 
 const DEFAULT_SYSTEM_INSTRUCTION = `
-You are an uncompromising academic examination specialist and curriculum assessor.
+You are an uncompromising master psychometrician, academic examination designer, and curriculum assessor.
 Your mission is to generate high-yield, crystal-clear Multiple-Choice Questions (MCQs) STRICTLY AND EXCLUSIVELY based upon the textbook excerpt provided.
 
-CRITICAL ZERO-HALLUCINATION RULES:
-1. STRICT GROUNDING: Every question, every correct answer, and every explanation MUST be directly, unambiguously verifiable within the excerpt text provided.
-2. NO EXTERNAL KNOWLEDGE: Never bring in external facts, dates, names, or formulas from outside the text, even if true in reality. If it is not in the text, it is considered non-existent.
-3. CREDIBLE DISTRACTORS: Incorrect options must be plausible within the domain, but definitively false according to the text. Avoid absurd or giveaway options.
+CRITICAL ZERO-HALLUCINATION & PSYCHOMETRIC DISTRACTOR RULES:
+1. STRICT GROUNDING: Every question, every correct answer, and every explanation MUST be directly, unambiguously verifiable within the excerpt text provided. Never fabricate, extrapolate, or assume facts.
+2. NO EXTERNAL KNOWLEDGE: Never bring in external facts, dates, names, or formulas from outside the text, even if true in reality. If it is not explicitly in the text, it does not exist.
+3. SCIENTIFICALLY ROBUST DISTRACTORS (الخيارات المشتتة والبدائل):
+   - PLAUSIBLE MISCONCEPTIONS: Every incorrect option (distractor) MUST be carefully designed to reflect plausible, common student misconceptions, inverted logic, or frequent confusion between related concepts mentioned in the text.
+   - TEXT-DERIVED TERMINOLOGY: Distractors must use genuine scientific/academic terms and concepts found elsewhere in the textbook excerpt, but applied incorrectly to this question context. NEVER use silly, absurd, or obvious giveaway choices.
+   - STRUCTURAL & LENGTH HOMOGENEITY (التجانس التام): All options in a question MUST be approximately equal in length, grammatical structure, and syntax. NEVER make the correct option noticeably longer, more detailed, or distinct from the distractors.
+   - EXCLUSIVITY & NO META-OPTIONS: Strictly NEVER use "جميع ما سبق" (All of the above), "لا شيء مما سبق" (None of the above), "أ وب معاً", or "كل الخيارات صحيحة". Each option must be an independent, concrete concept.
 4. EXACT EVIDENCE: Every question MUST include "groundingQuote" quoting verbatim the exact phrase or sentence from the excerpt proving the answer.
-5. TELEGRAM CONSTRAINTS COMPLIANCE:
-   - "question": Concise, direct, max 300 characters.
+5. PEDAGOGICAL EXPLANATION:
+   - "explanation" (max 200 chars): Concisely explain why the correct option is true based on the text, and briefly pinpoint the misconception behind the distractors.
+6. TELEGRAM CONSTRAINTS COMPLIANCE:
+   - "question": Direct question stem containing the core problem, max 300 characters.
    - "options": Exactly 4 distinct options (or 2-4 if true/false). Max 100 characters per option. NO duplicate options.
-   - "correctOptionId": 0-based integer index pointing to the correct option.
-   - "explanation": Clear reasoning, max 200 characters.
+   - "correctOptionId": 0-based integer index pointing to the correct option. Distribute the correct index across positions (0, 1, 2, 3) randomly.
+   - "explanation": Max 200 characters.
    - "difficulty": "EASY" | "MEDIUM" | "HARD".
    - "topic": Topic or heading name.
    - "bloomTaxonomy": "Recall" | "Understanding" | "Application" | "Analysis".
@@ -466,7 +472,7 @@ export async function generateCurriculumQuestions(
   const count = Math.min(Math.max(options.questionCount || 5, 1), 30);
   const difficulty = options.difficulty || "mixed";
 
-  let prompt = `يرجى توليد عدد (${count}) أسئلة اختيار من متعدد (MCQs) فائقة الدقة بالاعتماد الصارم والحصري على النص الدراسي التالي فقط.\n\n`;
+  let prompt = `يرجى توليد عدد (${count}) أسئلة اختيار من متعدد (MCQs) فائقة الدقة والاحترافية بالاعتماد الصارم والحصري على النص الدراسي المرفق أدناه فقط.\n\n`;
   if (options.materialTitle) {
     prompt += `عنوان المادة/الكتاب: ${options.materialTitle}\n`;
   }
@@ -475,6 +481,11 @@ export async function generateCurriculumQuestions(
   }
 
   prompt += `مستوى الصعوبة المطلوب: ${difficulty}\n`;
+  prompt += `معايير جودة المشتتات والخيارات (Psychometric Distractor Standards):
+1. هندسة الخيارات الخاطئة (المشتتات): يجب أن تكون مقنعة للغاية ومبنية على أخطاء ومفاهيم شائعة لدى الطلاب (Plausible Misconceptions) ومستمدة من مصطلحات ومفاهيم وردت في النص نفسه، مع تجنب أي خيار مضحك أو ساذج.
+2. التجانس الشكلي واللغوي: يجب أن تكون كافة الخيارات متقاربة جداً في الطول والصياغة النحوية، مع تجنب جعل الإجابة الصحيحة هي الأطول دائماً.
+3. استقلالية الخيارات: يمنع منعاً باتاً استخدام "جميع ما سبق"، "لا شيء مما سبق"، "أ وب معاً" أو أي خيارات تركيبية.\n`;
+
   if (options.systemInstruction) {
     prompt += `تعليمات إضافية من المعلم: ${options.systemInstruction}\n`;
   }
