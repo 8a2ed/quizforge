@@ -481,10 +481,11 @@ export async function generateCurriculumQuestions(
   }
 
   prompt += `مستوى الصعوبة المطلوب: ${difficulty}\n`;
-  prompt += `معايير جودة المشتتات والخيارات (Psychometric Distractor Standards):
+  prompt += `معايير جودة المشتتات والخيارات والتوثيق (Psychometric Distractor & Citation Standards):
 1. هندسة الخيارات الخاطئة (المشتتات): يجب أن تكون مقنعة للغاية ومبنية على أخطاء ومفاهيم شائعة لدى الطلاب (Plausible Misconceptions) ومستمدة من مصطلحات ومفاهيم وردت في النص نفسه، مع تجنب أي خيار مضحك أو ساذج.
 2. التجانس الشكلي واللغوي: يجب أن تكون كافة الخيارات متقاربة جداً في الطول والصياغة النحوية، مع تجنب جعل الإجابة الصحيحة هي الأطول دائماً.
-3. استقلالية الخيارات: يمنع منعاً باتاً استخدام "جميع ما سبق"، "لا شيء مما سبق"، "أ وب معاً" أو أي خيارات تركيبية.\n`;
+3. استقلالية الخيارات: يمنع منعاً باتاً استخدام "جميع ما سبق"، "لا شيء مما سبق"، "أ وب معاً" أو أي خيارات تركيبية.
+4. توثيق المرجع (sourceReference): اذكر اسم الفصل أو القسم أو المبحث الذي استُخرج منه السؤال بدقة.\n`;
 
   if (options.systemInstruction) {
     prompt += `تعليمات إضافية من المعلم: ${options.systemInstruction}\n`;
@@ -519,6 +520,7 @@ export async function generateCurriculumQuestions(
                 },
                 correctOptionId: { type: "INTEGER", description: "0-based integer index of correct option" },
                 explanation: { type: "STRING", description: "Clear explanation why the answer is correct, maximum 200 characters" },
+                sourceReference: { type: "STRING", description: "Source section, page or topic reference, maximum 50 characters" },
                 difficulty: { type: "STRING", enum: ["EASY", "MEDIUM", "HARD"] },
                 topic: { type: "STRING", description: "Short topic name, maximum 40 characters" },
                 bloomTaxonomy: { type: "STRING", enum: ["Recall", "Understanding", "Application", "Analysis"] },

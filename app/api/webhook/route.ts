@@ -659,8 +659,10 @@ export async function POST(req: NextRequest) {
       };
 
       // Interactive student curriculum quiz generator command: /qs, /boost, /quiz or with @BotUsername and optional arguments
-      const qsCmdMatch = text.trim().match(/^[/!](?:qs|boost|quiz)(?:@\w+)?(?:\s+.*)?$/i);
+      const qsCmdMatch = text.trim().match(/^[/!](qs|boost|quiz)(?:@\w+)?(?:\s+(.*))?$/i);
       if (qsCmdMatch) {
+        const commandName = qsCmdMatch[1].toLowerCase();
+        const rawArgs = qsCmdMatch[2]?.trim() || "";
         const group = await resolveGroup();
         await handleStudentQuizCommand({
           chatId: msg.chat.id,
@@ -671,6 +673,8 @@ export async function POST(req: NextRequest) {
           messageThreadId: msg.message_thread_id || undefined,
           groupId: group?.id || undefined,
           groupTitle: group?.title || msg.chat?.title || undefined,
+          commandName,
+          rawArgs,
         });
       }
 

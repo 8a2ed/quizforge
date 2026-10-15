@@ -12,9 +12,10 @@ import { ValidatedQuestion } from "@/lib/questionValidator";
 
 // ─── Rate Limiting & Cooldown Configuration ───────────────────────────────────
 // 90 seconds cooldown between consecutive quiz generations per student
-const GENERATION_COOLDOWN_SECONDS = 90;
-// Maximum 6 generations per user per 60 minutes
-const MAX_GENERATIONS_PER_HOUR = 6;
+// 45 seconds cooldown between consecutive quiz generations per student for smoother learning
+const GENERATION_COOLDOWN_SECONDS = 45;
+// Maximum 12 generations per user per 60 minutes
+const MAX_GENERATIONS_PER_HOUR = 12;
 // Wizard session expiration: 10 minutes
 const SESSION_TTL_MS = 10 * 60 * 1000;
 
@@ -36,6 +37,8 @@ export interface StudentQuizSession {
   sectionId?: string;
   sectionTitle?: string;
   sectionPage?: number;
+  materialPage?: number;
+  isBoost?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -144,6 +147,130 @@ function recordUserGeneration(userId: string): void {
 }
 
 /**
+ * Periodically cleans up expired wizard sessions from memory.
+ */
+export function cleanupExpiredSessions(): void {
+  const now = Date.now();
+  for (const [key, sess] of quizSessions.entries()) {
+    if (now - sess.updatedAt > SESSION_TTL_MS) {
+      quizSessions.delete(key);
+    }
+  }
+}
+
+/**
+ * Parses user arguments from /boost or /qs command (e.g. /boost 10 hard physics).
+ */
+export function parseQuizCommandArgs(rawArgs?: string): {
+  parsedCount?: number;
+  parsedDifficulty?: "mixed" | "easy" | "medium" | "hard";
+  searchKeyword?: string;
+} {
+  if (!rawArgs || !rawArgs.trim()) return {};
+
+  const clean = rawArgs.trim();
+  let parsedCount: number | undefined;
+  let parsedDifficulty: "mixed" | "easy" | "medium" | "hard" | undefined;
+
+  // Check for number of questions (1 to 20)
+  const countMatch = clean.match(/\b([1-9]|1[0-9]|20)\b/);
+  if (countMatch) {
+    const num = parseInt(countMatch[1], 10);
+    if (num >= 1 && num <= 20) {
+      parsedCount = num;
+    }
+  }
+
+  // Check for difficulty keywords
+  if (/(?:سهل|بسيط|مباشر|easy)/i.test(clean)) {
+    parsedDifficulty = "easy";
+  } else if (/(?:صعب|متقدم|تحدي|hard|advanced)/i.test(clean)) {
+    parsedDifficulty = "hard";
+  } else if (/(?:متوسط|متوازن|medium|mixed)/i.test(clean)) {
+    parsedDifficulty = /(?:متوسط|medium)/i.test(clean) ? "medium" : "mixed";
+  }
+
+  // Any remaining text is candidate for material or topic search
+  const remaining = clean
+    .replace(/\b([1-9]|1[0-9]|20)\b/g, "")
+    .replace(/(?:سهل|بسيط|مباشر|easy|صعب|متقدم|تحدي|hard|advanced|متوسط|متوازن|medium|mixed)/gi, "")
+    .trim();
+
+  return {
+    parsedCount,
+    parsedDifficulty,
+    searchKeyword: remaining.length >= 2 ? remaining : undefined,
+  };
+}
+
+/**
+ * Builds a balanced, representative excerpt from the curriculum material.
+ * If the material is large, samples across sections or chapters to ensure comprehensive question coverage
+ * while keeping token latency low (3-5s response time).
+ */
+export function buildBalancedCurriculumExcerpt(
+  material: CurriculumMaterial,
+  sectionId?: string,
+  maxChars: number = 36000
+): { excerpt: string; title: string } {
+  // If a specific section is chosen, return its content
+  if (sectionId && sectionId !== "all" && material.sections && material.sections.length > 0) {
+    const sec = material.sections.find((s) => s.id === sectionId);
+    if (sec && sec.content && sec.content.trim()) {
+      const trimmed = sec.content.length > maxChars ? sec.content.slice(0, maxChars) : sec.content;
+      return {
+        excerpt: trimmed,
+        title: `${material.title} (${sec.title})`,
+      };
+    }
+  }
+
+  // If "all" (whole curriculum) is selected:
+  const rawCleaned = material.cleanedText || "";
+
+  // If text is within reasonable size, return directly
+  if (rawCleaned.length <= maxChars) {
+    return {
+      excerpt: rawCleaned,
+      title: material.title,
+    };
+  }
+
+  // If material has multiple sections, sample evenly across all sections
+  if (material.sections && material.sections.length > 1) {
+    const sectionsCount = material.sections.length;
+    const perSectionChars = Math.max(800, Math.floor(maxChars / sectionsCount));
+    const sampledParts: string[] = [];
+
+    for (const sec of material.sections) {
+      if (!sec.content || !sec.content.trim()) continue;
+      const snippet = sec.content.slice(0, perSectionChars).trim();
+      sampledParts.push(`### ${sec.title}\n${snippet}`);
+    }
+
+    const combined = sampledParts.join("\n\n");
+    if (combined.length >= 100) {
+      return {
+        excerpt: combined,
+        title: material.title,
+      };
+    }
+  }
+
+  // Fallback: take beginning, middle, and end chunks
+  const third = Math.floor(maxChars / 3);
+  const beginning = rawCleaned.slice(0, third);
+  const midStart = Math.floor((rawCleaned.length - third) / 2);
+  const middle = rawCleaned.slice(midStart, midStart + third);
+  const end = rawCleaned.slice(rawCleaned.length - third);
+
+  return {
+    excerpt: `${beginning}\n\n[...مقتطف من منتصف المنهج...]\n\n${middle}\n\n[...مقتطف من خاتمة المنهج...]\n\n${end}`,
+    title: material.title,
+  };
+}
+
+/**
  * Sends a high-priority alert to the group admins and bot owner when Gemini quota is exhausted.
  */
 async function notifyAdminsOfQuotaExhaustion(params: {
@@ -195,25 +322,56 @@ async function notifyAdminsOfQuotaExhaustion(params: {
 
 // ─── Step Renderers ───────────────────────────────────────────────────────────
 
-function getMaterialKeyboard(materials: CurriculumMaterial[]): Array<Array<{ text: string; callback_data: string }>> {
+export const MATERIALS_PER_PAGE = 6;
+
+export function getMaterialKeyboard(
+  materials: CurriculumMaterial[],
+  page: number = 0,
+  isBoost: boolean = false
+): Array<Array<{ text: string; callback_data: string }>> {
   const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
 
+  // If turbo boost mode and materials exist, offer an instant quick start button at the very top!
+  if (isBoost && materials.length > 0) {
+    keyboard.push([
+      { text: "⚡ كويز سريع فوري (5 أسئلة متوازنة)", callback_data: `qs_quick:${materials[0].id}` },
+    ]);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(materials.length / MATERIALS_PER_PAGE));
+  const currentPage = Math.max(0, Math.min(page, totalPages - 1));
+  const start = currentPage * MATERIALS_PER_PAGE;
+  const slice = materials.slice(start, start + MATERIALS_PER_PAGE);
+
   // Group materials 1 or 2 per row
-  for (let i = 0; i < materials.length; i += 2) {
+  for (let i = 0; i < slice.length; i += 2) {
     const row: Array<{ text: string; callback_data: string }> = [];
-    const m1 = materials[i];
+    const m1 = slice[i];
     row.push({
       text: `📚 ${truncateText(m1.title, 26)}`,
       callback_data: `qs_mat:${m1.id}`,
     });
-    if (i + 1 < materials.length) {
-      const m2 = materials[i + 1];
+    if (i + 1 < slice.length) {
+      const m2 = slice[i + 1];
       row.push({
         text: `📚 ${truncateText(m2.title, 26)}`,
         callback_data: `qs_mat:${m2.id}`,
       });
     }
     keyboard.push(row);
+  }
+
+  // Pagination navigation row if multiple pages exist
+  if (totalPages > 1) {
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (currentPage > 0) {
+      navRow.push({ text: "◀️ السابق", callback_data: `qs_mat_p:${currentPage - 1}` });
+    }
+    navRow.push({ text: `📄 ${currentPage + 1}/${totalPages}`, callback_data: "qs_mat_noop" });
+    if (currentPage < totalPages - 1) {
+      navRow.push({ text: "التالي ▶️", callback_data: `qs_mat_p:${currentPage + 1}` });
+    }
+    keyboard.push(navRow);
   }
 
   // Cancel row
@@ -330,9 +488,9 @@ const DIFFICULTY_NAMES: Record<string, string> = {
   hard: "متقدم (تحليل وتفكير نقدي 🔴)",
 };
 
-// ─── Command Entry Point: /qs ─────────────────────────────────────────────────
+// ─── Command Entry Point: /qs & /boost ─────────────────────────────────────────
 
-export async function handleStudentQuizCommand(params: {
+export interface StudentQuizCommandParams {
   chatId: number | string;
   userId: string;
   userName: string;
@@ -342,8 +500,27 @@ export async function handleStudentQuizCommand(params: {
   messageThreadId?: number;
   groupId?: string;
   groupTitle?: string;
-}): Promise<void> {
-  const { chatId, userId, userName, userUsername, userPhoto, messageId, messageThreadId, groupId, groupTitle } = params;
+  commandName?: string;
+  rawArgs?: string;
+}
+
+export async function handleStudentQuizCommand(params: StudentQuizCommandParams): Promise<void> {
+  const {
+    chatId,
+    userId,
+    userName,
+    userUsername,
+    userPhoto,
+    messageId,
+    messageThreadId,
+    groupId,
+    groupTitle,
+    commandName,
+    rawArgs,
+  } = params;
+
+  // 0. Periodic cleanup of expired sessions
+  cleanupExpiredSessions();
 
   // 1. Check Rate Limit
   const limitCheck = checkUserRateLimit(userId);
@@ -368,7 +545,8 @@ export async function handleStudentQuizCommand(params: {
       reply_to_message_id: messageId,
       text:
         `⏳ <b>مهلة تهدئة الطلبات:</b>\n\n` +
-        `يرجى الانتظار <b>${limitCheck.remainingCooldownSeconds} ثانية</b> قبل طلب كويز جديد للحفاظ على كفاءة وجودة التوليد بالذكاء الاصطناعي 🤖`,
+        `يرجى الانتظار <b>${limitCheck.remainingCooldownSeconds} ثانية</b> قبل طلب كويز جديد للحفاظ على كفاءة وجودة التوليد بالذكاء الاصطناعي 🤖\n` +
+        `<i>💡 يمكنك مراجعة الكويز السابق وقراءة شروحات الإجابات لحين انتهاء الثواني.</i>`,
       parse_mode: "HTML",
     });
     return;
@@ -403,7 +581,25 @@ export async function handleStudentQuizCommand(params: {
     return;
   }
 
-  // 4. Create new session
+  // 4. Parse command arguments and detect Turbo Boost mode
+  const isBoost = commandName === "boost" || (rawArgs && /boost/i.test(rawArgs)) || false;
+  const { parsedCount, parsedDifficulty, searchKeyword } = parseQuizCommandArgs(rawArgs);
+
+  // Check if keyword matches a material in this group
+  let matchedMaterial = searchKeyword
+    ? materials.find(
+        (m) =>
+          m.title.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+          (m.subject && m.subject.toLowerCase().includes(searchKeyword.toLowerCase()))
+      )
+    : undefined;
+
+  // If only 1 material exists in the whole group, auto-bind to it
+  if (!matchedMaterial && materials.length === 1) {
+    matchedMaterial = materials[0];
+  }
+
+  // 5. Initialize or reset session
   const session: StudentQuizSession = {
     userId,
     userName,
@@ -414,24 +610,117 @@ export async function handleStudentQuizCommand(params: {
     groupId,
     groupTitle,
     step: "material",
+    materialId: matchedMaterial?.id,
+    materialTitle: matchedMaterial?.title,
+    questionCount: parsedCount,
+    difficulty: parsedDifficulty,
+    materialPage: 0,
+    isBoost,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 
-  const text =
-    `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n` +
-    `مرحباً <b>${escapeHtml(userName)}</b> 👋\n` +
-    `📚 <b>الخطوة 1: اختر المادة الدراسية أو الكتاب:</b>\n\n` +
-    `حدد المنهج الذي ترغب في توليد كويز فوري ومخصص له:`;
+  const aiSettings = await getGroupAISettings(groupId || "global");
+
+  // Shortcut 1: If material was matched and user provided count & difficulty in command arguments
+  if (matchedMaterial && parsedCount && parsedDifficulty) {
+    const sections = matchedMaterial.sections || [];
+    if (sections.length > 1) {
+      session.step = "section";
+      session.sectionPage = 0;
+      const sent = await telegram.sendMessage({
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+        reply_to_message_id: messageId,
+        text:
+          `🎓 <b>${isBoost ? "الدفعة الذكية (Turbo Boost)" : "مولد الكويزات الذكي"}</b>\n\n` +
+          `📚 <b>المادة:</b> ${escapeHtml(matchedMaterial.title)}\n` +
+          `🔢 <b>العدد:</b> ${parsedCount} أسئلة\n` +
+          `🎯 <b>الصعوبة:</b> ${DIFFICULTY_NAMES[parsedDifficulty] || parsedDifficulty}\n\n` +
+          `📑 <b>حدد الجزئية أو الفصل المطلوب لبدء الاختبار:</b>`,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: getSectionKeyboard(sections, 0) },
+      });
+      session.messageId = sent.message_id;
+      quizSessions.set(sKey, session);
+      return;
+    }
+
+    // Material has single/no sections -> Start Generation immediately!
+    session.sectionId = "all";
+    session.sectionTitle = "كامل المنهج / الكتاب";
+    const sent = await telegram.sendMessage({
+      chat_id: chatId,
+      message_thread_id: messageThreadId,
+      reply_to_message_id: messageId,
+      text: `⏳ <i>جاري إطلاق الكويز الفوري المباشر...</i>`,
+      parse_mode: "HTML",
+    });
+    session.messageId = sent.message_id;
+    quizSessions.set(sKey, session);
+    await executeGeneration(session, sent.message_id, "");
+    return;
+  }
+
+  // Shortcut 2: Material was matched, but count or difficulty is missing
+  if (matchedMaterial) {
+    if (!parsedCount) {
+      session.step = "count";
+      const sent = await telegram.sendMessage({
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+        reply_to_message_id: messageId,
+        text:
+          `🎓 <b>${isBoost ? "الدفعة الذكية (Turbo Boost)" : "مولد الكويزات الذكي"}</b>\n\n` +
+          `📚 <b>المادة المختارة:</b> ${escapeHtml(matchedMaterial.title)}\n` +
+          `📖 <b>الموضوع:</b> ${escapeHtml(matchedMaterial.subject || "عام")}\n\n` +
+          `🔢 <b>الخطوة 2: كم عدد الأسئلة التي تريد اختبار نفسك بها؟</b>`,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: getCountKeyboard(aiSettings.defaultCount) },
+      });
+      session.messageId = sent.message_id;
+      quizSessions.set(sKey, session);
+      return;
+    }
+
+    if (!parsedDifficulty) {
+      session.step = "difficulty";
+      const sent = await telegram.sendMessage({
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+        reply_to_message_id: messageId,
+        text:
+          `🎓 <b>${isBoost ? "الدفعة الذكية (Turbo Boost)" : "مولد الكويزات الذكي"}</b>\n\n` +
+          `📚 <b>المادة:</b> ${escapeHtml(matchedMaterial.title)}\n` +
+          `🔢 <b>العدد:</b> ${parsedCount} أسئلة\n\n` +
+          `🎯 <b>الخطوة 3: اختر مستوى الصعوبة الأكاديمي:</b>`,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: getDifficultyKeyboard(aiSettings.defaultDifficulty) },
+      });
+      session.messageId = sent.message_id;
+      quizSessions.set(sKey, session);
+      return;
+    }
+  }
+
+  // Standard Entry: Step 1 Material Selection (with Turbo Boost if isBoost)
+  const headerText = isBoost
+    ? `🚀 <b>الدفعة الذكية السريعة (QuizForge Turbo Boost)</b>\n\n` +
+      `مرحباً <b>${escapeHtml(userName)}</b> ⚡\n` +
+      `اضغط على <b>كويز سريع فوري</b> للبدء فوراً بأحدث مادة، أو اختر مادة محددة للتخصيص:`
+    : `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n` +
+      `مرحباً <b>${escapeHtml(userName)}</b> 👋\n` +
+      `📚 <b>الخطوة 1: اختر المادة الدراسية أو الكتاب:</b>\n\n` +
+      `حدد المنهج الذي ترغب في توليد كويز فوري ومخصص له:`;
 
   const sent = await telegram.sendMessage({
     chat_id: chatId,
     message_thread_id: messageThreadId,
     reply_to_message_id: messageId,
-    text,
+    text: headerText,
     parse_mode: "HTML",
     reply_markup: {
-      inline_keyboard: getMaterialKeyboard(materials),
+      inline_keyboard: getMaterialKeyboard(materials, 0, isBoost),
     },
   });
 
@@ -524,12 +813,11 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
       await telegram.editMessageText({
         chat_id: chatId,
         message_id: msg.message_id,
-        text:
-          `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n` +
-          `📚 <b>الخطوة 1: اختر المادة الدراسية أو الكتاب:</b>\n\n` +
-          `حدد المنهج الذي ترغب في توليد كويز فوري له:`,
+        text: session.isBoost
+          ? `🚀 <b>الدفعة الذكية (QuizForge Turbo Boost)</b>\n\nاختر مادة أو اضغط <b>كويز سريع فوري</b>:`
+          : `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n📚 <b>الخطوة 1: اختر المادة الدراسية أو الكتاب:</b>\n\nحدد المنهج الذي ترغب في توليد كويز فوري له:`,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: getMaterialKeyboard(materials) },
+        reply_markup: { inline_keyboard: getMaterialKeyboard(materials, session.materialPage || 0, session.isBoost || false) },
       });
       return true;
     }
@@ -655,6 +943,54 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
     // Single section or no sections -> Proceed directly to Generation
     session.sectionId = "all";
     session.sectionTitle = "كامل المنهج";
+    await executeGeneration(session, msg.message_id, cbId);
+    return true;
+  }
+
+  // ── Material Page Indicator Click (no-op info toast) ──
+  if (data === "qs_mat_noop") {
+    const materials = await getAllCurriculumMaterials(session.groupId);
+    const totalPages = Math.max(1, Math.ceil(materials.length / MATERIALS_PER_PAGE));
+    await telegram.answerCallbackQuery(cbId, `📄 صفحة ${(session.materialPage || 0) + 1} من ${totalPages}`);
+    return true;
+  }
+
+  // ── Material Page Switch ──
+  if (data.startsWith("qs_mat_p:")) {
+    const targetPage = parseInt(data.slice("qs_mat_p:".length), 10) || 0;
+    session.materialPage = targetPage;
+    const materials = await getAllCurriculumMaterials(session.groupId);
+    await telegram.answerCallbackQuery(cbId);
+    await telegram.editMessageText({
+      chat_id: chatId,
+      message_id: msg.message_id,
+      text: session.isBoost
+        ? `🚀 <b>الدفعة الذكية (QuizForge Turbo Boost)</b>\n\nاختر مادة أو اضغط <b>كويز سريع فوري</b>:`
+        : `🎓 <b>مولد الكويزات الذكي (QuizForge AI)</b>\n\n📚 <b>الخطوة 1: اختر المادة الدراسية أو الكتاب:</b>`,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: getMaterialKeyboard(materials, targetPage, session.isBoost || false) },
+    }).catch(() => {});
+    return true;
+  }
+
+  // ── Turbo Quick Quiz ──
+  if (data.startsWith("qs_quick:")) {
+    const matId = data.slice("qs_quick:".length);
+    const material = await getMaterialById(session.groupId || "global", matId);
+    if (!material) {
+      await telegram.answerCallbackQuery(cbId, "⚠️ المادة غير متاحة حالياً.", true);
+      return true;
+    }
+    if (!session.groupId && material.groupId && material.groupId !== "global") {
+      session.groupId = material.groupId;
+    }
+    session.materialId = material.id;
+    session.materialTitle = material.title;
+    session.questionCount = 5;
+    session.difficulty = "mixed";
+    session.sectionId = "all";
+    session.sectionTitle = "كامل المنهج / الكتاب";
+    await telegram.answerCallbackQuery(cbId, "⚡ جاري إطلاق الكويز السريع...");
     await executeGeneration(session, msg.message_id, cbId);
     return true;
   }
@@ -791,16 +1127,9 @@ async function executeGeneration(
       session.groupId = material.groupId;
     }
 
-    let textExcerpt = material.cleanedText;
-    let materialTitle = material.title;
-
-    if (session.sectionId && session.sectionId !== "all" && material.sections) {
-      const sec = material.sections.find((s) => s.id === session.sectionId);
-      if (sec && sec.content) {
-        textExcerpt = sec.content;
-        materialTitle = `${material.title} (${sec.title})`;
-      }
-    }
+    const excerptResult = buildBalancedCurriculumExcerpt(material, session.sectionId, 36000);
+    let textExcerpt = excerptResult.excerpt;
+    let materialTitle = excerptResult.title;
 
     if (!textExcerpt || textExcerpt.length < 30) {
       throw new Error("نص المنهج المحدد قصير جداً لتوليد أسئلة دقيقة منه.");

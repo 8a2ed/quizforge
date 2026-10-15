@@ -340,13 +340,19 @@ export function validateAndSanitizeQuestion(
   ).trim();
 
   if (citation && !explanation.includes(citation) && !/\[(?:المرجع|المصدر|مرجع|مصدر):/i.test(explanation)) {
-    const citationTag = ` [المصدر: ${citation}]`;
-    if (explanation.length + citationTag.length <= TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
-      explanation += citationTag;
+    const cleanCite = cleanAndTruncate(citation, 50);
+    const citationTag = ` [المصدر: ${cleanCite}]`;
+    const maxBaseLen = TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH - citationTag.length;
+    if (maxBaseLen >= 25) {
+      if (explanation.length > maxBaseLen) {
+        errors.push(`تم اختصار الشرح لتضمين توثيق المرجع (${cleanCite}) ضمن سقف 200 حرف`);
+        explanation = cleanAndTruncate(explanation, maxBaseLen);
+      }
+      explanation = `${explanation}${citationTag}`.trim();
+    } else {
+      explanation = cleanAndTruncate(explanation, TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH);
     }
-  }
-
-  if (explanation.length > TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
+  } else if (explanation.length > TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH) {
     errors.push(`الشرح تجاوز 200 حرف (${explanation.length}/200) - تم اختصاره لتوافق تليجرام`);
     explanation = cleanAndTruncate(explanation, TELEGRAM_LIMITS.MAX_EXPLANATION_LENGTH);
   }
