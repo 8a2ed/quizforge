@@ -524,6 +524,7 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
       const ready = await ensureAiDatabaseTables(prisma);
       if (ready) {
         if (cleanGid) {
+          // Try group-specific materials first
           const rows = await prisma.$queryRawUnsafe<any[]>(
             `SELECT * FROM ai_curriculum_materials WHERE group_id = $1 ORDER BY created_at DESC`,
             cleanGid
@@ -531,10 +532,21 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
           if (Array.isArray(rows) && rows.length > 0) {
             return rows.map(mapDbRowToMaterial);
           }
+
+          // No materials for this specific group — fall back to ALL materials in DB
+          // (covers DM usage where groupId may differ from the one materials were uploaded under)
+          const allRows = await prisma.$queryRawUnsafe<any[]>(
+            `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
+          );
+          if (Array.isArray(allRows) && allRows.length > 0) {
+            return allRows.map(mapDbRowToMaterial);
+          }
+
+          // Nothing in DB at all → show samples so students see example content
           return SAMPLE_MATERIALS;
         }
 
-        // If no group specified (global context), return all custom materials up to 30
+        // No groupId — return all custom materials in DB (global context)
         const allRows = await prisma.$queryRawUnsafe<any[]>(
           `SELECT * FROM ai_curriculum_materials ORDER BY created_at DESC LIMIT 30`
         );
@@ -549,16 +561,19 @@ export async function getAllCurriculumMaterials(groupId?: string): Promise<Curri
 
   // 2. Fallback to local files
   const allMaterials = await safeReadJson<CurriculumMaterial[]>(MATERIALS_FILE, []);
+  const customMaterials = allMaterials.filter((m) => m.groupId !== "global");
+
   if (cleanGid) {
-    const groupMaterials = allMaterials.filter(
-      (m) => String(m.groupId || "").trim() === cleanGid && m.groupId !== "global"
+    const groupMaterials = customMaterials.filter(
+      (m) => String(m.groupId || "").trim() === cleanGid
     );
+    // Return group-specific materials if found, otherwise all custom materials
     if (groupMaterials.length > 0) return groupMaterials;
+    if (customMaterials.length > 0) return customMaterials;
     return SAMPLE_MATERIALS;
   }
 
-  const anyCustom = allMaterials.filter((m) => m.groupId !== "global");
-  if (anyCustom.length > 0) return anyCustom;
+  if (customMaterials.length > 0) return customMaterials;
 
   // 3. Last-resort fallback to sample materials
   return SAMPLE_MATERIALS;
