@@ -1110,8 +1110,9 @@ function mapDbRowToSettings(r: any): AISettings {
 export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   const cleanGid = String(groupId || "").trim();
 
-  // Global key fallback from process.env
-  let globalEnvKey = process.env.GEMINI_API_KEY?.trim() || "";
+  // Global key fallback from process.env or in-memory global cache
+  const cachedKey = typeof globalThis !== "undefined" ? (globalThis as any).__qf_cached_gemini_key : "";
+  let globalEnvKey = process.env.GEMINI_API_KEY?.trim() || cachedKey || "";
 
   // 1. Try reading from PostgreSQL database first
   if (isDatabaseConfigured()) {
@@ -1119,20 +1120,63 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
       const { prisma } = await import("./db");
       const ready = await ensureAiDatabaseTables(prisma);
       if (ready) {
+        // Query target group, global keys, or any row with a valid non-empty key
         const rows = await prisma.$queryRawUnsafe<any[]>(
-          `SELECT * FROM ai_curriculum_settings WHERE group_id = $1 OR group_id = $2`,
+          `SELECT * FROM ai_curriculum_settings 
+           WHERE group_id = $1 OR group_id = $2 OR group_id = 'global'
+              OR (gemini_api_key IS NOT NULL AND TRIM(gemini_api_key) != '')
+           ORDER BY 
+             (CASE 
+                WHEN group_id = $1 THEN 0 
+                WHEN group_id = $2 THEN 1 
+                WHEN group_id = 'global' THEN 2 
+                ELSE 3 
+              END), 
+             updated_at DESC
+           LIMIT 10`,
           cleanGid,
           GLOBAL_SETTINGS_KEY
         );
+
         if (Array.isArray(rows) && rows.length > 0) {
           const groupRow = rows.find((r) => r.group_id === cleanGid);
-          const globalRow = rows.find((r) => r.group_id === GLOBAL_SETTINGS_KEY);
-          const globalKey = globalRow?.gemini_api_key || globalEnvKey;
+          const globalRow = rows.find((r) => r.group_id === GLOBAL_SETTINGS_KEY || r.group_id === "global");
+          const anyValidKeyRow = rows.find(
+            (r) => r.gemini_api_key && isValidApiKeyCandidate(r.gemini_api_key)
+          );
+
+          const resolvedDbKey =
+            (groupRow?.gemini_api_key && isValidApiKeyCandidate(groupRow.gemini_api_key)
+              ? groupRow.gemini_api_key
+              : null) ||
+            (globalRow?.gemini_api_key && isValidApiKeyCandidate(globalRow.gemini_api_key)
+              ? globalRow.gemini_api_key
+              : null) ||
+            anyValidKeyRow?.gemini_api_key ||
+            globalEnvKey;
+
+          if (resolvedDbKey && isValidApiKeyCandidate(resolvedDbKey)) {
+            if (typeof globalThis !== "undefined") {
+              (globalThis as any).__qf_cached_gemini_key = resolvedDbKey;
+            }
+          }
 
           if (groupRow) {
             return {
               ...mapDbRowToSettings(groupRow),
-              geminiApiKey: groupRow.gemini_api_key || globalKey,
+              geminiApiKey: groupRow.gemini_api_key || resolvedDbKey,
+            };
+          } else if (globalRow) {
+            return {
+              ...mapDbRowToSettings(globalRow),
+              groupId: cleanGid,
+              geminiApiKey: globalRow.gemini_api_key || resolvedDbKey,
+            };
+          } else if (anyValidKeyRow) {
+            return {
+              ...mapDbRowToSettings(anyValidKeyRow),
+              groupId: cleanGid,
+              geminiApiKey: resolvedDbKey,
             };
           }
         }
@@ -1146,10 +1190,15 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   const allSettings = await safeReadJson<Record<string, AISettings>>(SETTINGS_FILE, {});
   const existing = allSettings[cleanGid];
 
-  let globalFallbackKey = allSettings[GLOBAL_SETTINGS_KEY]?.geminiApiKey || "";
-  if (!globalFallbackKey) {
+  let globalFallbackKey =
+    cachedKey ||
+    allSettings[GLOBAL_SETTINGS_KEY]?.geminiApiKey ||
+    allSettings["global"]?.geminiApiKey ||
+    "";
+
+  if (!globalFallbackKey || !isValidApiKeyCandidate(globalFallbackKey)) {
     for (const val of Object.values(allSettings)) {
-      if (val && val.geminiApiKey && typeof val.geminiApiKey === "string" && val.geminiApiKey.trim()) {
+      if (val && val.geminiApiKey && typeof val.geminiApiKey === "string" && isValidApiKeyCandidate(val.geminiApiKey)) {
         globalFallbackKey = val.geminiApiKey.trim();
         break;
       }
@@ -1157,6 +1206,12 @@ export async function getGroupAISettings(groupId: string): Promise<AISettings> {
   }
   if (!globalFallbackKey) {
     globalFallbackKey = globalEnvKey;
+  }
+
+  if (globalFallbackKey && isValidApiKeyCandidate(globalFallbackKey)) {
+    if (typeof globalThis !== "undefined") {
+      (globalThis as any).__qf_cached_gemini_key = globalFallbackKey;
+    }
   }
 
   if (existing) {
@@ -1209,10 +1264,20 @@ export async function updateGroupAISettings(
 
   // CRITICAL RULE: Never overwrite an existing saved key if partial.geminiApiKey is invalid, empty, or masked!
   let resolvedKey = current.geminiApiKey || "";
+  if (!resolvedKey && typeof globalThis !== "undefined" && (globalThis as any).__qf_cached_gemini_key) {
+    resolvedKey = (globalThis as any).__qf_cached_gemini_key;
+  }
+
   if (partial.geminiApiKey !== undefined) {
     const candidate = String(partial.geminiApiKey).trim();
     if (isValidApiKeyCandidate(candidate)) {
       resolvedKey = candidate;
+    }
+  }
+
+  if (resolvedKey && isValidApiKeyCandidate(resolvedKey)) {
+    if (typeof globalThis !== "undefined") {
+      (globalThis as any).__qf_cached_gemini_key = resolvedKey;
     }
   }
 
@@ -1230,13 +1295,18 @@ export async function updateGroupAISettings(
       const { prisma } = await import("./db");
       const ready = await ensureAiDatabaseTables(prisma);
       if (ready) {
+        // Safe update: NEVER wipe an existing database key with null or empty!
         await prisma.$executeRawUnsafe(
           `INSERT INTO ai_curriculum_settings (
             group_id, gemini_api_key, default_model, default_difficulty, default_count,
             strict_grounding, system_instruction, updated_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
           ON CONFLICT (group_id) DO UPDATE SET
-            gemini_api_key = EXCLUDED.gemini_api_key,
+            gemini_api_key = CASE 
+              WHEN EXCLUDED.gemini_api_key IS NOT NULL AND TRIM(EXCLUDED.gemini_api_key) != ''
+              THEN EXCLUDED.gemini_api_key
+              ELSE ai_curriculum_settings.gemini_api_key
+            END,
             default_model = EXCLUDED.default_model,
             default_difficulty = EXCLUDED.default_difficulty,
             default_count = EXCLUDED.default_count,
@@ -1252,23 +1322,34 @@ export async function updateGroupAISettings(
           updated.systemInstruction || ""
         );
 
-        if (resolvedKey) {
+        // If a valid key exists, also persist to __global__ and global so all bot DM and other groups inherit it
+        if (resolvedKey && isValidApiKeyCandidate(resolvedKey)) {
+          for (const gKey of [GLOBAL_SETTINGS_KEY, "global"]) {
+            await prisma.$executeRawUnsafe(
+              `INSERT INTO ai_curriculum_settings (
+                group_id, gemini_api_key, default_model, default_difficulty, default_count,
+                strict_grounding, system_instruction, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+              ON CONFLICT (group_id) DO UPDATE SET
+                gemini_api_key = EXCLUDED.gemini_api_key,
+                updated_at = NOW()`,
+              gKey,
+              resolvedKey,
+              updated.defaultModel,
+              updated.defaultDifficulty,
+              updated.defaultCount,
+              updated.strictGrounding,
+              updated.systemInstruction || ""
+            );
+          }
+
+          // Also propagate to any records in ai_curriculum_settings that currently lack a key
           await prisma.$executeRawUnsafe(
-            `INSERT INTO ai_curriculum_settings (
-              group_id, gemini_api_key, default_model, default_difficulty, default_count,
-              strict_grounding, system_instruction, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-            ON CONFLICT (group_id) DO UPDATE SET
-              gemini_api_key = EXCLUDED.gemini_api_key,
-              updated_at = NOW()`,
-            GLOBAL_SETTINGS_KEY,
-            resolvedKey,
-            updated.defaultModel,
-            updated.defaultDifficulty,
-            updated.defaultCount,
-            updated.strictGrounding,
-            updated.systemInstruction || ""
-          );
+            `UPDATE ai_curriculum_settings 
+             SET gemini_api_key = $1, updated_at = NOW() 
+             WHERE gemini_api_key IS NULL OR TRIM(gemini_api_key) = ''`,
+            resolvedKey
+          ).catch(() => {});
         }
       }
     } catch (dbErr) {
@@ -1279,14 +1360,16 @@ export async function updateGroupAISettings(
   // 2. Also write to local file storage
   allSettings[cleanGid] = updated;
 
-  // If a valid key exists, also update the global fallback so other groups automatically inherit it
-  if (resolvedKey) {
-    allSettings[GLOBAL_SETTINGS_KEY] = {
-      ...(allSettings[GLOBAL_SETTINGS_KEY] || updated),
-      groupId: GLOBAL_SETTINGS_KEY,
-      geminiApiKey: resolvedKey,
-      updatedAt: new Date().toISOString(),
-    };
+  // If a valid key exists, also update the global fallbacks so other groups automatically inherit it
+  if (resolvedKey && isValidApiKeyCandidate(resolvedKey)) {
+    for (const gKey of [GLOBAL_SETTINGS_KEY, "global"]) {
+      allSettings[gKey] = {
+        ...(allSettings[gKey] || updated),
+        groupId: gKey,
+        geminiApiKey: resolvedKey,
+        updatedAt: new Date().toISOString(),
+      };
+    }
   }
 
   await safeWriteJson(SETTINGS_FILE, allSettings);
