@@ -9,6 +9,7 @@ import {
 } from "@/lib/aiStorage";
 import { generateCurriculumQuestions } from "@/lib/gemini";
 import { ValidatedQuestion } from "@/lib/questionValidator";
+import { QuestionPoolManager } from "@/lib/aiConcurrencyManager";
 
 // ─── Rate Limiting & Cooldown Configuration ───────────────────────────────────
 // 90 seconds cooldown between consecutive quiz generations per student
@@ -1053,6 +1054,32 @@ export async function handleStudentQuizCallback(cb: Record<string, unknown>): Pr
   return false;
 }
 
+/**
+ * Safely dispatches a Telegram quiz poll with automatic flood-control handling.
+ * Retries seamlessly if Telegram returns 429 Too Many Requests (retry after X).
+ */
+async function safeSendTelegramPoll(
+  params: Parameters<typeof telegram.sendPoll>[0],
+  maxAttempts = 3
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await telegram.sendPoll(params);
+    } catch (err: any) {
+      const errMsg = String(err?.message || err);
+      const retryMatch = errMsg.match(/retry after (\d+)/i);
+      if (retryMatch && attempt < maxAttempts) {
+        const waitSeconds = parseInt(retryMatch[1], 10) || 1;
+        await new Promise((r) => setTimeout(r, (waitSeconds + 0.5) * 1000));
+        continue;
+      }
+      if (attempt >= maxAttempts) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
+  return null;
+}
+
 // ─── Execution & AI Generation Engine ─────────────────────────────────────────
 
 async function executeGeneration(
@@ -1096,25 +1123,6 @@ async function executeGeneration(
     }).catch(() => {});
   };
 
-  // 1. Show live loading state on wizard message (Stage 1/3)
-  await updateProgressMessage(progressStages[0]);
-
-  // Periodic stage update every 3.8 seconds if generation is still in flight
-  progressTimer = setInterval(() => {
-    if (isGenerationDone) {
-      if (progressTimer) clearInterval(progressTimer);
-      progressTimer = null;
-      return;
-    }
-    currentStageIdx++;
-    if (currentStageIdx < progressStages.length) {
-      updateProgressMessage(progressStages[currentStageIdx]);
-    } else {
-      if (progressTimer) clearInterval(progressTimer);
-      progressTimer = null;
-    }
-  }, 3800);
-
   try {
     // 2. Fetch Material & Text
     const material = await getMaterialById(session.groupId || "global", session.materialId!);
@@ -1127,56 +1135,103 @@ async function executeGeneration(
       session.groupId = material.groupId;
     }
 
-    const excerptResult = buildBalancedCurriculumExcerpt(material, session.sectionId, 36000);
-    let textExcerpt = excerptResult.excerpt;
-    let materialTitle = excerptResult.title;
+    const resolvedCount = session.questionCount || 5;
+    const resolvedDifficulty = session.difficulty || "mixed";
 
-    if (!textExcerpt || textExcerpt.length < 30) {
-      throw new Error("نص المنهج المحدد قصير جداً لتوليد أسئلة دقيقة منه.");
-    }
+    // ── 0. High-Concurrency Instant Pool Fast-Path (صفر تأخير تحت أعتى الضغوطات) ──
+    // If questions for this chapter/difficulty already exist in active pool, dispense immediately!
+    const pooledQuestions = QuestionPoolManager.tryAcquireBatch(
+      material.id,
+      session.sectionId,
+      resolvedDifficulty,
+      resolvedCount
+    );
 
-    // 3. Resolve API settings & keys
-    const settings = await getGroupAISettings(session.groupId || "global");
-    const apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("لم يتم ضبط مفتاح Gemini API Key في النظام بعد. يرجى إدخال المفتاح في لوحة التحكم.");
-    }
-
-    const resolvedCount = session.questionCount || settings.defaultCount || 5;
-    const resolvedDifficulty = session.difficulty || settings.defaultDifficulty || "mixed";
-
-    // 4. Generate with Auto-Fallback and transient retry
     let genResult: { questions: ValidatedQuestion[]; modelUsed: string; estimatedTokens: number } | null = null;
-    let lastGenError: any = null;
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        genResult = await generateCurriculumQuestions({
-          apiKey,
-          model: settings.defaultModel || "gemini-3.8-flash",
-          textExcerpt,
-          materialTitle,
-          questionCount: resolvedCount,
-          difficulty: resolvedDifficulty,
-          strictGrounding: settings.strictGrounding ?? true,
-          systemInstruction: settings.systemInstruction || undefined,
-        });
+    if (pooledQuestions && pooledQuestions.length >= resolvedCount) {
+      genResult = {
+        questions: pooledQuestions,
+        modelUsed: "QuizForge Fast-Pool Cache ⚡",
+        estimatedTokens: 0,
+      };
+    } else {
+      // 1. Show live loading state on wizard message (Stage 1/3)
+      await updateProgressMessage(progressStages[0]);
 
-        if (genResult && genResult.questions && genResult.questions.length > 0) {
-          break;
+      // Periodic stage update every 3.8 seconds if generation is still in flight
+      progressTimer = setInterval(() => {
+        if (isGenerationDone) {
+          if (progressTimer) clearInterval(progressTimer);
+          progressTimer = null;
+          return;
         }
-        throw new Error("لم يتمكن المحرك من استخراج أسئلة صالحة من النص المحدد.");
-      } catch (attemptErr: any) {
-        lastGenError = attemptErr;
-        if (attempt >= 2) {
-          break;
+        currentStageIdx++;
+        if (currentStageIdx < progressStages.length) {
+          updateProgressMessage(progressStages[currentStageIdx]);
+        } else {
+          if (progressTimer) clearInterval(progressTimer);
+          progressTimer = null;
         }
-        await new Promise((r) => setTimeout(r, 1500));
+      }, 3800);
+
+      const excerptResult = buildBalancedCurriculumExcerpt(material, session.sectionId, 36000);
+      let textExcerpt = excerptResult.excerpt;
+      let materialTitle = excerptResult.title;
+
+      if (!textExcerpt || textExcerpt.length < 30) {
+        throw new Error("نص المنهج المحدد قصير جداً لتوليد أسئلة دقيقة منه.");
       }
-    }
 
-    if (!genResult || !genResult.questions || genResult.questions.length === 0) {
-      throw lastGenError || new Error("لم يتمكن المحرك من توليد أسئلة مطابقة للشروط من هذا النص.");
+      // 3. Resolve API settings & keys
+      const settings = await getGroupAISettings(session.groupId || "global");
+      const apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("لم يتم ضبط مفتاح Gemini API Key في النظام بعد. يرجى إدخال المفتاح في لوحة التحكم.");
+      }
+
+      // 4. Generate with Auto-Fallback, Queue Throttling and transient retry
+      let lastGenError: any = null;
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          genResult = await generateCurriculumQuestions({
+            apiKey,
+            model: settings.defaultModel || "gemini-3.8-flash",
+            materialId: material.id,
+            sectionId: session.sectionId,
+            textExcerpt,
+            materialTitle,
+            questionCount: resolvedCount,
+            difficulty: resolvedDifficulty,
+            strictGrounding: settings.strictGrounding ?? true,
+            systemInstruction: settings.systemInstruction || undefined,
+            priority: session.isBoost ? 2 : 1,
+            onQueuePosition: (pos, total) => {
+              if (pos > 0) {
+                updateProgressMessage(
+                  `⏳ <b>طلبك في قائمة الانتظار السريعة (#${pos} من ${total})...</b>\nثوانٍ معدودة وينطلق كويزك فوراً 🚀`
+                );
+              }
+            },
+          });
+
+          if (genResult && genResult.questions && genResult.questions.length > 0) {
+            break;
+          }
+          throw new Error("لم يتمكن المحرك من استخراج أسئلة صالحة من النص المحدد.");
+        } catch (attemptErr: any) {
+          lastGenError = attemptErr;
+          if (attempt >= 2) {
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
+
+      if (!genResult || !genResult.questions || genResult.questions.length === 0) {
+        throw lastGenError || new Error("لم يتمكن المحرك من توليد أسئلة مطابقة للشروط من هذا النص.");
+      }
     }
 
     const questions: ValidatedQuestion[] = genResult.questions;
@@ -1256,7 +1311,7 @@ async function executeGeneration(
       );
 
       try {
-        const sentPoll = await telegram.sendPoll({
+        const sentPoll = await safeSendTelegramPoll({
           chat_id: session.chatId,
           message_thread_id: session.messageThreadId,
           question: `[سؤال ${i + 1}/${questions.length}] ${truncateText(q.question, 280)}`,
@@ -1268,7 +1323,7 @@ async function executeGeneration(
         });
 
         // If in a QuizForge registered group, save to database to track answers & analytics
-        if (session.groupId && sentPoll.poll && instructorUserId) {
+        if (session.groupId && sentPoll?.poll && instructorUserId) {
           await withRetry(() =>
             prisma.quiz.create({
               data: {

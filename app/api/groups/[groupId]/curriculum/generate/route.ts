@@ -156,6 +156,8 @@ export async function POST(
     const result = await generateCurriculumQuestions({
       apiKey,
       model: requestedModel,
+      materialId: materialId || undefined,
+      sectionId: sectionId || undefined,
       textExcerpt,
       materialTitle,
       topic,

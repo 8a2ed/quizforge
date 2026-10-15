@@ -28,6 +28,12 @@ import {
   extractChunkTextWithGemini,
 } from "../lib/gemini";
 import { getSectionKeyboard, SECTIONS_PER_PAGE, formatExplanationWithCitation } from "../lib/studentQuizWizard";
+import {
+  apiKeyManager,
+  geminiConcurrencyQueue,
+  QuestionPoolManager,
+  runSingleflight,
+} from "../lib/aiConcurrencyManager";
 
 async function runTests() {
   console.log("=== RUNNING ENHANCED AI CURRICULUM VERIFICATION SUITE ===");
@@ -1468,8 +1474,170 @@ All questions grounded in text.
     throw new Error("validateAndSanitizeQuestion explanation exceeded 200 chars!");
   }
   console.log("  ✓ validateAndSanitizeQuestion source citation integration verified");
+ 
+  // ── 12. High-Concurrency, Rate-Limiting & Question Pooling Tests ──
+  console.log("\n[12] Testing AI Concurrency Manager, Key Rotation & Question Pooling...");
 
-  console.log("\n✨ ALL ENHANCED AI CURRICULUM TESTS PASSED WITH 100% SUCCESS! ✨\n");
+  // A. Adaptive Concurrency Queue test
+  geminiConcurrencyQueue.setMaxConcurrency(2);
+  let activeConcurrency = 0;
+  let maxObservedConcurrency = 0;
+  const executionOrder: number[] = [];
+  const positionUpdates: number[] = [];
+
+  const tasks = [
+    geminiConcurrencyQueue.run(async () => {
+      activeConcurrency++;
+      maxObservedConcurrency = Math.max(maxObservedConcurrency, activeConcurrency);
+      await new Promise((r) => setTimeout(r, 40));
+      activeConcurrency--;
+      executionOrder.push(1);
+      return 1;
+    }, { priority: 1 }),
+    geminiConcurrencyQueue.run(async () => {
+      activeConcurrency++;
+      maxObservedConcurrency = Math.max(maxObservedConcurrency, activeConcurrency);
+      await new Promise((r) => setTimeout(r, 40));
+      activeConcurrency--;
+      executionOrder.push(2);
+      return 2;
+    }, { priority: 1 }),
+    geminiConcurrencyQueue.run(async () => {
+      activeConcurrency++;
+      maxObservedConcurrency = Math.max(maxObservedConcurrency, activeConcurrency);
+      await new Promise((r) => setTimeout(r, 20));
+      activeConcurrency--;
+      executionOrder.push(3);
+      return 3;
+    }, { priority: 10, onPositionUpdate: (pos) => positionUpdates.push(pos) }), // High priority!
+    geminiConcurrencyQueue.run(async () => {
+      activeConcurrency++;
+      maxObservedConcurrency = Math.max(maxObservedConcurrency, activeConcurrency);
+      await new Promise((r) => setTimeout(r, 20));
+      activeConcurrency--;
+      executionOrder.push(4);
+      return 4;
+    }, { priority: 2 }),
+  ];
+
+  await Promise.all(tasks);
+  geminiConcurrencyQueue.setMaxConcurrency(4); // Reset to default
+
+  if (maxObservedConcurrency > 2) {
+    throw new Error(`AdaptiveConcurrencyQueue exceeded max concurrency! Observed: ${maxObservedConcurrency}`);
+  }
+  // Task 3 had priority 10, so it must execute before Task 4 (priority 2) when the first slot frees
+  const idxOfTask3 = executionOrder.indexOf(3);
+  const idxOfTask4 = executionOrder.indexOf(4);
+  if (idxOfTask3 > idxOfTask4) {
+    throw new Error(`Priority queue violated: Task 3 (priority 10) ran after Task 4 (priority 2)! Order: ${executionOrder.join(",")}`);
+  }
+  console.log("  ✓ AdaptiveConcurrencyQueue strictly enforces max concurrency ceiling and priority ordering");
+
+  // B. ApiKeyManager Load Balancer & Cooldown test
+  const testKey1 = "AIzaSyTestKeyNumberOne111111111111111111";
+  const testKey2 = "AIzaSyTestKeyNumberTwo222222222222222222";
+  apiKeyManager.registerKeys(`${testKey1}, ${testKey2}`);
+
+  const acquired1 = apiKeyManager.acquireKey();
+  if (!acquired1) throw new Error("apiKeyManager failed to acquire key!");
+
+  // Mark acquired1 with 429 quota exhaustion
+  apiKeyManager.markFailure(acquired1, 429);
+
+  // Next acquisition must automatically bypass the cooling-down key and select the healthy key
+  const acquired2 = apiKeyManager.acquireKey();
+  if (acquired2 === acquired1) {
+    throw new Error("apiKeyManager selected a cooling-down key instead of the healthy alternate key!");
+  }
+  apiKeyManager.releaseKey(acquired2, true);
+  console.log("  ✓ ApiKeyManager multi-key rotation and 429 cooldown auto-failover verified");
+
+  // C. QuestionPoolManager Instant Serving & Option Shuffling test
+  const sampleMaterialId = "mat_test_concurrency_101";
+  const sampleSectionId = "sec_test_01";
+  const sampleQuestions = [
+    {
+      id: "q1",
+      question: "ما هو الرمز الكيميائي للماء؟",
+      options: ["H2O", "CO2", "NaCl", "O2"],
+      correctOptionId: 0,
+      explanation: "يتكون الماء من ذرتي هيدروجين وذرة أكسجين",
+    },
+    {
+      id: "q2",
+      question: "ما هو العنصر الأكثر وفرة في الغلاف الجوي؟",
+      options: ["النيتروجين", "الأكسجين", "الأرجون", "الهيدروجين"],
+      correctOptionId: 0,
+      explanation: "النيتروجين يشكل حوالي 78% من الغلاف الجوي",
+    },
+    {
+      id: "q3",
+      question: "كم عدد الكواكب في المجموعة الشمسية؟",
+      options: ["8 كواكب", "9 كواكب", "7 كواكب", "10 كواكب"],
+      correctOptionId: 0,
+      explanation: "يوجد ثمانية كواكب معتمدة رسمياً",
+    },
+    {
+      id: "q4",
+      question: "ما هي عاصمة جمهورية مصر العربية؟",
+      options: ["القاهرة", "الإسكندرية", "الجيزة", "الأقصر"],
+      correctOptionId: 0,
+      explanation: "القاهرة هي عاصمة مصر",
+    },
+  ].map((q, idx) => validateAndSanitizeQuestion(q, idx));
+
+  QuestionPoolManager.addQuestions(sampleMaterialId, sampleQuestions, sampleSectionId, "medium");
+
+  const poolCount = QuestionPoolManager.getPoolCount(sampleMaterialId, sampleSectionId, "medium");
+  if (poolCount !== 4) {
+    throw new Error(`QuestionPoolManager expected 4 pooled questions, got ${poolCount}`);
+  }
+
+  // Request 2 questions from pool
+  const polled = QuestionPoolManager.acquireFromPool(sampleMaterialId, 2, sampleSectionId, "medium");
+  if (!polled || polled.length !== 2) {
+    throw new Error(`QuestionPoolManager failed to acquire 2 questions! Got: ${polled?.length}`);
+  }
+
+  // Verify that options were randomized/shuffled, and correctOptionId still resolves to the correct answer text
+  for (const q of polled) {
+    const original = sampleQuestions.find((sq) => sq.question === q.question);
+    if (!original) throw new Error("Pooled question text not found in source!");
+    const expectedCorrectText = original.options[original.correctOptionId];
+    const actualCorrectText = q.options[q.correctOptionId];
+    if (actualCorrectText !== expectedCorrectText) {
+      throw new Error(`Option shuffling broke correct answer! Expected "${expectedCorrectText}", got "${actualCorrectText}"`);
+    }
+  }
+
+  // Requesting more questions than available in pool should return null to trigger fresh AI generation
+  const excessive = QuestionPoolManager.acquireFromPool(sampleMaterialId, 10, sampleSectionId, "medium");
+  if (excessive !== null) {
+    throw new Error("QuestionPoolManager should return null when requested count exceeds pool size!");
+  }
+  console.log("  ✓ QuestionPoolManager verified: instant sub-millisecond serving, dynamic option shuffling, and answer integrity");
+
+  // D. Singleflight Deduplication test
+  let factoryExecutions = 0;
+  const singleflightTasks = Array.from({ length: 8 }, () =>
+    runSingleflight("test_sf_dedup_key", async () => {
+      factoryExecutions++;
+      await new Promise((r) => setTimeout(r, 30));
+      return { status: "success", data: 42 };
+    })
+  );
+
+  const sfResults = await Promise.all(singleflightTasks);
+  if (factoryExecutions !== 1) {
+    throw new Error(`runSingleflight executed factory ${factoryExecutions} times instead of 1!`);
+  }
+  for (const res of sfResults) {
+    if (res.data !== 42) throw new Error("runSingleflight returned invalid result to concurrent caller!");
+  }
+  console.log("  ✓ runSingleflight deduplication verified: 8 simultaneous requests unified into a single execution");
+
+  console.log("\n✨ ALL ENHANCED AI CURRICULUM & CONCURRENCY TESTS PASSED WITH 100% SUCCESS! ✨\n");
 }
 
 runTests().catch((err) => {

@@ -4,6 +4,19 @@ import {
   validateAndSanitizeQuestion,
 } from "./questionValidator";
 import { cleanText, splitIntoSections } from "./textCleaner";
+import {
+  apiKeyManager,
+  geminiConcurrencyQueue,
+  QuestionPoolManager,
+  runSingleflight,
+} from "./aiConcurrencyManager";
+
+export {
+  apiKeyManager,
+  geminiConcurrencyQueue,
+  QuestionPoolManager,
+  runSingleflight,
+};
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 
@@ -51,6 +64,8 @@ export interface GenerateOptions {
   apiKey?: string;
   model?: string;
   textExcerpt: string;
+  materialId?: string;
+  sectionId?: string;
   materialTitle?: string;
   topic?: string;
   questionCount?: number;
@@ -58,6 +73,9 @@ export interface GenerateOptions {
   strictGrounding?: boolean;
   systemInstruction?: string;
   bloomTaxonomy?: string[];
+  priority?: number;
+  skipPool?: boolean;
+  onQueuePosition?: (pos: number, total: number) => void;
 }
 
 export interface GenerationResult {
@@ -537,85 +555,139 @@ export async function generateCurriculumQuestions(
     },
   };
 
-  let activeModel = requestedModel;
-  let fallbackUsed = false;
-  let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, apiKey, 120000);
-
-  let rawQuestions: RawGeneratedQuestion[] = [];
-  if (apiRes.ok && apiRes.text) {
-    try {
-      rawQuestions = extractQuestionsFromJson(apiRes.text);
-    } catch (parseErr) {
-      console.warn(`[Gemini] Initial model '${requestedModel}' produced unparseable output:`, parseErr);
+  // ── 0. High-Concurrency Fast-Path: Dynamic Curriculum Question Pool ───────
+  // Delivers instant (sub-100ms) quizzes under peak loads when questions already exist in pool
+  if (!options.skipPool && options.materialId) {
+    const pooledQuestions = QuestionPoolManager.tryAcquireBatch(
+      options.materialId,
+      options.sectionId,
+      difficulty,
+      count
+    );
+    if (pooledQuestions && pooledQuestions.length >= count) {
+      return {
+        questions: pooledQuestions,
+        rawResponse: "Served from Dynamic Curriculum Pool (Zero-Latency Cache)",
+        modelUsed: `${requestedModel} (Pool Cache ⚡)`,
+        fallbackUsed: false,
+        estimatedTokens: 0,
+        durationMs: Date.now() - startTime,
+      };
     }
   }
 
-  // If initial model failed or parsing produced no valid questions, try fallback candidates
-  if (!apiRes.ok || rawQuestions.length === 0) {
-    console.warn(
-      `[Gemini] Model '${requestedModel}' failed or returned invalid response (status: ${apiRes.status}). Initiating auto-fallback...`
-    );
+  // ── 1. Throttled Execution via Adaptive Concurrency Queue ───────────────────
+  // Prevents Gemini API 429 quota exhaustion under mass student concurrency
+  const executeAiGeneration = async (): Promise<GenerationResult> => {
+    apiKeyManager.registerKeys(apiKey);
+    const currentKey = apiKeyManager.acquireKey(apiKey);
 
-    let fetched: AvailableGeminiModel[] = [];
-    try {
-      fetched = await fetchAvailableGeminiModels(apiKey);
-    } catch {
-      // Continue with static modern candidates
+    let activeModel = requestedModel;
+    let fallbackUsed = false;
+    let apiRes = await callGeminiGenerateContent(requestedModel, requestBody, currentKey, 120000);
+
+    const is429 = apiRes.status === 429 || shouldTriggerModelFallback(apiRes.status, apiRes.errorDetails);
+    apiKeyManager.releaseKey(currentKey, apiRes.ok, is429);
+
+    let rawQuestions: RawGeneratedQuestion[] = [];
+    if (apiRes.ok && apiRes.text) {
+      try {
+        rawQuestions = extractQuestionsFromJson(apiRes.text);
+      } catch (parseErr) {
+        console.warn(`[Gemini] Initial model '${requestedModel}' produced unparseable output:`, parseErr);
+      }
     }
 
-    const fallbackCandidates = getFallbackCandidates(requestedModel, fetched);
+    // If initial model or key failed (e.g. 429 rate limit or 404), try fallback models and alternate keys
+    if (!apiRes.ok || rawQuestions.length === 0) {
+      console.warn(
+        `[Gemini] Model '${requestedModel}' failed (status: ${apiRes.status}). Initiating auto-fallback & alternate key search...`
+      );
 
-    for (const candidate of fallbackCandidates) {
-      if (candidate === requestedModel) continue;
-      console.log(`[Gemini] Attempting fallback model: ${candidate}`);
-      const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, apiKey, 120000);
-      if (fallbackRes.ok && fallbackRes.text) {
-        try {
-          const candidateQuestions = extractQuestionsFromJson(fallbackRes.text);
-          if (candidateQuestions.length > 0) {
-            console.log(`[Gemini] Fallback succeeded with model: ${candidate} (${candidateQuestions.length} questions)`);
-            apiRes = fallbackRes;
-            activeModel = candidate;
-            fallbackUsed = true;
-            rawQuestions = candidateQuestions;
-            break;
+      // Try alternate key if available
+      const altKey = apiKeyManager.acquireKey();
+
+      let fetched: AvailableGeminiModel[] = [];
+      try {
+        fetched = await fetchAvailableGeminiModels(altKey || currentKey);
+      } catch {
+        // Continue with static modern candidates
+      }
+
+      const fallbackCandidates = getFallbackCandidates(requestedModel, fetched);
+
+      for (const candidate of fallbackCandidates) {
+        if (candidate === requestedModel) continue;
+        console.log(`[Gemini] Attempting fallback model: ${candidate}`);
+        const fallbackRes = await callGeminiGenerateContent(candidate, requestBody, altKey || currentKey, 120000);
+        
+        const candidateIs429 = fallbackRes.status === 429;
+        apiKeyManager.releaseKey(altKey || currentKey, fallbackRes.ok, candidateIs429);
+
+        if (fallbackRes.ok && fallbackRes.text) {
+          try {
+            const candidateQuestions = extractQuestionsFromJson(fallbackRes.text);
+            if (candidateQuestions.length > 0) {
+              console.log(`[Gemini] Fallback succeeded with model: ${candidate} (${candidateQuestions.length} questions)`);
+              apiRes = fallbackRes;
+              activeModel = candidate;
+              fallbackUsed = true;
+              rawQuestions = candidateQuestions;
+              break;
+            }
+          } catch (e) {
+            console.warn(`[Gemini] Fallback model '${candidate}' returned unparseable output:`, e);
           }
-        } catch (e) {
-          console.warn(`[Gemini] Fallback model '${candidate}' returned unparseable output:`, e);
         }
       }
     }
-  }
 
-  if (!apiRes.ok) {
-    throw new Error(`خطأ في استجابة Gemini (${apiRes.status}): ${apiRes.errorDetails}`);
-  }
+    if (!apiRes.ok) {
+      throw new Error(`خطأ في استجابة Gemini (${apiRes.status}): ${apiRes.errorDetails}`);
+    }
 
-  const rawText = apiRes.text;
-  if (!rawText) {
-    throw new Error("لم يتم استلام أي نص من نموذج الذكاء الاصطناعي");
-  }
+    const rawText = apiRes.text;
+    if (!rawText) {
+      throw new Error("لم يتم استلام أي نص من نموذج الذكاء الاصطناعي");
+    }
 
-  if (rawQuestions.length === 0) {
-    throw new Error("لم يحتوِ رد الذكاء الاصطناعي على أي أسئلة صالحة");
-  }
+    if (rawQuestions.length === 0) {
+      throw new Error("لم يحتوِ رد الذكاء الاصطناعي على أي أسئلة صالحة");
+    }
 
-  // Sanitize and validate every question for Telegram compliance
-  const validatedQuestions: ValidatedQuestion[] = rawQuestions.map((q, idx) =>
-    validateAndSanitizeQuestion(q, idx)
-  );
+    // Sanitize and validate every question for Telegram compliance
+    const validatedQuestions: ValidatedQuestion[] = rawQuestions.map((q, idx) =>
+      validateAndSanitizeQuestion(q, idx)
+    );
 
-  const durationMs = Date.now() - startTime;
-  const estimatedTokens = estimateTokens(prompt + rawText);
+    // Save into active Question Pool for instant zero-latency reuse across subsequent students
+    if (options.materialId && validatedQuestions.length > 0) {
+      QuestionPoolManager.addQuestions(
+        options.materialId,
+        options.sectionId,
+        difficulty,
+        validatedQuestions
+      );
+    }
 
-  return {
-    questions: validatedQuestions,
-    rawResponse: rawText,
-    modelUsed: activeModel,
-    fallbackUsed,
-    estimatedTokens,
-    durationMs,
+    const durationMs = Date.now() - startTime;
+    const estimatedTokens = estimateTokens(prompt + rawText);
+
+    return {
+      questions: validatedQuestions,
+      rawResponse: rawText,
+      modelUsed: activeModel,
+      fallbackUsed,
+      estimatedTokens,
+      durationMs,
+    };
   };
+
+  // Run through concurrency queue with priority and queue feedback
+  return geminiConcurrencyQueue.run(executeAiGeneration, {
+    priority: options.priority ?? 1,
+    onPositionUpdate: options.onQueuePosition,
+  });
 }
 
 /**
