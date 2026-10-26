@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
-import { telegram } from "@/lib/telegram";
+import { telegram, TelegramApiError } from "@/lib/telegram";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -235,8 +235,22 @@ export async function POST(
         throw pollErr;
       }
     }
-  } catch (err) {
+    } catch (err) {
+    const is429 = (err instanceof TelegramApiError && (err.statusCode === 429 || err.errorCode === 429)) ||
+      (err instanceof Error && /429|too many requests|retry after/i.test(err.message));
+    let retryAfter = err instanceof TelegramApiError ? err.retryAfter : undefined;
+    if (!retryAfter && err instanceof Error) {
+      const match = err.message.match(/retry after (\d+)/i);
+      if (match) retryAfter = parseInt(match[1], 10);
+    }
     const msg = err instanceof Error ? err.message : "Failed to send to Telegram";
+    if (is429) {
+      return NextResponse.json({
+        error: msg,
+        retryAfter: retryAfter || 5,
+        isRateLimit: true,
+      }, { status: 429 });
+    }
     const hint = msg.includes("bot was kicked") || msg.includes("chat not found")
       ? " — Make sure @agridmu_bot is added as an admin to this group!"
       : msg.includes("ETELEGRAM") || msg.includes("Telegram API error")

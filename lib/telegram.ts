@@ -1,5 +1,19 @@
 const BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
+export class TelegramApiError extends Error {
+  statusCode: number;
+  errorCode?: number;
+  retryAfter?: number;
+
+  constructor(message: string, statusCode: number, errorCode?: number, retryAfter?: number) {
+    super(message);
+    this.name = "TelegramApiError";
+    this.statusCode = statusCode;
+    this.errorCode = errorCode;
+    this.retryAfter = retryAfter;
+  }
+}
+
 // ── Default timeouts ──────────────────────────────────────────────────────────
 const DEFAULT_TIMEOUT_MS = 15_000; // 15s for regular calls
 const SEND_TIMEOUT_MS    = 25_000; // 25s for send operations (polls, photos)
@@ -21,21 +35,30 @@ async function call<T>(
       signal: controller.signal,
     });
 
-    let json: { ok?: boolean; result?: unknown; description?: string } | null = null;
+    let json: {
+      ok?: boolean;
+      result?: unknown;
+      description?: string;
+      error_code?: number;
+      parameters?: { retry_after?: number; migrate_to_chat_id?: number };
+    } | null = null;
     try {
-      json = (await res.json()) as { ok?: boolean; result?: unknown; description?: string };
+      json = (await res.json()) as any;
     } catch {
       // Non-JSON response
     }
 
-    if (!res.ok) {
+    if (!res.ok || !json || !json.ok) {
       const desc = json?.description || `HTTP ${res.status}`;
-      throw new Error(`Telegram error on ${method}: ${desc}`);
+      const statusCode = res.status || (json?.error_code ?? 500);
+      let retryAfter = json?.parameters?.retry_after;
+      if (!retryAfter) {
+        const match = desc.match(/retry after (\d+)/i);
+        if (match) retryAfter = parseInt(match[1], 10);
+      }
+      throw new TelegramApiError(`Telegram error on ${method}: ${desc}`, statusCode, json?.error_code, retryAfter);
     }
 
-    if (!json || !json.ok) {
-      throw new Error(json?.description || `Telegram API error (${method})`);
-    }
     return json.result as T;
   } catch (err) {
     if ((err as { name?: string }).name === "AbortError") {

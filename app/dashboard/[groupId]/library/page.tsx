@@ -40,13 +40,20 @@ interface SendProgress {
   total: number;
   sent: number;
   failed: number;
+  retrying?: number;
+  isRetryingPhase?: boolean;
   errors: { id: string; question: string; msg: string }[];
   startTime: number;
-  statuses: ("pending" | "sending" | "sent" | "failed")[];
+  statuses: ("pending" | "sending" | "sent" | "failed" | "retrying")[];
   postStatus?: "idle" | "sending" | "sent" | "failed";
 }
 
-const DELAY_MS = 3200; // 3.2s between sends to respect Telegram rate limits
+// Telegram Bot API Rate Limits:
+// - Maximum 1 message per second to a particular chat.
+// - Up to 20 messages per minute sustained in group chats.
+// 1300ms inter-send interval safely matches Telegram's 1 msg/s limit.
+const TELEGRAM_RATE_LIMIT_MS = 1300;
+const MAX_RETRY_ROUNDS = 2;
 
 export default function LibraryPage() {
   const { groupId } = useParams<{ groupId: string }>();
@@ -67,7 +74,7 @@ export default function LibraryPage() {
   const [tagFilter, setTagFilter] = useState("");
   const [perQuizTopic, setPerQuizTopic] = useState<Record<string, number | "">>({});
   const [typeFilter, setTypeFilter] = useState<"" | "QUIZ" | "POLL">("");
-  const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [toast, setToast] = useState<{ type: "success" | "error" | "info"; msg: string } | null>(null);
   const [progress, setProgress] = useState<SendProgress | null>(null);
   const cancelRef = useRef(false);
 
@@ -93,7 +100,7 @@ export default function LibraryPage() {
     return () => clearInterval(id);
   }, [progress?.active]);
 
-  const showToast = (type: "success" | "error", msg: string) => {
+  const showToast = (type: "success" | "error" | "info", msg: string) => {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 4500);
   };
@@ -246,57 +253,50 @@ export default function LibraryPage() {
     showToast("success", `Exported ${toExport.length} template(s) to JSON ✓`);
   };
 
-  // ── Sequential sender ─────────────────────────────────────────────
+  // ── Sequential sender with Telegram rate limits & automatic retry for failed quizzes ──
   const sendSequentially = async (toSend: Template[]) => {
     if (toSend.length === 0) return;
     cancelRef.current = false;
     let successCount = 0;
     let lastTopicId: number | undefined = undefined;
 
-    setProgress({ active: true, total: toSend.length, sent: 0, failed: 0, errors: [], startTime: Date.now(), statuses: Array(toSend.length).fill("pending") });
+    // Helper to send a single quiz with rate limit / 429 backoff
+    const sendQuizItem = async (t: Template): Promise<{ ok: boolean; error?: string }> => {
+      const qTopicId = perQuizTopic[t.id] !== undefined && perQuizTopic[t.id] !== ""
+        ? perQuizTopic[t.id]
+        : t.topicId !== undefined && t.topicId !== null
+        ? t.topicId
+        : sendTopicId;
+      const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name || (qTopicId === t.topicId ? (t.topicName || undefined) : undefined);
 
-    for (let i = 0; i < toSend.length; i++) {
-      if (cancelRef.current) break;
+      const payload = {
+        question: t.question,
+        options: t.options,
+        type: t.type === "QUIZ" ? "quiz" : "poll",
+        correctOptionId: t.type === "QUIZ" ? (t.correctOptionId ?? 0) : undefined,
+        explanation: t.type === "QUIZ" ? (t.explanation || undefined) : undefined,
+        isAnonymous: t.isAnonymous,
+        allowsMultiple: t.type === "POLL" ? Boolean(t.allowsMultiple) : false,
+        allowAddingOptions: t.type === "POLL" ? Boolean(t.allowAddingOptions) : false,
+        allowRevoting: t.type === "POLL" ? Boolean(t.allowRevoting) : false,
+        openPeriod: t.openPeriod || undefined,
+        tags: t.tags || [],
+        topicId: qTopicId || undefined,
+        topicName: qTopicName || undefined,
+        collectionIds: t.collectionIds || [],
+      };
 
-      // Mark current as sending
-      setProgress(prev => prev ? { ...prev, statuses: prev.statuses.map((s, j) => j === i ? "sending" : s) } : prev);
-
-      const t = toSend[i];
       try {
-        const qTopicId = perQuizTopic[t.id] !== undefined && perQuizTopic[t.id] !== ""
-          ? perQuizTopic[t.id]
-          : t.topicId !== undefined && t.topicId !== null
-          ? t.topicId
-          : sendTopicId;
-        const qTopicName = topics.find(tp => tp.message_thread_id === qTopicId)?.name || (qTopicId === t.topicId ? (t.topicName || undefined) : undefined);
-        
-        const payload = {
-          question: t.question,
-          options: t.options,
-          type: t.type === "QUIZ" ? "quiz" : "poll",
-          correctOptionId: t.type === "QUIZ" ? (t.correctOptionId ?? 0) : undefined,
-          explanation: t.type === "QUIZ" ? (t.explanation || undefined) : undefined,
-          isAnonymous: t.isAnonymous,
-          allowsMultiple: t.type === "POLL" ? Boolean(t.allowsMultiple) : false,
-          allowAddingOptions: t.type === "POLL" ? Boolean(t.allowAddingOptions) : false,
-          allowRevoting: t.type === "POLL" ? Boolean(t.allowRevoting) : false,
-          openPeriod: t.openPeriod || undefined,
-          tags: t.tags || [],
-          topicId: qTopicId || undefined,
-          topicName: qTopicName || undefined,
-          collectionIds: t.collectionIds || [],
-        };
-
         let res = await fetch(`/api/groups/${groupId}/quiz/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
 
-        // If rate-limited by Telegram (429), pause and retry once
+        // If rate-limited by Telegram (429), pause and retry
         if (res.status === 429 && !cancelRef.current) {
           const errData = await res.json().catch(() => ({}));
-          const waitSec = Number(errData.retryAfter) || 5;
+          const waitSec = Math.min(60, Math.max(2, Number(errData.retryAfter) || 5));
           await new Promise(r => setTimeout(r, waitSec * 1000));
           if (!cancelRef.current) {
             res = await fetch(`/api/groups/${groupId}/quiz/send`, {
@@ -308,47 +308,142 @@ export default function LibraryPage() {
         }
 
         if (res.ok) {
-          successCount++;
           if (qTopicId !== undefined && qTopicId !== null && qTopicId !== "") {
             lastTopicId = Number(qTopicId);
           }
-          const now = new Date().toISOString();
-          setSentIds(prev => new Set([...prev, t.id]));
-          setSentInfo(prev => ({
-            ...prev,
-            [t.id]: {
-              sentAt: now,
-              count: (prev[t.id]?.count ?? 0) + 1,
-            },
-          }));
-          setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
-          setProgress(prev => prev ? { ...prev, sent: prev.sent + 1, statuses: prev.statuses.map((s, j) => j === i ? "sent" : s) } : prev);
+          return { ok: true };
         } else {
           const data = await res.json().catch(() => ({}));
-          setProgress(prev => prev ? {
-            ...prev,
-            failed: prev.failed + 1,
-            statuses: prev.statuses.map((s, j) => j === i ? "failed" : s),
-            errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: data.error || "Broadcast error" }],
-          } : prev);
+          return { ok: false, error: data.error || "Broadcast error" };
         }
-      } catch {
+      } catch (err: any) {
+        return { ok: false, error: err?.message || "Network error" };
+      }
+    };
+
+    setProgress({
+      active: true,
+      total: toSend.length,
+      sent: 0,
+      failed: 0,
+      retrying: 0,
+      isRetryingPhase: false,
+      errors: [],
+      startTime: Date.now(),
+      statuses: Array(toSend.length).fill("pending"),
+    });
+
+    // ── Phase 1: Initial Dispatch Pass ──
+    const failedIndices: number[] = [];
+
+    for (let i = 0; i < toSend.length; i++) {
+      if (cancelRef.current) break;
+
+      setProgress(prev => prev ? {
+        ...prev,
+        statuses: prev.statuses.map((s, j) => j === i ? "sending" : s)
+      } : prev);
+
+      const t = toSend[i];
+      const res = await sendQuizItem(t);
+
+      if (res.ok) {
+        successCount++;
+        const now = new Date().toISOString();
+        setSentIds(prev => new Set([...prev, t.id]));
+        setSentInfo(prev => ({
+          ...prev,
+          [t.id]: { sentAt: now, count: (prev[t.id]?.count ?? 0) + 1 },
+        }));
+        setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
+        setProgress(prev => prev ? {
+          ...prev,
+          sent: prev.sent + 1,
+          statuses: prev.statuses.map((s, j) => j === i ? "sent" : s)
+        } : prev);
+      } else {
+        failedIndices.push(i);
         setProgress(prev => prev ? {
           ...prev,
           failed: prev.failed + 1,
           statuses: prev.statuses.map((s, j) => j === i ? "failed" : s),
-          errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: "Network error" }],
+          errors: [...prev.errors, { id: t.id, question: t.question.slice(0, 60), msg: res.error || "Broadcast error" }],
         } : prev);
       }
 
-      // Rate-limit delay between sends
+      // Safe Telegram rate limit interval (~1.3s, matches Telegram 1 msg/s limit)
       if (i < toSend.length - 1 && !cancelRef.current) {
-        await new Promise(r => setTimeout(r, DELAY_MS));
+        await new Promise(r => setTimeout(r, TELEGRAM_RATE_LIMIT_MS));
       }
     }
 
-    // ── Completion Post (بوست الختام) ──────────────────────────
-    // Only send completion post if broadcasting was not cancelled and at least one quiz succeeded
+    // ── Phase 2: Automatic Retry Pass for Failed Quizzes ──
+    // Does NOT send the finish message until it tries to send the failed quizzes!
+    if (!cancelRef.current && failedIndices.length > 0) {
+      showToast("info", `جاري إعادة محاولة إرسال الأسئلة المتعثرة (${failedIndices.length} سؤال)...`);
+      // Wait cooldown so Telegram rate limits reset
+      await new Promise(r => setTimeout(r, 3000));
+
+      let pendingFailed = [...failedIndices];
+      for (let round = 1; round <= MAX_RETRY_ROUNDS && pendingFailed.length > 0 && !cancelRef.current; round++) {
+        setProgress(prev => prev ? {
+          ...prev,
+          isRetryingPhase: true,
+          retrying: pendingFailed.length,
+          statuses: prev.statuses.map((s, j) => pendingFailed.includes(j) ? "retrying" : s)
+        } : prev);
+
+        const stillFailed: number[] = [];
+
+        for (let fi = 0; fi < pendingFailed.length; fi++) {
+          if (cancelRef.current) break;
+          const originalIdx = pendingFailed[fi];
+          const t = toSend[originalIdx];
+
+          setProgress(prev => prev ? {
+            ...prev,
+            statuses: prev.statuses.map((s, j) => j === originalIdx ? "sending" : s)
+          } : prev);
+
+          const res = await sendQuizItem(t);
+
+          if (res.ok) {
+            successCount++;
+            const now = new Date().toISOString();
+            setSentIds(prev => new Set([...prev, t.id]));
+            setSentInfo(prev => ({
+              ...prev,
+              [t.id]: { sentAt: now, count: (prev[t.id]?.count ?? 0) + 1 },
+            }));
+            setSelected(prev => { const s = new Set(prev); s.delete(t.id); return s; });
+            setProgress(prev => prev ? {
+              ...prev,
+              sent: prev.sent + 1,
+              failed: Math.max(0, prev.failed - 1),
+              retrying: Math.max(0, (prev.retrying || 1) - 1),
+              statuses: prev.statuses.map((s, j) => j === originalIdx ? "sent" : s),
+              errors: prev.errors.filter(e => e.id !== t.id)
+            } : prev);
+          } else {
+            stillFailed.push(originalIdx);
+            setProgress(prev => prev ? {
+              ...prev,
+              statuses: prev.statuses.map((s, j) => j === originalIdx ? "failed" : s),
+              errors: prev.errors.map(e => e.id === t.id ? { ...e, msg: `[محاولة ${round}] ${res.error || e.msg}` } : e)
+            } : prev);
+          }
+
+          if (fi < pendingFailed.length - 1 && !cancelRef.current) {
+            await new Promise(r => setTimeout(r, TELEGRAM_RATE_LIMIT_MS));
+          }
+        }
+
+        pendingFailed = stillFailed;
+      }
+    }
+
+    // ── Phase 3: Finish Message (بوست الختام / Completion Post) ──
+    // ONLY sent after attempting to send the failed quizzes!
     if (!cancelRef.current && completionPostConfig.enabled && successCount > 0) {
       setProgress(prev => prev ? { ...prev, postStatus: "sending" } : prev);
       try {
@@ -419,6 +514,15 @@ export default function LibraryPage() {
     }
 
     setProgress(prev => prev ? { ...prev, active: false } : prev);
+
+    // Final user notification
+    if (successCount === toSend.length) {
+      showToast("success", `🚀 تم إرسال كافة الأسئلة (${successCount}) بنجاح!`);
+    } else if (successCount > 0) {
+      showToast("info", `تم إرسال ${successCount} سؤال بنجاح، وتعذر إرسال ${toSend.length - successCount} سؤال.`);
+    } else {
+      showToast("error", "تعذر إرسال الأسئلة المحددة إلى المجموعة.");
+    }
   };
 
   const handleSendSelected = () => {
@@ -689,7 +793,7 @@ export default function LibraryPage() {
   // ── Progress helpers ───────────────────────────────────────────────
   const pct = progress ? Math.round(((progress.sent + progress.failed) / progress.total) * 100) : 0;
   const elapsed = progress ? Math.floor((Date.now() - progress.startTime) / 1000) : 0;
-  const perQuiz = elapsed > 0 && progress ? elapsed / (progress.sent + progress.failed || 1) : DELAY_MS / 1000;
+  const perQuiz = elapsed > 0 && progress ? elapsed / (progress.sent + progress.failed || 1) : TELEGRAM_RATE_LIMIT_MS / 1000;
   const remaining = progress ? Math.max(0, Math.round((progress.total - progress.sent - progress.failed) * perQuiz)) : 0;
 
   const fmtTime = (s: number) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
@@ -910,7 +1014,7 @@ export default function LibraryPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: "1rem" }}>
-                {progress.active ? "📡 Broadcasting…" : progress.failed > 0 ? "⚠️ Completed with errors" : "✅ All sent!"}
+                {progress.active ? (progress.isRetryingPhase ? "🔄 Retrying failed quizzes…" : "📡 Broadcasting…") : progress.failed > 0 ? "⚠️ Completed with errors" : "✅ All sent!"}
               </div>
               <div style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)", marginTop: 4 }}>
                 {progress.sent} sent · {progress.failed} failed · {progress.total - progress.sent - progress.failed} remaining
@@ -946,7 +1050,7 @@ export default function LibraryPage() {
             {progress.statuses.map((status, i) => (
               <div key={i} style={{
                 width: 10, height: 10, borderRadius: "var(--radius-full)",
-                background: status === "sent" ? "var(--clr-success)" : status === "failed" ? "var(--clr-danger)" :
+                background: status === "sent" ? "var(--clr-success)" : status === "failed" ? "var(--clr-danger)" : status === "retrying" ? "var(--clr-warning)" :
                   status === "sending" ? "var(--clr-brand)" : "var(--clr-bg-hover)",
                 transition: "background 0.3s",
                 animation: status === "sending" ? "glow-pulse 1s infinite" : undefined,

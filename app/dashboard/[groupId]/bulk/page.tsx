@@ -870,12 +870,16 @@ export default function BulkPage() {
       return;
     }
 
-    // ── Progressive Client-Orchestrated Dispatch for "send" ──
+    // ── Progressive Client-Orchestrated Dispatch for "send" with Telegram rate limits & automatic retry ──
     const validQuizzes = queue.filter((q) => !q.errors?.length);
     if (validQuizzes.length === 0) {
       notify("error", "لا توجد أسئلة صالحة للإرسال. يرجى مراجعة الأخطاء أولاً.");
       return;
     }
+
+    // Telegram Bot API limit: 1 msg/s per chat, 20 msgs/min sustained
+    const TELEGRAM_RATE_LIMIT_MS = 1300;
+    const MAX_RETRY_ROUNDS = 2;
 
     setUploading(true);
     setResult(null);
@@ -884,32 +888,10 @@ export default function BulkPage() {
     let successCount = 0;
     let failCount = 0;
     const accumulatedErrors: string[] = [];
+    const failedQuizzes: QuizPreview[] = [];
 
-    setProgress({
-      total: validQuizzes.length,
-      current: 0,
-      successCount: 0,
-      failCount: 0,
-      currentQuestion: "",
-      isSending: true,
-    });
-
-    for (let i = 0; i < validQuizzes.length; i++) {
-      if (abortRef.current) {
-        accumulatedErrors.push("تم إيقاف الإرسال بواسطة المستخدم / Dispatch cancelled by user");
-        break;
-      }
-
-      const q = validQuizzes[i];
-      setProgress({
-        total: validQuizzes.length,
-        current: i + 1,
-        successCount,
-        failCount,
-        currentQuestion: q.question.slice(0, 50),
-        isSending: true,
-      });
-
+    // Helper to send a single quiz item with rate limit / 429 backoff
+    const sendSingleBulkQuiz = async (q: QuizPreview): Promise<{ ok: boolean; error?: string }> => {
       try {
         let res = await fetch(`/api/groups/${groupId}/bulk`, {
           method: "POST",
@@ -924,12 +906,13 @@ export default function BulkPage() {
         let data = await res.json();
 
         // Handle Telegram 429 Rate Limiting with intelligent backoff
-        if (!res.ok || (data.errors && data.errors.length > 0)) {
+        if (res.status === 429 || !res.ok || (data.errors && data.errors.length > 0)) {
           const rawErr = String(data.errors?.[0] || data.error || "");
-          if (rawErr.includes("429") || rawErr.toLowerCase().includes("too many requests") || rawErr.toLowerCase().includes("retry after")) {
+          if (res.status === 429 || rawErr.includes("429") || rawErr.toLowerCase().includes("too many requests") || rawErr.toLowerCase().includes("retry after")) {
             const retryMatch = rawErr.match(/retry after (\d+)/i);
-            const waitSec = retryMatch ? Math.min(10, Math.max(2, parseInt(retryMatch[1], 10))) : 4;
-            await new Promise((r) => setTimeout(r, waitSec * 1000));
+            const waitSec = Number(data.retryAfter) || (retryMatch ? parseInt(retryMatch[1], 10) : 5);
+            const clampedWait = Math.min(60, Math.max(2, waitSec));
+            await new Promise((r) => setTimeout(r, clampedWait * 1000));
 
             if (!abortRef.current) {
               res = await fetch(`/api/groups/${groupId}/bulk`, {
@@ -948,22 +931,104 @@ export default function BulkPage() {
         }
 
         if (res.ok && data.processed > 0) {
-          successCount++;
-          // Remove from local queue so sent items don't linger
-          setQueue((prev) => prev.filter((item) => item.id !== q.id));
+          return { ok: true };
         } else {
-          failCount++;
-          const errDesc = data.errors?.[0] || data.error || `فشل إرسال السؤال #${i + 1}`;
-          accumulatedErrors.push(`سؤال "${q.question.slice(0, 30)}...": ${errDesc}`);
+          const errDesc = data.errors?.[0] || data.error || "Broadcast error";
+          return { ok: false, error: errDesc };
         }
-      } catch {
-        failCount++;
-        accumulatedErrors.push(`سؤال "${q.question.slice(0, 30)}...": خطأ في الاتصال بالشبكة`);
+      } catch (err: any) {
+        return { ok: false, error: err?.message || "خطأ في الاتصال بالشبكة" };
+      }
+    };
+
+    setProgress({
+      total: validQuizzes.length,
+      current: 0,
+      successCount: 0,
+      failCount: 0,
+      currentQuestion: "",
+      isSending: true,
+    });
+
+    // ── Phase 1: Initial Dispatch Pass ──
+    for (let i = 0; i < validQuizzes.length; i++) {
+      if (abortRef.current) {
+        accumulatedErrors.push("تم إيقاف الإرسال بواسطة المستخدم / Dispatch cancelled by user");
+        break;
       }
 
-      // Safe throttle pause between quizzes (750ms) to respect Telegram API rate limits
+      const q = validQuizzes[i];
+      setProgress({
+        total: validQuizzes.length,
+        current: i + 1,
+        successCount,
+        failCount,
+        currentQuestion: q.question.slice(0, 50),
+        isSending: true,
+      });
+
+      const sendResult = await sendSingleBulkQuiz(q);
+
+      if (sendResult.ok) {
+        successCount++;
+        // Remove from local queue so sent items don't linger
+        setQueue((prev) => prev.filter((item) => item.id !== q.id));
+      } else {
+        failCount++;
+        failedQuizzes.push(q);
+        accumulatedErrors.push(`سؤال "${q.question.slice(0, 30)}...": ${sendResult.error}`);
+      }
+
+      // Safe Telegram rate limit interval (~1.3s)
       if (i < validQuizzes.length - 1 && !abortRef.current) {
-        await new Promise((r) => setTimeout(r, 750));
+        await new Promise((r) => setTimeout(r, TELEGRAM_RATE_LIMIT_MS));
+      }
+    }
+
+    // ── Phase 2: Automatic Retry Pass for Failed Quizzes ──
+    // Does NOT send the finish message until it tries to send the failed quizzes!
+    if (!abortRef.current && failedQuizzes.length > 0) {
+      notify("info", `جاري إعادة محاولة إرسال الأسئلة المتعثرة (${failedQuizzes.length} سؤال)...`);
+      // Wait cooldown so Telegram rate limits reset
+      await new Promise((r) => setTimeout(r, 3000));
+
+      let pendingFailed = [...failedQuizzes];
+      for (let round = 1; round <= MAX_RETRY_ROUNDS && pendingFailed.length > 0 && !abortRef.current; round++) {
+        const stillFailed: QuizPreview[] = [];
+
+        for (let fi = 0; fi < pendingFailed.length; fi++) {
+          if (abortRef.current) break;
+          const q = pendingFailed[fi];
+
+          setProgress({
+            total: validQuizzes.length,
+            current: successCount + 1,
+            successCount,
+            failCount: pendingFailed.length,
+            currentQuestion: `[إعادة محاولة ${round}] ${q.question.slice(0, 40)}`,
+            isSending: true,
+          });
+
+          const retryResult = await sendSingleBulkQuiz(q);
+
+          if (retryResult.ok) {
+            successCount++;
+            failCount = Math.max(0, failCount - 1);
+            setQueue((prev) => prev.filter((item) => item.id !== q.id));
+            // Remove error message for this question now that it succeeded
+            const prefix = `سؤال "${q.question.slice(0, 30)}...":`;
+            const errIdx = accumulatedErrors.findIndex(e => e.startsWith(prefix));
+            if (errIdx !== -1) accumulatedErrors.splice(errIdx, 1);
+          } else {
+            stillFailed.push(q);
+          }
+
+          if (fi < pendingFailed.length - 1 && !abortRef.current) {
+            await new Promise((r) => setTimeout(r, TELEGRAM_RATE_LIMIT_MS));
+          }
+        }
+
+        pendingFailed = stillFailed;
       }
     }
 
@@ -979,12 +1044,13 @@ export default function BulkPage() {
     if (successCount > 0 && failCount === 0) {
       notify("success", `🚀 تم إرسال جميع الأسئلة (${successCount}) بنجاح إلى تيليجرام!`);
     } else if (successCount > 0) {
-      notify("info", `تم إرسال ${successCount} سؤال بنجاح، مع تعذر إرسال ${failCount} سؤال.`);
+      notify("info", `تم إرسال ${successCount} سؤال بنجاح، مع تعذر إرسال ${failCount} سؤال بعد إعادة المحاولة.`);
     } else {
       notify("error", "فشل إرسال الأسئلة إلى تيليجرام.");
     }
 
-    // ── Automatic Completion Post (بوست الختام) ───────────────────
+    // ── Phase 3: Automatic Completion Post (بوست الختام / Finish Message) ──
+    // ONLY sent after attempting to send all failed quizzes!
     if (!abortRef.current && completionPostConfig.enabled && successCount > 0) {
       try {
         const targetTopicId = completionPostConfig.useCustomTopic
