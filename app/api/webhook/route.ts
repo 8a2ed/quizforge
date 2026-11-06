@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { telegram } from "@/lib/telegram";
 import {
   parseExamConfig,
   prepareStudentExamQuestions,
@@ -16,7 +17,21 @@ import {
 
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
-const BOT_USERNAME    = process.env.NEXT_PUBLIC_BOT_USERNAME || "";
+let cachedBotUsername = (process.env.NEXT_PUBLIC_BOT_USERNAME || "").replace(/^@/, "");
+
+async function getBotUsername(): Promise<string> {
+  if (cachedBotUsername) return cachedBotUsername;
+  try {
+    const me = await telegram.getMe();
+    if (me?.username) {
+      cachedBotUsername = me.username.replace(/^@/, "");
+      return cachedBotUsername;
+    }
+  } catch (e) {
+    console.error("[telegram] getMe failed:", e);
+  }
+  return "";
+}
 
 // ─── Exam session store & persistent fallback ──────────────────────────────
 interface ExamQuestion {
@@ -77,20 +92,38 @@ function escapeHtml(s: string): string {
 
 // ─── Send exam preview into a DM ────────────────────────────────────────────
 async function sendExamPreview(chatId: number | string, examId: string, telegramId: string) {
-  const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
-  if (!exam || !exam.isPublished) {
-    await tgCall("sendMessage", { chat_id: chatId, text: "❌ This exam is not available or has been unpublished." });
+  let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+  if (!exam) {
+    const stripped = examId.replace(/^exam[_-]/i, "");
+    exam = await withRetry(() => prisma.exam.findUnique({ where: { id: stripped } })).catch(() => null);
+  }
+
+  if (!exam) {
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: "❌ <b>عذراً، لم يتم العثور على هذا الاختبار.</b>\n\nتأكد من الرابط أو راجع مشرف المجموعة.",
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  if (!exam.isPublished) {
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: `⏳ <b>الاختبار (${escapeHtml(exam.title)}) غير متاح حالياً.</b>\n\nلم يتم نشر هذا الاختبار بعد أو تم إيقافه مؤقتاً من قِبل المشرف.`,
+      parse_mode: "HTML",
+    });
     return;
   }
 
   // Check if student completed already
   const existingCompleted = await withRetry(() => prisma.examResult.findFirst({
-    where: { examId, telegramId, score: { gte: 0 } }
+    where: { examId: exam.id, telegramId, score: { gte: 0 } }
   }));
   if (existingCompleted) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: `✅ You already completed <b>${escapeHtml(exam.title)}</b>.\n\n📊 Your final score: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "PASSED" : "FAILED"})\n\n<i>Contact your instructor if you need to retake.</i>`,
+      text: `✅ <b>لقد أكملت اختبار ${escapeHtml(exam.title)} مسبقاً.</b>\n\n📊 درجتك النهائية: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "ناجح ✅" : "راسب ❌"})\n\n<i>تواصل مع معلمك أو مشرف المادة إذا كنت بحاجة لإعادة الاختبار.</i>`,
       parse_mode: "HTML",
     });
     return;
@@ -98,19 +131,27 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
 
   // Check for in-progress session
   const inProgress = await withRetry(() => prisma.examResult.findFirst({
-    where: { examId, telegramId, score: -1 }
+    where: { examId: exam.id, telegramId, score: -1 }
   }));
 
   const cfg = parseExamConfig(exam.description);
-  const questions = exam.questions as unknown as ExamQuestion[];
+  const questions = (Array.isArray(exam.questions) ? exam.questions : []) as unknown as ExamQuestion[];
+  if (questions.length === 0) {
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: "⚠️ هذا الاختبار لا يحتوي على أي أسئلة حالياً.",
+    });
+    return;
+  }
+
   const text = [
     `📋 <b>${escapeHtml(exam.title)}</b>`,
     cfg.cleanDescription ? `\n${escapeHtml(cfg.cleanDescription)}` : "",
-    `\n\n📊 <b>${questions.length} question${questions.length !== 1 ? "s" : ""}</b>`,
-    exam.timeLimit ? `\n⏱ <b>Time limit: ${Math.floor(exam.timeLimit / 60)} minutes</b>` : "",
-    `\n✅ <b>Passing score: ${exam.passingScore}%</b>`,
-    cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>Anti-cheating: Randomized question & option order</b>` : "",
-    inProgress ? "\n\n⚠️ <i>You have an exam session in progress! Tap Resume to continue.</i>" : "\n\n👉 <i>Tap Begin to start — questions arrive one by one.</i>",
+    `\n\n📊 <b>${questions.length} أسئلة</b>`,
+    exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
+    `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
+    cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
+    inProgress ? "\n\n⚠️ <i>لديك جلسة امتحان جارية! اضغط على استئناف للمتابعة.</i>" : "\n\n👉 <i>اضغط على زر البدء أدناه لبدء الاختبار — تصلك الأسئلة سؤالاً تلو الآخر.</i>",
   ].filter(Boolean).join("");
 
   await tgCall("sendMessage", {
@@ -119,8 +160,8 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [[
-        { text: inProgress ? "▶️ Resume Exam" : "🚀 Begin Exam", callback_data: `exam_begin:${examId}` },
-        { text: "❌ Cancel", callback_data: `exam_cancel:${examId}` },
+        { text: inProgress ? "▶️ استئناف الامتحان (Resume)" : "🚀 بدء الامتحان (Begin)", callback_data: `exam_begin:${exam.id}` },
+        { text: "❌ إلغاء", callback_data: `exam_cancel:${exam.id}` },
       ]],
     },
   });
@@ -131,14 +172,19 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
   if (session.timeLimit) {
     const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
     if (elapsed >= session.timeLimit) {
-      if (cbId) await ackCb(cbId, "⏰ Time's up!", true);
+      if (cbId) await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
       await finishExam(session, true);
       return;
     }
   }
 
-  const q     = session.questions[session.currentQ];
+  const q = session.questions[session.currentQ];
   const total = session.questions.length;
+  if (!q || session.currentQ >= total) {
+    await finishExam(session);
+    return;
+  }
+
   const qNum  = session.currentQ + 1;
 
   // Visual progress bar normalized to 10 blocks
@@ -155,23 +201,23 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
   }
 
   // Format options in message text so long options are never cut off
-  const optionsList = q.options.map((opt, i) => `<b>${String.fromCharCode(65 + i)}.</b> ${escapeHtml(opt)}`).join("\n");
+  const optionsList = (q.options || []).map((opt, i) => `<b>${String.fromCharCode(65 + i)}.</b> ${escapeHtml(opt)}`).join("\n");
 
   const text = [
     `📋 <b>${escapeHtml(session.examTitle)}</b>`,
-    `<code>${bar}</code> Question ${qNum}/${total}${timeStr}`,
+    `<code>${bar}</code> السؤال ${qNum}/${total}${timeStr}`,
     "",
-    `<b>Q${qNum}. ${escapeHtml(q.question)}</b>`,
+    `<b>س${qNum}: ${escapeHtml(q.question)}</b>`,
     "",
     optionsList,
   ].join("\n");
 
   // Format buttons: if all options are short (<= 25 chars), show full option; else 2x2 letter grid
-  const allShort = q.options.every(o => o.length <= 25);
+  const allShort = (q.options || []).every(o => o.length <= 25);
   const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
 
   if (allShort) {
-    for (let i = 0; i < q.options.length; i++) {
+    for (let i = 0; i < (q.options || []).length; i++) {
       keyboard.push([{
         text: `${String.fromCharCode(65 + i)}. ${q.options[i]}`,
         callback_data: `exam_answer:${session.examId}:${session.currentQ}:${i}`,
@@ -179,7 +225,7 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
     }
   } else {
     let row: Array<{ text: string; callback_data: string }> = [];
-    for (let i = 0; i < q.options.length; i++) {
+    for (let i = 0; i < (q.options || []).length; i++) {
       row.push({
         text: `${String.fromCharCode(65 + i)}`,
         callback_data: `exam_answer:${session.examId}:${session.currentQ}:${i}`,
@@ -193,13 +239,36 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
 
   if (cbId) await ackCb(cbId);
 
-  await tgCall("editMessageText", {
-    chat_id: session.chatId,
-    message_id: session.msgId,
-    text,
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: keyboard },
-  });
+  try {
+    const res = await tgCall("editMessageText", {
+      chat_id: session.chatId,
+      message_id: session.msgId,
+      text,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: keyboard },
+    });
+    if (!res || (res as any).ok === false) {
+      const sendRes = await tgCall("sendMessage", {
+        chat_id: session.chatId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      });
+      if (sendRes?.result && typeof sendRes.result === "object" && "message_id" in sendRes.result) {
+        session.msgId = (sendRes.result as { message_id: number }).message_id;
+      }
+    }
+  } catch {
+    const sendRes = await tgCall("sendMessage", {
+      chat_id: session.chatId,
+      text,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: keyboard },
+    }).catch(() => null);
+    if (sendRes?.result && typeof sendRes.result === "object" && "message_id" in sendRes.result) {
+      session.msgId = (sendRes.result as { message_id: number }).message_id;
+    }
+  }
 }
 
 // ─── Finish exam ─────────────────────────────────────────────────────────────
@@ -214,17 +283,18 @@ async function finishExam(session: ExamSession, timedOut = false) {
     const isCorrect = chosen === q.correctOptionId;
     if (isCorrect) correct++;
     const icon         = isCorrect ? "✅" : "❌";
-    const chosenLabel  = chosen >= 0 ? `${String.fromCharCode(65 + chosen)}` : "None";
+    const chosenLabel  = chosen >= 0 ? `${String.fromCharCode(65 + chosen)}` : "لا توجد إجابة";
     const correctLabel = `${String.fromCharCode(65 + q.correctOptionId)}`;
-    breakdown.push(`${icon} <b>Q${i + 1}:</b> Selected <b>${chosenLabel}</b> (Correct: <b>${correctLabel}</b>)`);
+    breakdown.push(`${icon} <b>س${i + 1}:</b> إجابتك: <b>${chosenLabel}</b> (الصحيحة: <b>${correctLabel}</b>)`);
     if (!isCorrect && q.explanation) {
       breakdown.push(`   💡 <i>${escapeHtml(q.explanation)}</i>`);
     }
   });
 
-  const score    = Math.round((correct / questions.length) * 100);
+  const totalQuestions = Math.max(1, questions.length);
+  const score    = Math.round((correct / totalQuestions) * 100);
   const passed   = score >= passingScore;
-  const duration = Math.floor((Date.now() - startedAt) / 1000);
+  const duration = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
 
   // Map student answers back to master question and option indices so teacher analytics align perfectly
   const masterAnswers = mapStudentAnswersToMaster(questions as unknown as StudentExamQuestion[], answers);
@@ -247,47 +317,55 @@ async function finishExam(session: ExamSession, timedOut = false) {
 
   const icon = timedOut ? "⏰" : passed ? "🏆" : "📋";
   const header = [
-    `${icon} <b>Exam Complete: ${escapeHtml(examTitle)}</b>`,
+    `${icon} <b>اكتمل الامتحان: ${escapeHtml(examTitle)}</b>`,
     "",
-    timedOut ? "⏰ <i>Time ran out! Your answered questions were scored.</i>\n" : "",
-    `<b>Score: ${score}% — ${passed ? "PASSED ✅" : "FAILED ❌"}</b>`,
-    `Correct: <b>${correct}/${questions.length}</b> · Time: <b>${Math.floor(duration / 60)}m ${duration % 60}s</b>`,
-    `Passing Requirement: <b>${passingScore}%</b>`,
+    timedOut ? "⏰ <i>انتهى الوقت المحدد للاختبار! تم احتساب الأسئلة المجاب عليها فقط.</i>\n" : "",
+    `<b>الدرجة النهائية: ${score}% — ${passed ? "ناجح ✅" : "راسب ❌"}</b>`,
+    `الإجابات الصحيحة: <b>${correct}/${questions.length}</b> · الوقت المستغرق: <b>${Math.floor(duration / 60)}د ${duration % 60}ث</b>`,
+    `الحد الأدنى للنجاح: <b>${passingScore}%</b>`,
     "",
     "─────────────────",
   ].join("\n");
 
   const fullText = [header, ...breakdown].join("\n");
 
-  if (fullText.length <= 3800) {
-    await tgCall("editMessageText", {
-      chat_id: chatId,
-      message_id: msgId,
-      text: fullText,
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [] },
-    });
-  } else {
-    await tgCall("editMessageText", {
-      chat_id: chatId,
-      message_id: msgId,
-      text: header + "\n<i>Detailed question breakdown sent below:</i>",
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [] },
-    });
+  try {
+    if (fullText.length <= 3800) {
+      const res = await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text: fullText,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      });
+      if (!res || (res as any).ok === false) {
+        await tgCall("sendMessage", { chat_id: chatId, text: fullText, parse_mode: "HTML" });
+      }
+    } else {
+      await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text: header + "\n<i>تفاصيل الأسئلة مرسلة أدناه:</i>",
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      }).catch(() => {});
 
-    let chunk = "";
-    for (const item of breakdown) {
-      if ((chunk + "\n" + item).length > 3000) {
+      let chunk = "";
+      for (const item of breakdown) {
+        if ((chunk + "\n" + item).length > 3000) {
+          await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
+          chunk = item;
+        } else {
+          chunk = chunk ? chunk + "\n" + item : item;
+        }
+      }
+      if (chunk) {
         await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
-        chunk = item;
-      } else {
-        chunk = chunk ? chunk + "\n" + item : item;
       }
     }
-    if (chunk) {
-      await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
-    }
+  } catch (err) {
+    console.error("[exam] finishExam message send error:", err);
+    await tgCall("sendMessage", { chat_id: chatId, text: fullText.slice(0, 3800), parse_mode: "HTML" }).catch(() => {});
   }
 }
 
@@ -300,20 +378,28 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
   const cbId       = cb.id as string;
 
   try {
-    const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
-    if (!exam || !exam.isPublished) return ackCb(cbId, "This exam is not available.", true);
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+    }
+    if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح حالياً.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `You already completed this exam with ${existing.score}%.`, true);
+    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
+    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً بدرجة ${existing.score}%.`, true);
 
-    const cleanBotUsername = BOT_USERNAME.replace(/^@/, "");
-    await tgCall("answerCallbackQuery", {
-      callback_query_id: cbId,
-      url: `https://t.me/${cleanBotUsername}?start=exam_${examId}`,
-    });
+    const botUser = await getBotUsername();
+    if (botUser) {
+      await tgCall("answerCallbackQuery", {
+        callback_query_id: cbId,
+        url: `https://t.me/${botUser}?start=exam_${exam.id}`,
+      });
+    } else {
+      await ackCb(cbId, "تم تجهيز الامتحان! يرجى فتح محادثة البوت للبدء.", true);
+      await sendExamPreview((user as { id: number }).id, exam.id, telegramId);
+    }
   } catch (e) {
     console.error("[exam] handleExamStart:", e);
-    await ackCb(cbId, "Something went wrong. Try again.", true);
+    await ackCb(cbId, "حدث خطأ ما، يرجى المحاولة لاحقاً.", true);
   }
 }
 
@@ -324,26 +410,30 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
   const cbId       = cb.id as string;
   const chatId     = (cb.message as { chat: { id: number } }).chat.id;
   const msgId      = (cb.message as { message_id: number }).message_id;
-  const firstName  = String((user as { first_name: string }).first_name || "Student");
+  const firstName  = String((user as { first_name: string }).first_name || "طالب");
   const lastName   = String((user as { last_name?: string }).last_name || "");
   const name       = [firstName, lastName].filter(Boolean).join(" ");
 
   try {
-    const exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } }));
-    if (!exam || !exam.isPublished) return ackCb(cbId, "Exam not available.", true);
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+    }
+    if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `You already completed this exam (${existing.score}%).`, true);
+    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
+    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً (${existing.score}%).`, true);
 
     const inProgress = await withRetry(() => prisma.examResult.findFirst({
-      where: { examId, telegramId, score: -1 }
+      where: { examId: exam.id, telegramId, score: -1 }
     }));
 
     let session: ExamSession;
     if (inProgress && inProgress.answers && typeof inProgress.answers === "object") {
       const data = inProgress.answers as Record<string, unknown>;
       session = {
-        examId, examTitle: exam.title,
+        examId: exam.id,
+        examTitle: exam.title,
         chatId, msgId, name, telegramId,
         questions: (data.questions as unknown as ExamQuestion[]) || (exam.questions as unknown as ExamQuestion[]),
         answers: (data.answers as Record<number, number>) || {},
@@ -360,7 +450,8 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       );
 
       session = {
-        examId, examTitle: exam.title,
+        examId: exam.id,
+        examTitle: exam.title,
         chatId, msgId, name, telegramId,
         questions: studentQuestions as unknown as ExamQuestion[],
         answers: {},
@@ -372,7 +463,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
 
       await withRetry(() => prisma.examResult.create({
         data: {
-          examId, name, telegramId,
+          examId: exam.id, name, telegramId,
           answers: { answers: {}, questions: studentQuestions, currentQ: 0, startedAt: session.startedAt, msgId, chatId } as unknown as Prisma.InputJsonValue,
           score: -1,
           passed: false,
@@ -381,11 +472,11 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       }));
     }
 
-    examSessions.set(sessionKey(telegramId, examId), session);
+    examSessions.set(sessionKey(telegramId, exam.id), session);
     await sendQuestion(session, cbId);
   } catch (e) {
     console.error("[exam] handleExamBegin:", e);
-    await ackCb(cbId, "Could not start exam. Try again.", true);
+    await ackCb(cbId, "تعذر بدء الاختبار. يرجى المحاولة مجدداً.", true);
   }
 }
 
@@ -400,14 +491,22 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
   // Recovery from database if memory was cleared or serverless cold start
   if (!session) {
     try {
-      const inProgress = await withRetry(() => prisma.examResult.findFirst({
+      let inProgress = await withRetry(() => prisma.examResult.findFirst({
         where: { examId, telegramId, score: -1 },
         include: { exam: true },
       }));
+      if (!inProgress) {
+        const stripped = examId.replace(/^exam[_-]/i, "");
+        inProgress = await withRetry(() => prisma.examResult.findFirst({
+          where: { examId: stripped, telegramId, score: -1 },
+          include: { exam: true },
+        }));
+      }
       if (inProgress && inProgress.exam) {
         const data = (inProgress.answers as Record<string, unknown>) || {};
         session = {
-          examId, examTitle: inProgress.exam.title,
+          examId: inProgress.examId,
+          examTitle: inProgress.exam.title,
           chatId: (cb.message as { chat: { id: number } }).chat.id,
           msgId: (cb.message as { message_id: number }).message_id,
           name: inProgress.name, telegramId,
@@ -425,13 +524,13 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     }
   }
 
-  if (!session) return ackCb(cbId, "Session expired. Please start the exam again.", true);
+  if (!session) return ackCb(cbId, "انتهت صلاحية الجلسة. يرجى بدء الامتحان من جديد.", true);
 
   // Time limit check BEFORE accepting answer
   if (session.timeLimit) {
     const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
     if (elapsed > session.timeLimit) {
-      await ackCb(cbId, "⏰ Time's up!", true);
+      await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
       await finishExam(session, true);
       return;
     }
@@ -442,7 +541,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     return ackCb(cbId);
   }
   if (qIndex > session.currentQ) {
-    return ackCb(cbId, "Please answer the current question.", true);
+    return ackCb(cbId, "يرجى الإجابة على السؤال الحالي أولاً.", true);
   }
 
   session.answers[qIndex] = optionId;
@@ -450,7 +549,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
 
   // Save progress to database
   withRetry(() => prisma.examResult.updateMany({
-    where: { examId, telegramId, score: -1 },
+    where: { examId: session!.examId, telegramId, score: -1 },
     data: {
       answers: {
         answers: session!.answers,
@@ -476,24 +575,79 @@ async function handleExamCancel(cb: Record<string, unknown>, examId: string) {
   const telegramId = String((user as { id: number }).id);
   const cbId       = cb.id as string;
   examSessions.delete(sessionKey(telegramId, examId));
-  prisma.examResult.deleteMany({ where: { examId, telegramId, score: -1 } }).catch(() => {});
-  await ackCb(cbId, "Exam cancelled.", false);
+  prisma.examResult.deleteMany({
+    where: {
+      OR: [
+        { examId, telegramId, score: -1 },
+        { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+      ]
+    }
+  }).catch(() => {});
+  await ackCb(cbId, "تم إلغاء جلسة الامتحان.", false);
   try {
     await tgCall("editMessageText", {
       chat_id: (cb.message as { chat: { id: number } }).chat.id,
       message_id: (cb.message as { message_id: number }).message_id,
-      text: "❌ Exam cancelled.",
+      text: "❌ <b>تم إلغاء الاختبار.</b> يمكنك بدؤه في أي وقت لاحق من المجموعة.",
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: [] },
     });
   } catch { /* ignore */ }
 }
 
+// ─── Diagnostic GET Endpoint ──────────────────────────────────────────────────
+export async function GET(req: NextRequest) {
+  try {
+    const url = new URL(req.url);
+    const host = req.headers.get("host") || "";
+    const protocol = req.headers.get("x-forwarded-proto") || "https";
+    const currentBaseUrl = `${protocol}://${host}`;
+    const webhookUrl = `${currentBaseUrl}/api/webhook`;
+
+    if (url.searchParams.get("sync") === "1" || url.searchParams.get("setup") === "1") {
+      const secret = process.env.WEBHOOK_SECRET || "";
+      const setRes = await telegram.setWebhook(webhookUrl, secret || undefined);
+      const info = await telegram.getWebhookInfo();
+      return NextResponse.json({
+        ok: true,
+        message: "Webhook updated successfully",
+        webhookUrl,
+        setResult: setRes,
+        telegramInfo: info,
+      });
+    }
+
+    const info = await telegram.getWebhookInfo().catch((err: any) => ({ error: err?.message || String(err) }));
+    const botUser = await getBotUsername();
+
+    return NextResponse.json({
+      ok: true,
+      service: "QuizForge Telegram Webhook",
+      botUsername: botUser,
+      currentUrl: webhookUrl,
+      telegramWebhookInfo: info,
+      hint: "To re-register this webhook URL directly with Telegram, open this URL with ?sync=1",
+    });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: err?.message }, { status: 500 });
+  }
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    if (WEBHOOK_SECRET) {
-      const secret = req.headers.get("x-telegram-bot-api-secret-token");
-      if (secret !== WEBHOOK_SECRET) return NextResponse.json({ ok: false }, { status: 401 });
+    // ── Secret token verification ───────────────────────────────────────────
+    const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
+    if (WEBHOOK_SECRET && secretHeader && secretHeader !== WEBHOOK_SECRET) {
+      // Check if it matches any group botConfig webhookSecret in DB before rejecting
+      const matchingConfig = await prisma.botConfig.findFirst({
+        where: { webhookSecret: secretHeader },
+      }).catch(() => null);
+
+      if (!matchingConfig) {
+        console.warn("[webhook] Secret token mismatch:", secretHeader);
+        return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
     }
 
     const update = await req.json();
@@ -552,23 +706,91 @@ export async function POST(req: NextRequest) {
       const chatId = String(msg.chat?.id);
       const text   = (msg.text || "") as string;
 
-      // /start exam_{examId} or /start@BotUsername exam_{examId}
-      const examStartMatch = text.trim().match(/^\/start(?:@\w+)?\s+exam_([a-zA-Z0-9_-]+)/);
-      if (examStartMatch && msg.chat?.type === "private") {
-        const examId = examStartMatch[1];
-        if (examId) await sendExamPreview(msg.chat.id, examId, String(msg.from?.id));
+      // 1. /start in private chat (supports /start exam_{id}, /start {id}, or plain /start)
+      if (msg.chat?.type === "private" && (text.trim().startsWith("/start") || text.trim() === "ابدأ" || text.trim() === "بداية")) {
+        const examStartMatch = text.trim().match(/^\/start(?:@\w+)?(?:\s+(?:exam[_-])?([a-zA-Z0-9_-]+))?/i);
+        const rawExamId = examStartMatch?.[1]?.trim();
+
+        if (rawExamId && rawExamId.toLowerCase() !== "start") {
+          const cleanExamId = rawExamId.replace(/^exam[_-]/i, "");
+          await sendExamPreview(msg.chat.id, cleanExamId, String(msg.from?.id));
+        } else {
+          // General /start greeting in private DM
+          const recentExams = await withRetry(() => prisma.exam.findMany({
+            where: { isPublished: true },
+            take: 5,
+            orderBy: { createdAt: "desc" },
+            include: { group: { select: { title: true } } },
+          })).catch(() => []);
+
+          const examButtons = recentExams.map(e => ([{
+            text: `📝 ${e.title} (${e.group.title})`,
+            callback_data: `exam_start:${e.id}`,
+          }]));
+
+          const welcomeText = [
+            `👋 <b>أهلاً بك في AgriCult Bot! 🎓</b>`,
+            ``,
+            `أنا بوت الامتحانات والمراجعات الذكية لمجتمع <b>AgriCult</b>.`,
+            ``,
+            `🚀 <b>لبدء أي اختبار:</b>`,
+            `اضغط على زر <b>🚀 Start Exam</b> في مجموعتك الدراسية، وسيفتح الامتحان هنا مباشرة بسؤال تلو الآخر مع مؤقت فوري ونتيجتك فور الانتهاء.`,
+            recentExams.length > 0 ? `\n📌 <b>أو اختر مباشرة من الاختبارات المتاحة حالياً:</b>` : "",
+          ].filter(Boolean).join("\n");
+
+          await tgCall("sendMessage", {
+            chat_id: msg.chat.id,
+            text: welcomeText,
+            parse_mode: "HTML",
+            reply_markup: examButtons.length > 0 ? { inline_keyboard: examButtons } : undefined,
+          });
+        }
       }
 
-      // /cancel or /stop in private DM
-      if ((text === "/cancel" || text === "/stop") && msg.chat?.type === "private") {
+      // 2. /help in private chat
+      if (msg.chat?.type === "private" && (text.trim().toLowerCase() === "/help" || text.trim() === "مساعدة")) {
+        await tgCall("sendMessage", {
+          chat_id: msg.chat.id,
+          text: `ℹ️ <b>دليل استخدام AgriCult Bot</b>\n\n` +
+            `🎯 <b>الامتحانات المجدولة:</b>\n` +
+            `اضغط على زر <b>🚀 Start Exam</b> في مجموعتك الدراسية لبدء الامتحان هنا على انفراد.\n\n` +
+            `🧠 <b>المراجعة الذكية (/qs):</b>\n` +
+            `اكتب <code>/qs</code> لاختيار المادة وتوليد أسئلة تفاعلية ذكية بناءً على المنهج الدراسي الفعلي.\n\n` +
+            `📊 <b>الخصوصية والنتائج:</b>\n` +
+            `إجاباتك في الامتحانات سرية وتصل مباشرة لمعلم المادة في لوحة التحكم.\n\n` +
+            `لإلغاء أي جلسة امتحان حالية اكتب <code>/cancel</code>.`,
+          parse_mode: "HTML",
+        });
+      }
+
+      // 3. /settings in private chat
+      if (msg.chat?.type === "private" && text.trim().toLowerCase().startsWith("/settings")) {
+        await tgCall("sendMessage", {
+          chat_id: msg.chat.id,
+          text: `⚙️ <b>إعدادات AgriCult Bot</b>\n\n` +
+            `يتم التحكم في الاختبارات وإعدادات المجموعات وبنك الأسئلة من خلال <b>لوحة تحكم QuizForge</b> الخاصة بالمشرفين والمعلمين.\n\n` +
+            `إذا كنت طالباً، يمكنك بدء الامتحانات عبر مجموعات المواد الدراسية، أو استخدام أمر <code>/qs</code> للتدريب والمراجعة.`,
+          parse_mode: "HTML",
+        });
+      }
+
+      // 4. /cancel or /stop in private DM
+      if ((text === "/cancel" || text === "/stop" || text === "إلغاء") && msg.chat?.type === "private") {
         const telegramId = String(msg.from?.id);
         for (const [key, session] of examSessions.entries()) {
           if (key.startsWith(`${telegramId}:`)) {
             examSessions.delete(key);
-            prisma.examResult.deleteMany({ where: { examId: session.examId, telegramId, score: -1 } }).catch(() => {});
+            prisma.examResult.deleteMany({
+              where: {
+                OR: [
+                  { examId: session.examId, telegramId, score: -1 },
+                  { examId: session.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+                ]
+              }
+            }).catch(() => {});
           }
         }
-        await tgCall("sendMessage", { chat_id: msg.chat.id, text: "Active exam session cancelled." });
+        await tgCall("sendMessage", { chat_id: msg.chat.id, text: "❌ تم إلغاء جلسة الامتحان الحالية بنجاح." });
       }
 
       const resolveGroup = async () => {
@@ -809,7 +1031,7 @@ export async function POST(req: NextRequest) {
         await handleExamCancel(cb, data.slice("exam_cancel:".length));
 
       } else if (data === "exam_cancel") {
-        await ackCb(cb.id as string, "Cancelled.", false);
+        await ackCb(cb.id as string, "تم الإلغاء.", false);
       }
     }
 

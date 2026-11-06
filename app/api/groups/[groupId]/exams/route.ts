@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { telegram } from "@/lib/telegram";
 import { parseExamConfig, formatExamDescription } from "@/lib/examConfig";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
@@ -203,9 +204,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
 
       const launchTopicId = exam.topicId ?? (topicId ? Number(topicId) : null);
 
+      let botUsername = BOT_USERNAME;
+      if (!botUsername) {
+        try {
+          const me = await telegram.getMe();
+          if (me?.username) botUsername = me.username.replace(/^@/, "");
+        } catch {}
+      }
+
       // Inline button: If bot username is known, use direct URL deep-link; otherwise fallback to callback_data
-      const startButton = BOT_USERNAME
-        ? { text: "🚀 Start Exam", url: `https://t.me/${BOT_USERNAME}?start=exam_${exam.id}` }
+      const startButton = botUsername
+        ? { text: "🚀 Start Exam", url: `https://t.me/${botUsername}?start=exam_${exam.id}` }
         : { text: "🚀 Start Exam", callback_data: `exam_start:${exam.id}` };
 
       try {

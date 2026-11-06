@@ -19,11 +19,16 @@ export async function POST(
   const config = await prisma.botConfig.findUnique({ where: { groupId } });
   if (!config) return NextResponse.json({ error: "Config not found" }, { status: 404 });
 
-  const webhookUrl = `${process.env.WEBHOOK_BASE_URL}/api/webhook`;
+  const protocol = req.headers.get("x-forwarded-proto") || "https";
+  const host = req.headers.get("host") || "";
+  const fallbackBase = `${protocol}://${host}`;
+  const baseUrl = (process.env.WEBHOOK_BASE_URL || process.env.NEXTAUTH_URL || fallbackBase).replace(/\/$/, "");
+  const webhookUrl = `${baseUrl}/api/webhook`;
 
   try {
     await telegram.setWebhook(webhookUrl, config.webhookSecret);
-    return NextResponse.json({ ok: true, url: webhookUrl });
+    const info = await telegram.getWebhookInfo().catch(() => null);
+    return NextResponse.json({ ok: true, url: webhookUrl, info });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "Failed" });
   }
