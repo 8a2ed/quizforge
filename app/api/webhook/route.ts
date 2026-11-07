@@ -42,7 +42,7 @@ async function getBotUsername(): Promise<string> {
   return "";
 }
 
-// â”€â”€â”€ Exam session store & persistent fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Exam session store & persistent fallback ──────────────────────────────
 interface ExamQuestion {
   question: string;
   options: string[];
@@ -68,7 +68,7 @@ interface ExamSession {
   passingScore: number;
 }
 
-// â”€â”€â”€ Telegram helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Telegram helpers ───────────────────────────────────────────────────────
 async function tgCall(method: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 15_000);
@@ -97,7 +97,7 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-// â”€â”€â”€ Send exam preview into a DM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Send exam preview into a DM ────────────────────────────────────────────
 async function sendExamPreview(chatId: number | string, examId: string, telegramId: string) {
   let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
   if (!exam) {
@@ -108,7 +108,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   if (!exam) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: "âŒ <b>Ø¹Ø°Ø±Ø§Ù‹ØŒ Ù„Ù… ÙŠØªÙ… Ø§Ù„Ø¹Ø«ÙˆØ± Ø¹Ù„Ù‰ Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±.</b>\n\nØªØ£ÙƒØ¯ Ù…Ù† Ø§Ù„Ø±Ø§Ø¨Ø· Ø£Ùˆ Ø±Ø§Ø¬Ø¹ Ù…Ø´Ø±Ù Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹Ø©.",
+      text: "❌ <b>عذراً، لم يتم العثور على هذا الاختبار.</b>\n\nتأكد من الرابط أو راجع مشرف المجموعة.",
       parse_mode: "HTML",
     });
     return;
@@ -117,7 +117,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   if (!exam.isPublished) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: `â³ <b>Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± (${escapeHtml(exam.title)}) ØºÙŠØ± Ù…ØªØ§Ø­ Ø­Ø§Ù„ÙŠØ§Ù‹.</b>\n\nÙ„Ù… ÙŠØªÙ… Ù†Ø´Ø± Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± Ø¨Ø¹Ø¯ Ø£Ùˆ ØªÙ… Ø¥ÙŠÙ‚Ø§ÙÙ‡ Ù…Ø¤Ù‚ØªØ§Ù‹ Ù…Ù† Ù‚ÙØ¨Ù„ Ø§Ù„Ù…Ø´Ø±Ù.`,
+      text: `⏳ <b>الاختبار (${escapeHtml(exam.title)}) غير متاح حالياً.</b>\n\nلم يتم نشر هذا الاختبار بعد أو تم إيقافه مؤقتاً من قِبل المشرف.`,
       parse_mode: "HTML",
     });
     return;
@@ -130,7 +130,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   if (existingCompleted) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: `âœ… <b>Ù„Ù‚Ø¯ Ø£ÙƒÙ…Ù„Øª Ø§Ø®ØªØ¨Ø§Ø± ${escapeHtml(exam.title)} Ù…Ø³Ø¨Ù‚Ø§Ù‹.</b>\n\nðŸ“Š Ø¯Ø±Ø¬ØªÙƒ Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠØ©: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "Ù†Ø§Ø¬Ø­ âœ…" : "Ø±Ø§Ø³Ø¨ âŒ"})\n\n<i>ØªÙˆØ§ØµÙ„ Ù…Ø¹ Ù…Ø¹Ù„Ù…Ùƒ Ø£Ùˆ Ù…Ø´Ø±Ù Ø§Ù„Ù…Ø§Ø¯Ø© Ø¥Ø°Ø§ ÙƒÙ†Øª Ø¨Ø­Ø§Ø¬Ø© Ù„Ø¥Ø¹Ø§Ø¯Ø© Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±.</i>`,
+      text: `✅ <b>لقد أكملت اختبار ${escapeHtml(exam.title)} مسبقاً.</b>\n\n📊 درجتك النهائية: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "ناجح ✅" : "راسب ❌"})\n\n<i>تواصل مع معلمك أو مشرف المادة إذا كنت بحاجة لإعادة الاختبار.</i>`,
       parse_mode: "HTML",
     });
     return;
@@ -146,19 +146,19 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   if (questions.length === 0) {
     await tgCall("sendMessage", {
       chat_id: chatId,
-      text: "âš ï¸ Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± Ù„Ø§ ÙŠØ­ØªÙˆÙŠ Ø¹Ù„Ù‰ Ø£ÙŠ Ø£Ø³Ø¦Ù„Ø© Ø­Ø§Ù„ÙŠØ§Ù‹.",
+      text: "⚠️ هذا الاختبار لا يحتوي على أي أسئلة حالياً.",
     });
     return;
   }
 
   const text = [
-    `ðŸ“‹ <b>${escapeHtml(exam.title)}</b>`,
+    `📋 <b>${escapeHtml(exam.title)}</b>`,
     cfg.cleanDescription ? `\n${escapeHtml(cfg.cleanDescription)}` : "",
-    `\n\nðŸ“Š <b>${questions.length} Ø£Ø³Ø¦Ù„Ø©</b>`,
-    exam.timeLimit ? `\nâ± <b>Ø§Ù„Ù…Ø¯Ø© Ø§Ù„Ø²Ù…Ù†ÙŠØ©: ${Math.floor(exam.timeLimit / 60)} Ø¯Ù‚ÙŠÙ‚Ø©</b>` : "",
-    `\nâœ… <b>Ø¯Ø±Ø¬Ø© Ø§Ù„Ù†Ø¬Ø§Ø­: ${exam.passingScore}%</b>`,
-    cfg.shuffleQuestions || cfg.shuffleOptions ? `\nðŸ›¡ <b>Ù…ÙƒØ§ÙØ­Ø© Ø§Ù„ØºØ´: ØªØ±ØªÙŠØ¨ Ø¹Ø´ÙˆØ§Ø¦ÙŠ Ù„Ù„Ø£Ø³Ø¦Ù„Ø© ÙˆØ§Ù„Ø®ÙŠØ§Ø±Ø§Øª</b>` : "",
-    inProgress ? "\n\nâš ï¸ <i>Ù„Ø¯ÙŠÙƒ Ø¬Ù„Ø³Ø© Ø§Ù…ØªØ­Ø§Ù† Ø¬Ø§Ø±ÙŠØ©! Ø§Ø¶ØºØ· Ø¹Ù„Ù‰ Ø§Ø³ØªØ¦Ù†Ø§Ù Ù„Ù„Ù…ØªØ§Ø¨Ø¹Ø©.</i>" : "\n\nðŸ‘‰ <i>Ø§Ø¶ØºØ· Ø¹Ù„Ù‰ Ø²Ø± Ø§Ù„Ø¨Ø¯Ø¡ Ø£Ø¯Ù†Ø§Ù‡ Ù„Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± â€” ØªØµÙ„Ùƒ Ø§Ù„Ø£Ø³Ø¦Ù„Ø© Ø³Ø¤Ø§Ù„Ø§Ù‹ ØªÙ„Ùˆ Ø§Ù„Ø¢Ø®Ø±.</i>",
+    `\n\n📊 <b>${questions.length} أسئلة</b>`,
+    exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
+    `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
+    cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
+    inProgress ? "\n\n⚠️ <i>لديك جلسة امتحان جارية! اضغط على استئناف للمتابعة.</i>" : "\n\n👉 <i>اضغط على زر البدء أدناه لبدء الاختبار — تصلك الأسئلة سؤالاً تلو الآخر.</i>",
   ].filter(Boolean).join("");
 
   await tgCall("sendMessage", {
@@ -167,19 +167,19 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [[
-        { text: inProgress ? "â–¶ï¸ Ø§Ø³ØªØ¦Ù†Ø§Ù Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† (Resume)" : "ðŸš€ Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† (Begin)", callback_data: `exam_begin:${exam.id}` },
-        { text: "âŒ Ø¥Ù„ØºØ§Ø¡", callback_data: `exam_cancel:${exam.id}` },
+        { text: inProgress ? "▶️ استئناف الامتحان (Resume)" : "🚀 بدء الامتحان (Begin)", callback_data: `exam_begin:${exam.id}` },
+        { text: "❌ إلغاء", callback_data: `exam_cancel:${exam.id}` },
       ]],
     },
   });
 }
 
-// â”€â”€â”€ Send one question â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Send one question ────────────────────────────────────────────────────────
 async function sendQuestion(session: ExamSession, cbId?: string) {
   if (session.timeLimit) {
     const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
     if (elapsed >= session.timeLimit) {
-      if (cbId) await ackCb(cbId, "â° Ø§Ù†ØªÙ‡Ù‰ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø­Ø¯Ø¯!", true);
+      if (cbId) await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
       await finishExam(session, true);
       return;
     }
@@ -196,7 +196,7 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
 
   // Visual progress bar normalized to 10 blocks
   const filled = Math.min(10, Math.max(1, Math.round((qNum / total) * 10)));
-  const bar    = "â–“".repeat(filled) + "â–‘".repeat(10 - filled);
+  const bar    = "▓".repeat(filled) + "░".repeat(10 - filled);
 
   // Remaining time indicator if limited
   let timeStr = "";
@@ -204,17 +204,17 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
     const remaining = Math.max(0, session.timeLimit - Math.floor((Date.now() - session.startedAt) / 1000));
     const mins = Math.floor(remaining / 60);
     const secs = remaining % 60;
-    timeStr = ` Â· â± ${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    timeStr = ` · ⏱ ${mins}:${secs < 10 ? "0" : ""}${secs}`;
   }
 
   // Format options in message text so long options are never cut off
   const optionsList = (q.options || []).map((opt, i) => `<b>${String.fromCharCode(65 + i)}.</b> ${escapeHtml(opt)}`).join("\n");
 
   const text = [
-    `ðŸ“‹ <b>${escapeHtml(session.examTitle)}</b>`,
-    `<code>${bar}</code> Ø§Ù„Ø³Ø¤Ø§Ù„ ${qNum}/${total}${timeStr}`,
+    `📋 <b>${escapeHtml(session.examTitle)}</b>`,
+    `<code>${bar}</code> السؤال ${qNum}/${total}${timeStr}`,
     "",
-    `<b>Ø³${qNum}: ${escapeHtml(q.question)}</b>`,
+    `<b>س${qNum}: ${escapeHtml(q.question)}</b>`,
     "",
     optionsList,
   ].join("\n");
@@ -278,7 +278,7 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
   }
 }
 
-// â”€â”€â”€ Finish exam â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Finish exam ─────────────────────────────────────────────────────────────
 async function finishExam(session: ExamSession, timedOut = false) {
   const { questions, answers, examId, passingScore, name, telegramId, chatId, msgId, startedAt, examTitle } = session;
   examSessions.delete(sessionKey(telegramId, examId));
@@ -289,12 +289,12 @@ async function finishExam(session: ExamSession, timedOut = false) {
     const chosen    = answers[i] ?? -1;
     const isCorrect = chosen === q.correctOptionId;
     if (isCorrect) correct++;
-    const icon         = isCorrect ? "âœ…" : "âŒ";
-    const chosenLabel  = chosen >= 0 ? `${String.fromCharCode(65 + chosen)}` : "Ù„Ø§ ØªÙˆØ¬Ø¯ Ø¥Ø¬Ø§Ø¨Ø©";
+    const icon         = isCorrect ? "✅" : "❌";
+    const chosenLabel  = chosen >= 0 ? `${String.fromCharCode(65 + chosen)}` : "لا توجد إجابة";
     const correctLabel = `${String.fromCharCode(65 + q.correctOptionId)}`;
-    breakdown.push(`${icon} <b>Ø³${i + 1}:</b> Ø¥Ø¬Ø§Ø¨ØªÙƒ: <b>${chosenLabel}</b> (Ø§Ù„ØµØ­ÙŠØ­Ø©: <b>${correctLabel}</b>)`);
+    breakdown.push(`${icon} <b>س${i + 1}:</b> إجابتك: <b>${chosenLabel}</b> (الصحيحة: <b>${correctLabel}</b>)`);
     if (!isCorrect && q.explanation) {
-      breakdown.push(`   ðŸ’¡ <i>${escapeHtml(q.explanation)}</i>`);
+      breakdown.push(`   💡 <i>${escapeHtml(q.explanation)}</i>`);
     }
   });
 
@@ -322,16 +322,16 @@ async function finishExam(session: ExamSession, timedOut = false) {
     console.error("[exam] save result error:", e);
   }
 
-  const icon = timedOut ? "â°" : passed ? "ðŸ†" : "ðŸ“‹";
+  const icon = timedOut ? "⏰" : passed ? "🏆" : "📋";
   const header = [
-    `${icon} <b>Ø§ÙƒØªÙ…Ù„ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†: ${escapeHtml(examTitle)}</b>`,
+    `${icon} <b>اكتمل الامتحان: ${escapeHtml(examTitle)}</b>`,
     "",
-    timedOut ? "â° <i>Ø§Ù†ØªÙ‡Ù‰ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø­Ø¯Ø¯ Ù„Ù„Ø§Ø®ØªØ¨Ø§Ø±! ØªÙ… Ø§Ø­ØªØ³Ø§Ø¨ Ø§Ù„Ø£Ø³Ø¦Ù„Ø© Ø§Ù„Ù…Ø¬Ø§Ø¨ Ø¹Ù„ÙŠÙ‡Ø§ ÙÙ‚Ø·.</i>\n" : "",
-    `<b>Ø§Ù„Ø¯Ø±Ø¬Ø© Ø§Ù„Ù†Ù‡Ø§Ø¦ÙŠØ©: ${score}% â€” ${passed ? "Ù†Ø§Ø¬Ø­ âœ…" : "Ø±Ø§Ø³Ø¨ âŒ"}</b>`,
-    `Ø§Ù„Ø¥Ø¬Ø§Ø¨Ø§Øª Ø§Ù„ØµØ­ÙŠØ­Ø©: <b>${correct}/${questions.length}</b> Â· Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø³ØªØºØ±Ù‚: <b>${Math.floor(duration / 60)}Ø¯ ${duration % 60}Ø«</b>`,
-    `Ø§Ù„Ø­Ø¯ Ø§Ù„Ø£Ø¯Ù†Ù‰ Ù„Ù„Ù†Ø¬Ø§Ø­: <b>${passingScore}%</b>`,
+    timedOut ? "⏰ <i>انتهى الوقت المحدد للاختبار! تم احتساب الأسئلة المجاب عليها فقط.</i>\n" : "",
+    `<b>الدرجة النهائية: ${score}% — ${passed ? "ناجح ✅" : "راسب ❌"}</b>`,
+    `الإجابات الصحيحة: <b>${correct}/${questions.length}</b> · الوقت المستغرق: <b>${Math.floor(duration / 60)}د ${duration % 60}ث</b>`,
+    `الحد الأدنى للنجاح: <b>${passingScore}%</b>`,
     "",
-    "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€",
+    "─────────────────",
   ].join("\n");
 
   const fullText = [header, ...breakdown].join("\n");
@@ -352,7 +352,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
       await tgCall("editMessageText", {
         chat_id: chatId,
         message_id: msgId,
-        text: header + "\n<i>ØªÙØ§ØµÙŠÙ„ Ø§Ù„Ø£Ø³Ø¦Ù„Ø© Ù…Ø±Ø³Ù„Ø© Ø£Ø¯Ù†Ø§Ù‡:</i>",
+        text: header + "\n<i>تفاصيل الأسئلة مرسلة أدناه:</i>",
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [] },
       }).catch(() => {});
@@ -376,9 +376,9 @@ async function finishExam(session: ExamSession, timedOut = false) {
   }
 }
 
-// â”€â”€â”€ Callback handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Callback handlers ────────────────────────────────────────────────────────
 
-// exam_start:{examId}  â€” fired from the group "Start Exam" button (or fallback)
+// exam_start:{examId}  — fired from the group "Start Exam" button (or fallback)
 async function handleExamStart(cb: Record<string, unknown>, examId: string) {
   const user       = cb.from as Record<string, unknown>;
   const telegramId = String((user as { id: number }).id);
@@ -389,10 +389,10 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
     if (!exam) {
       exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
     }
-    if (!exam || !exam.isPublished) return ackCb(cbId, "Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± ØºÙŠØ± Ù…ØªØ§Ø­ Ø­Ø§Ù„ÙŠØ§Ù‹.", true);
+    if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح حالياً.", true);
 
     const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `Ù„Ù‚Ø¯ Ø£ØªÙ…Ù…Øª Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± Ù…Ø³Ø¨Ù‚Ø§Ù‹ Ø¨Ø¯Ø±Ø¬Ø© ${existing.score}%.`, true);
+    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً بدرجة ${existing.score}%.`, true);
 
     const botUser = await getBotUsername();
     if (botUser) {
@@ -401,23 +401,23 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
         url: `https://t.me/${botUser}?start=exam_${exam.id}`,
       });
     } else {
-      await ackCb(cbId, "ØªÙ… ØªØ¬Ù‡ÙŠØ² Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†! ÙŠØ±Ø¬Ù‰ ÙØªØ­ Ù…Ø­Ø§Ø¯Ø«Ø© Ø§Ù„Ø¨ÙˆØª Ù„Ù„Ø¨Ø¯Ø¡.", true);
+      await ackCb(cbId, "تم تجهيز الامتحان! يرجى فتح محادثة البوت للبدء.", true);
       await sendExamPreview((user as { id: number }).id, exam.id, telegramId);
     }
   } catch (e) {
     console.error("[exam] handleExamStart:", e);
-    await ackCb(cbId, "Ø­Ø¯Ø« Ø®Ø·Ø£ Ù…Ø§ØŒ ÙŠØ±Ø¬Ù‰ Ø§Ù„Ù…Ø­Ø§ÙˆÙ„Ø© Ù„Ø§Ø­Ù‚Ø§Ù‹.", true);
+    await ackCb(cbId, "حدث خطأ ما، يرجى المحاولة لاحقاً.", true);
   }
 }
 
-// exam_begin:{examId}  â€” fired from the DM "Begin Exam" button
+// exam_begin:{examId}  — fired from the DM "Begin Exam" button
 async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
   const user       = cb.from as Record<string, unknown>;
   const telegramId = String((user as { id: number }).id);
   const cbId       = cb.id as string;
   const chatId     = (cb.message as { chat: { id: number } }).chat.id;
   const msgId      = (cb.message as { message_id: number }).message_id;
-  const firstName  = String((user as { first_name: string }).first_name || "Ø·Ø§Ù„Ø¨");
+  const firstName  = String((user as { first_name: string }).first_name || "طالب");
   const lastName   = String((user as { last_name?: string }).last_name || "");
   const name       = [firstName, lastName].filter(Boolean).join(" ");
 
@@ -426,10 +426,10 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     if (!exam) {
       exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
     }
-    if (!exam || !exam.isPublished) return ackCb(cbId, "Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± ØºÙŠØ± Ù…ØªØ§Ø­.", true);
+    if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح.", true);
 
     const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `Ù„Ù‚Ø¯ Ø£ØªÙ…Ù…Øª Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø± Ù…Ø³Ø¨Ù‚Ø§Ù‹ (${existing.score}%).`, true);
+    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً (${existing.score}%).`, true);
 
     const inProgress = await withRetry(() => prisma.examResult.findFirst({
       where: { examId: exam.id, telegramId, score: -1 }
@@ -494,7 +494,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     await sendQuestion(session, cbId);
   } catch (e) {
     console.error("[exam] handleExamBegin:", e);
-    await ackCb(cbId, "ØªØ¹Ø°Ø± Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±. ÙŠØ±Ø¬Ù‰ Ø§Ù„Ù…Ø­Ø§ÙˆÙ„Ø© Ù…Ø¬Ø¯Ø¯Ø§Ù‹.", true);
+    await ackCb(cbId, "تعذر بدء الاختبار. يرجى المحاولة مجدداً.", true);
   }
 }
 
@@ -542,13 +542,13 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     }
   }
 
-  if (!session) return ackCb(cbId, "Ø§Ù†ØªÙ‡Øª ØµÙ„Ø§Ø­ÙŠØ© Ø§Ù„Ø¬Ù„Ø³Ø©. ÙŠØ±Ø¬Ù‰ Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† Ù…Ù† Ø¬Ø¯ÙŠØ¯.", true);
+  if (!session) return ackCb(cbId, "انتهت صلاحية الجلسة. يرجى بدء الامتحان من جديد.", true);
 
   // Time limit check BEFORE accepting answer
   if (session.timeLimit) {
     const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
     if (elapsed > session.timeLimit) {
-      await ackCb(cbId, "â° Ø§Ù†ØªÙ‡Ù‰ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø­Ø¯Ø¯!", true);
+      await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
       await finishExam(session, true);
       return;
     }
@@ -559,7 +559,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     return ackCb(cbId);
   }
   if (qIndex > session.currentQ) {
-    return ackCb(cbId, "ÙŠØ±Ø¬Ù‰ Ø§Ù„Ø¥Ø¬Ø§Ø¨Ø© Ø¹Ù„Ù‰ Ø§Ù„Ø³Ø¤Ø§Ù„ Ø§Ù„Ø­Ø§Ù„ÙŠ Ø£ÙˆÙ„Ø§Ù‹.", true);
+    return ackCb(cbId, "يرجى الإجابة على السؤال الحالي أولاً.", true);
   }
 
   session.answers[qIndex] = optionId;
@@ -605,19 +605,19 @@ async function handleExamCancel(cb: Record<string, unknown>, examId: string) {
       ]
     }
   }).catch(() => {});
-  await ackCb(cbId, "ØªÙ… Ø¥Ù„ØºØ§Ø¡ Ø¬Ù„Ø³Ø© Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†.", false);
+  await ackCb(cbId, "تم إلغاء جلسة الامتحان.", false);
   try {
     await tgCall("editMessageText", {
       chat_id: (cb.message as { chat: { id: number } }).chat.id,
       message_id: (cb.message as { message_id: number }).message_id,
-      text: "âŒ <b>ØªÙ… Ø¥Ù„ØºØ§Ø¡ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±.</b> ÙŠÙ…ÙƒÙ†Ùƒ Ø¨Ø¯Ø¤Ù‡ ÙÙŠ Ø£ÙŠ ÙˆÙ‚Øª Ù„Ø§Ø­Ù‚ Ù…Ù† Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹Ø©.",
+      text: "❌ <b>تم إلغاء الاختبار.</b> يمكنك بدؤه في أي وقت لاحق من المجموعة.",
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: [] },
     });
   } catch { /* ignore */ }
 }
 
-// â”€â”€â”€ Diagnostic GET Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Diagnostic GET Endpoint ──────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -655,10 +655,10 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// â”€â”€â”€ Main handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Main handler ─────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    // â”€â”€ Secret token verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Secret token verification ───────────────────────────────────────────
     const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
     if (WEBHOOK_SECRET && secretHeader && secretHeader !== WEBHOOK_SECRET) {
       // Check if it matches any group botConfig webhookSecret in DB before rejecting
@@ -674,7 +674,7 @@ export async function POST(req: NextRequest) {
 
     const update = await req.json();
 
-    // â”€â”€ Poll answer (for non-anonymous polls) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Poll answer (for non-anonymous polls) ────────────────────────────────
     if (update.poll_answer) {
       const { poll_id, user, option_ids } = update.poll_answer;
       const quiz = await withRetry(() => prisma.quiz.findFirst({ where: { pollId: poll_id } }));
@@ -687,7 +687,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // â”€â”€ Poll state & anonymous votes sync (real-time for both types) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Poll state & anonymous votes sync (real-time for both types) ─────────
     if (update.poll) {
       const poll = update.poll;
       const quiz = await withRetry(() =>
@@ -722,14 +722,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // â”€â”€ Message events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Message events ───────────────────────────────────────────────────────
     if (update.message) {
       const msg    = update.message;
       const chatId = String(msg.chat?.id);
       const text   = (msg.text || "") as string;
 
       // 1. /start in private chat (supports /start exam_{id}, /start {id}, or plain /start)
-      if (msg.chat?.type === "private" && (text.trim().startsWith("/start") || text.trim() === "Ø§Ø¨Ø¯Ø£" || text.trim() === "Ø¨Ø¯Ø§ÙŠØ©")) {
+      if (msg.chat?.type === "private" && (text.trim().startsWith("/start") || text.trim() === "ابدأ" || text.trim() === "بداية")) {
         const examStartMatch = text.trim().match(/^\/start(?:@\w+)?(?:\s+(?:exam[_-])?([a-zA-Z0-9_-]+))?/i);
         const rawExamId = examStartMatch?.[1]?.trim();
 
@@ -746,18 +746,18 @@ export async function POST(req: NextRequest) {
           })).catch(() => []);
 
           const examButtons = recentExams.map(e => ([{
-            text: `ðŸ“ ${e.title} (${e.group.title})`,
+            text: `📝 ${e.title} (${e.group.title})`,
             callback_data: `exam_start:${e.id}`,
           }]));
 
           const welcomeText = [
-            `ðŸ‘‹ <b>Ø£Ù‡Ù„Ø§Ù‹ Ø¨Ùƒ ÙÙŠ AgriCult Bot! ðŸŽ“</b>`,
+            `👋 <b>أهلاً بك في AgriCult Bot! 🎓</b>`,
             ``,
-            `Ø£Ù†Ø§ Ø¨ÙˆØª Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†Ø§Øª ÙˆØ§Ù„Ù…Ø±Ø§Ø¬Ø¹Ø§Øª Ø§Ù„Ø°ÙƒÙŠØ© Ù„Ù…Ø¬ØªÙ…Ø¹ <b>AgriCult</b>.`,
+            `أنا بوت الامتحانات والمراجعات الذكية لمجتمع <b>AgriCult</b>.`,
             ``,
-            `ðŸš€ <b>Ù„Ø¨Ø¯Ø¡ Ø£ÙŠ Ø§Ø®ØªØ¨Ø§Ø±:</b>`,
-            `Ø§Ø¶ØºØ· Ø¹Ù„Ù‰ Ø²Ø± <b>ðŸš€ Start Exam</b> ÙÙŠ Ù…Ø¬Ù…ÙˆØ¹ØªÙƒ Ø§Ù„Ø¯Ø±Ø§Ø³ÙŠØ©ØŒ ÙˆØ³ÙŠÙØªØ­ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† Ù‡Ù†Ø§ Ù…Ø¨Ø§Ø´Ø±Ø© Ø¨Ø³Ø¤Ø§Ù„ ØªÙ„Ùˆ Ø§Ù„Ø¢Ø®Ø± Ù…Ø¹ Ù…Ø¤Ù‚Øª ÙÙˆØ±ÙŠ ÙˆÙ†ØªÙŠØ¬ØªÙƒ ÙÙˆØ± Ø§Ù„Ø§Ù†ØªÙ‡Ø§Ø¡.`,
-            recentExams.length > 0 ? `\nðŸ“Œ <b>Ø£Ùˆ Ø§Ø®ØªØ± Ù…Ø¨Ø§Ø´Ø±Ø© Ù…Ù† Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±Ø§Øª Ø§Ù„Ù…ØªØ§Ø­Ø© Ø­Ø§Ù„ÙŠØ§Ù‹:</b>` : "",
+            `🚀 <b>لبدء أي اختبار:</b>`,
+            `اضغط على زر <b>🚀 Start Exam</b> في مجموعتك الدراسية، وسيفتح الامتحان هنا مباشرة بسؤال تلو الآخر مع مؤقت فوري ونتيجتك فور الانتهاء.`,
+            recentExams.length > 0 ? `\n📌 <b>أو اختر مباشرة من الاختبارات المتاحة حالياً:</b>` : "",
           ].filter(Boolean).join("\n");
 
           await tgCall("sendMessage", {
@@ -770,17 +770,17 @@ export async function POST(req: NextRequest) {
       }
 
       // 2. /help in private chat
-      if (msg.chat?.type === "private" && (text.trim().toLowerCase() === "/help" || text.trim() === "Ù…Ø³Ø§Ø¹Ø¯Ø©")) {
+      if (msg.chat?.type === "private" && (text.trim().toLowerCase() === "/help" || text.trim() === "مساعدة")) {
         await tgCall("sendMessage", {
           chat_id: msg.chat.id,
-          text: `â„¹ï¸ <b>Ø¯Ù„ÙŠÙ„ Ø§Ø³ØªØ®Ø¯Ø§Ù… AgriCult Bot</b>\n\n` +
-            `ðŸŽ¯ <b>Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†Ø§Øª Ø§Ù„Ù…Ø¬Ø¯ÙˆÙ„Ø©:</b>\n` +
-            `Ø§Ø¶ØºØ· Ø¹Ù„Ù‰ Ø²Ø± <b>ðŸš€ Start Exam</b> ÙÙŠ Ù…Ø¬Ù…ÙˆØ¹ØªÙƒ Ø§Ù„Ø¯Ø±Ø§Ø³ÙŠØ© Ù„Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† Ù‡Ù†Ø§ Ø¹Ù„Ù‰ Ø§Ù†ÙØ±Ø§Ø¯.\n\n` +
-            `ðŸ§  <b>Ø§Ù„Ù…Ø±Ø§Ø¬Ø¹Ø© Ø§Ù„Ø°ÙƒÙŠØ© (/qs):</b>\n` +
-            `Ø§ÙƒØªØ¨ <code>/qs</code> Ù„Ø§Ø®ØªÙŠØ§Ø± Ø§Ù„Ù…Ø§Ø¯Ø© ÙˆØªÙˆÙ„ÙŠØ¯ Ø£Ø³Ø¦Ù„Ø© ØªÙØ§Ø¹Ù„ÙŠØ© Ø°ÙƒÙŠØ© Ø¨Ù†Ø§Ø¡Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ù…Ù†Ù‡Ø¬ Ø§Ù„Ø¯Ø±Ø§Ø³ÙŠ Ø§Ù„ÙØ¹Ù„ÙŠ.\n\n` +
-            `ðŸ“Š <b>Ø§Ù„Ø®ØµÙˆØµÙŠØ© ÙˆØ§Ù„Ù†ØªØ§Ø¦Ø¬:</b>\n` +
-            `Ø¥Ø¬Ø§Ø¨Ø§ØªÙƒ ÙÙŠ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†Ø§Øª Ø³Ø±ÙŠØ© ÙˆØªØµÙ„ Ù…Ø¨Ø§Ø´Ø±Ø© Ù„Ù…Ø¹Ù„Ù… Ø§Ù„Ù…Ø§Ø¯Ø© ÙÙŠ Ù„ÙˆØ­Ø© Ø§Ù„ØªØ­ÙƒÙ….\n\n` +
-            `Ù„Ø¥Ù„ØºØ§Ø¡ Ø£ÙŠ Ø¬Ù„Ø³Ø© Ø§Ù…ØªØ­Ø§Ù† Ø­Ø§Ù„ÙŠØ© Ø§ÙƒØªØ¨ <code>/cancel</code>.`,
+          text: `ℹ️ <b>دليل استخدام AgriCult Bot</b>\n\n` +
+            `🎯 <b>الامتحانات المجدولة:</b>\n` +
+            `اضغط على زر <b>🚀 Start Exam</b> في مجموعتك الدراسية لبدء الامتحان هنا على انفراد.\n\n` +
+            `🧠 <b>المراجعة الذكية (/qs):</b>\n` +
+            `اكتب <code>/qs</code> لاختيار المادة وتوليد أسئلة تفاعلية ذكية بناءً على المنهج الدراسي الفعلي.\n\n` +
+            `📊 <b>الخصوصية والنتائج:</b>\n` +
+            `إجاباتك في الامتحانات سرية وتصل مباشرة لمعلم المادة في لوحة التحكم.\n\n` +
+            `لإلغاء أي جلسة امتحان حالية اكتب <code>/cancel</code>.`,
           parse_mode: "HTML",
         });
       }
@@ -789,15 +789,15 @@ export async function POST(req: NextRequest) {
       if (msg.chat?.type === "private" && text.trim().toLowerCase().startsWith("/settings")) {
         await tgCall("sendMessage", {
           chat_id: msg.chat.id,
-          text: `âš™ï¸ <b>Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª AgriCult Bot</b>\n\n` +
-            `ÙŠØªÙ… Ø§Ù„ØªØ­ÙƒÙ… ÙÙŠ Ø§Ù„Ø§Ø®ØªØ¨Ø§Ø±Ø§Øª ÙˆØ¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹Ø§Øª ÙˆØ¨Ù†Ùƒ Ø§Ù„Ø£Ø³Ø¦Ù„Ø© Ù…Ù† Ø®Ù„Ø§Ù„ <b>Ù„ÙˆØ­Ø© ØªØ­ÙƒÙ… QuizForge</b> Ø§Ù„Ø®Ø§ØµØ© Ø¨Ø§Ù„Ù…Ø´Ø±ÙÙŠÙ† ÙˆØ§Ù„Ù…Ø¹Ù„Ù…ÙŠÙ†.\n\n` +
-            `Ø¥Ø°Ø§ ÙƒÙ†Øª Ø·Ø§Ù„Ø¨Ø§Ù‹ØŒ ÙŠÙ…ÙƒÙ†Ùƒ Ø¨Ø¯Ø¡ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†Ø§Øª Ø¹Ø¨Ø± Ù…Ø¬Ù…ÙˆØ¹Ø§Øª Ø§Ù„Ù…ÙˆØ§Ø¯ Ø§Ù„Ø¯Ø±Ø§Ø³ÙŠØ©ØŒ Ø£Ùˆ Ø§Ø³ØªØ®Ø¯Ø§Ù… Ø£Ù…Ø± <code>/qs</code> Ù„Ù„ØªØ¯Ø±ÙŠØ¨ ÙˆØ§Ù„Ù…Ø±Ø§Ø¬Ø¹Ø©.`,
+          text: `⚙️ <b>إعدادات AgriCult Bot</b>\n\n` +
+            `يتم التحكم في الاختبارات وإعدادات المجموعات وبنك الأسئلة من خلال <b>لوحة تحكم QuizForge</b> الخاصة بالمشرفين والمعلمين.\n\n` +
+            `إذا كنت طالباً، يمكنك بدء الامتحانات عبر مجموعات المواد الدراسية، أو استخدام أمر <code>/qs</code> للتدريب والمراجعة.`,
           parse_mode: "HTML",
         });
       }
 
       // 4. /cancel or /stop in private DM
-      if ((text === "/cancel" || text === "/stop" || text === "Ø¥Ù„ØºØ§Ø¡") && msg.chat?.type === "private") {
+      if ((text === "/cancel" || text === "/stop" || text === "إلغاء") && msg.chat?.type === "private") {
         const telegramId = String(msg.from?.id);
         for (const [key, session] of examSessions.entries()) {
           if (key.startsWith(`${telegramId}:`)) {
@@ -812,7 +812,7 @@ export async function POST(req: NextRequest) {
             }).catch(() => {});
           }
         }
-        await tgCall("sendMessage", { chat_id: msg.chat.id, text: "âŒ ØªÙ… Ø¥Ù„ØºØ§Ø¡ Ø¬Ù„Ø³Ø© Ø§Ù„Ø§Ù…ØªØ­Ø§Ù† Ø§Ù„Ø­Ø§Ù„ÙŠØ© Ø¨Ù†Ø¬Ø§Ø­." });
+        await tgCall("sendMessage", { chat_id: msg.chat.id, text: "❌ تم إلغاء جلسة الامتحان الحالية بنجاح." });
       }
 
       const resolveGroup = async () => {
@@ -911,7 +911,7 @@ export async function POST(req: NextRequest) {
         await handleStudentQuizCommand({
           chatId: msg.chat.id,
           userId: String(msg.from?.id || ""),
-          userName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "Ø·Ø§Ù„Ø¨",
+          userName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "طالب",
           userUsername: msg.from?.username || undefined,
           messageId: msg.message_id,
           messageThreadId: msg.message_thread_id || undefined,
@@ -943,11 +943,11 @@ export async function POST(req: NextRequest) {
           const overallRate = totalAnswers > 0 ? Math.round((correctCount / totalAnswers) * 100) : 0;
 
           const statsMsg =
-            `ðŸ“Š <b>Ø¥Ø­ØµØ§Ø¦ÙŠØ§Øª Ø§Ù„ÙƒÙˆÙŠØ²Ø§Øª ÙÙŠ Ù‡Ø°Ù‡ Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹Ø©:</b>\n\n` +
-            `ðŸŽ¯ <b>Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ø§Ù„ÙƒÙˆÙŠØ²Ø§Øª Ø§Ù„Ù…Ø±Ø³Ù„Ø©:</b> ${totalQuizzes}\n` +
-            `ðŸ“ <b>Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ø¥Ø¬Ø§Ø¨Ø§Øª Ø§Ù„Ø·Ù„Ø§Ø¨:</b> ${totalAnswers} (Ø¨Ù…Ø§ ÙÙŠÙ‡Ø§ Ø§Ù„ÙƒÙˆÙŠØ²Ø§Øª Ø§Ù„Ù…Ø¬Ù‡ÙˆÙ„Ø© ðŸ”’)\n` +
-            `ðŸ“ˆ <b>Ù…Ø¹Ø¯Ù„ Ø§Ù„Ù†Ø¬Ø§Ø­ Ø§Ù„Ø¹Ø§Ù…:</b> ${overallRate}%\n\n` +
-            `ðŸ”’ <i>Ù†Ø¸Ø§Ù… Ø®ØµÙˆØµÙŠØ© Ø§Ù„Ø·Ù„Ø§Ø¨ Ù…ÙØ¹Ù‘Ù„: ÙŠÙ…ÙƒÙ† Ù„Ù„Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø¥Ø¬Ø§Ø¨Ø© ÙˆØ§Ù„Ù…Ø­Ø§ÙˆÙ„Ø© Ø¨Ø£Ù…Ø§Ù† Ø¯ÙˆÙ† Ø£ÙŠ Ø­Ø±Ø¬ Ù…Ù† Ø§Ù„Ø®Ø·Ø£.</i>`;
+            `📊 <b>إحصائيات الكويزات في هذه المجموعة:</b>\n\n` +
+            `🎯 <b>إجمالي الكويزات المرسلة:</b> ${totalQuizzes}\n` +
+            `📝 <b>إجمالي إجابات الطلاب:</b> ${totalAnswers} (بما فيها الكويزات المجهولة 🔒)\n` +
+            `📈 <b>معدل النجاح العام:</b> ${overallRate}%\n\n` +
+            `🔒 <i>نظام خصوصية الطلاب مفعّل: يمكن للجميع الإجابة والمحاولة بأمان دون أي حرج من الخطأ.</i>`;
 
           await tgCall("sendMessage", {
             chat_id: msg.chat.id,
@@ -982,7 +982,7 @@ export async function POST(req: NextRequest) {
           await tgCall("sendMessage", {
             chat_id: msg.chat.id,
             message_thread_id: msg.message_thread_id,
-            text: `âœ… <b>ØªÙ… ØªØ³Ø¬ÙŠÙ„ Ù‡Ø°Ø§ Ø§Ù„Ù…ÙˆØ¶ÙˆØ¹ ÙÙŠ QuizForge Ø¨Ù†Ø¬Ø§Ø­!</b>\n\nðŸ“Œ <b>Ø§Ù„Ø§Ø³Ù…:</b> ${escapeHtml(topicName)}\nðŸ†” <b>Ø§Ù„Ù…Ø¹Ø±Ù‘Ù:</b> <code>#${msg.message_thread_id}</code>\n\n<i>Ø§Ù„Ù…ÙˆØ¶ÙˆØ¹ Ù…ØªØ§Ø­ Ø§Ù„Ø¢Ù† ÙÙˆØ±Ø§Ù‹ ÙÙŠ Ù„ÙˆØ­Ø© Ø§Ù„ØªØ­ÙƒÙ… ÙˆØ¹Ù†Ø¯ Ø¥Ø±Ø³Ø§Ù„ Ø§Ù„ÙƒÙˆÙŠØ²Ø§Øª ÙˆØ§Ù„Ø§Ù…ØªØ­Ø§Ù†Ø§Øª.</i>`,
+            text: `✅ <b>تم تسجيل هذا الموضوع في QuizForge بنجاح!</b>\n\n📌 <b>الاسم:</b> ${escapeHtml(topicName)}\n🆔 <b>المعرّف:</b> <code>#${msg.message_thread_id}</code>\n\n<i>الموضوع متاح الآن فوراً في لوحة التحكم وعند إرسال الكويزات والامتحانات.</i>`,
             parse_mode: "HTML",
           }).catch((e) => console.error("[webhook] /topic reply error:", e));
         }
@@ -1029,7 +1029,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // â”€â”€ Callback queries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Callback queries ─────────────────────────────────────────────────────
     if (update.callback_query) {
       const cb   = update.callback_query as Record<string, unknown>;
       const data = (cb.data as string) || "";
@@ -1053,11 +1053,11 @@ export async function POST(req: NextRequest) {
         await handleExamCancel(cb, data.slice("exam_cancel:".length));
 
       } else if (data === "exam_cancel") {
-        await ackCb(cb.id as string, "ØªÙ… Ø§Ù„Ø¥Ù„ØºØ§Ø¡.", false);
+        await ackCb(cb.id as string, "تم الإلغاء.", false);
       }
     }
 
-    // Asynchronously sweep and expire sessions in the background
+    // Sweep and expire overdue/inactive exam sessions in the background
     checkAndExpireExamSessions().catch((e) => console.error("[webhook] checkAndExpire error:", e));
 
     return NextResponse.json({ ok: true });

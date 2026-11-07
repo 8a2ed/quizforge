@@ -56,7 +56,7 @@ function AddGroupModal({ onClose, onAdd }: { onClose: () => void; onAdd: (g: Gro
       <div className="card" style={{ width: "100%", maxWidth: 500, animation: "fadeUp 0.3s var(--ease-out)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-6)" }}>
           <h3>Add Your Group</h3>
-          <button className="btn btn-ghost btn-icon" onClick={onClose}>âœ•</button>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}>✕</button>
         </div>
 
         {/* Steps */}
@@ -89,7 +89,7 @@ function AddGroupModal({ onClose, onAdd }: { onClose: () => void; onAdd: (g: Gro
 
         {error && (
           <div style={{ background: "var(--clr-danger-muted)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: "var(--radius-md)", padding: "var(--space-3)", marginBottom: "var(--space-4)", color: "var(--clr-danger)", fontSize: "0.875rem" }}>
-            âŒ {error}
+            ❌ {error}
           </div>
         )}
 
@@ -97,7 +97,7 @@ function AddGroupModal({ onClose, onAdd }: { onClose: () => void; onAdd: (g: Gro
           <div style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.4)", borderRadius: "var(--radius-md)", padding: "var(--space-3)", marginBottom: "var(--space-4)", color: "#fbbf24", fontSize: "0.85rem" }}>
             {devWarning}
             <br /><br />
-            <button className="btn btn-primary btn-sm" onClick={onClose}>Continue to Dashboard â†’</button>
+            <button className="btn btn-primary btn-sm" onClick={onClose}>Continue to Dashboard →</button>
           </div>
         )}
 
@@ -110,7 +110,7 @@ function AddGroupModal({ onClose, onAdd }: { onClose: () => void; onAdd: (g: Gro
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
                     <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/>
                   </svg>
-                  Verifyingâ€¦
+                  Verifying…
                 </span>
               ) : "Add Group"}
             </button>
@@ -161,7 +161,7 @@ export default function DashboardPage() {
         setConfirmGroup(null);
         toast.success(
           deleteAll ? "تم حذف المجموعة" : "تمت المغادرة",
-          deleteAll ? "تم حذف بيانات المجموعة من لوحة التحكم بنجاح." : "تمت إزالة عضويتك من لوحة التحكم."
+          deleteAll ? "تم حذف بيانات المجموعة من لوحة التحكم بنجاح." : "تمت إزالة عضويتك من لوحة التحكم بنجاح."
         );
       } else {
         const d = await res.json();
@@ -194,7 +194,7 @@ export default function DashboardPage() {
               className={`btn ${manageMode ? "btn-danger" : "btn-ghost"} btn-sm`}
               onClick={() => setManageMode(!manageMode)}
             >
-              {manageMode ? "âœ• Done" : "âš™ Manage"}
+              {manageMode ? "✕ Done" : "⚙ Manage"}
             </button>
           )}
           <button className="btn btn-primary" onClick={() => setShowModal(true)}>
@@ -227,14 +227,14 @@ export default function DashboardPage() {
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: "1.2rem"
           }}>
-            âœ¨
+            ✨
           </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--clr-text-primary)" }}>
-              Ø§Ù„Ù†Ø³Ø®Ø© Ø§Ù„Ø¬Ø¯ÙŠØ¯Ø©: Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬ Ø§Ù„Ø°ÙƒÙŠ ÙˆÙ†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø´Ø¹Ø§Ø±Ø§Øª ÙˆØ§Ù„Ø­ÙˆØ§Ø± Ø§Ù„ØªÙØ§Ø¹Ù„ÙŠ
+              النسخة الجديدة: المعالج الذكي ونظام الإشعارات والحوار التفاعلي
             </div>
             <div style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>
-              ØªÙ… Ø¯Ù…Ø¬ Ù…Ø¹Ø§Ù„Ø¬ Ø¥Ù†Ø´Ø§Ø¡ Ø§Ù„ÙƒÙˆÙŠØ²Ø§Øª Ø§Ù„Ø°ÙƒÙŠ (Quiz Wizard) ÙˆÙ†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø´Ø¹Ø§Ø±Ø§Øª (Toast Stack) ÙˆÙ…Ø±Ø¨Ø¹Ø§Øª Ø§Ù„Ø­ÙˆØ§Ø± Ø§Ù„ØªÙØ§Ø¹Ù„ÙŠØ© (Modal).
+              تم دمج معالج إنشاء الكويزات الذكي (Quiz Wizard) ونظام الإشعارات (Toast Stack) ومربعات الحوار التفاعلية (Modal).
             </div>
           </div>
         </div>
@@ -249,7 +249,7 @@ export default function DashboardPage() {
               boxShadow: "0 0 16px rgba(0,212,255,0.3)"
             }}
           >
-            Ø¬Ø±Ø¨ Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬ Ø§Ù„Ø°ÙƒÙŠ Ø§Ù„Ø¢Ù† â†
+            جرب المعالج الذكي الآن ←
           </Link>
         )}
       </div>
@@ -329,9 +329,9 @@ export default function DashboardPage() {
                   <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>Quizzes sent</div>
                   {!manageMode && (
                     <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center", gap: 4 }}>
-                      <span onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/dashboard/${group.id}/wizard`); }} style={{ fontSize: "0.75rem", color: "#00d4ff", background: "rgba(0,212,255,0.12)", padding: "2px 8px", borderRadius: "4px", border: "1px solid rgba(0,212,255,0.25)", fontWeight: 600, cursor: "pointer" }}>âœ¨ Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬</span>
+                      <span onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/dashboard/${group.id}/wizard`); }} style={{ fontSize: "0.75rem", color: "#00d4ff", background: "rgba(0,212,255,0.12)", padding: "2px 8px", borderRadius: "4px", border: "1px solid rgba(0,212,255,0.25)", fontWeight: 600, cursor: "pointer" }}>✨ المعالج</span>
                       <span style={{ color: "var(--clr-brand)", fontSize: "0.8rem", fontWeight: 600 }}>Open dashboard</span>
-                      <span className="flip-rtl" style={{ color: "var(--clr-brand)", fontSize: "0.85rem" }}>â†’</span>
+                      <span className="flip-rtl" style={{ color: "var(--clr-brand)", fontSize: "0.85rem" }}>→</span>
                     </div>
                   )}
                 </div>
@@ -351,7 +351,7 @@ export default function DashboardPage() {
                     className="btn btn-secondary btn-sm"
                     onClick={() => setManageMode(false)}
                   >
-                    âš™ Open Settings
+                    ⚙ Open Settings
                   </Link>
                   <button
                     className="btn btn-sm"
@@ -359,7 +359,7 @@ export default function DashboardPage() {
                     onClick={() => setConfirmGroup(group)}
                     disabled={deletingId === group.id}
                   >
-                    {deletingId === group.id ? "Removing..." : group.role === "OWNER" ? "ðŸ—‘ Delete Group" : "ðŸšª Leave Group"}
+                    {deletingId === group.id ? "Removing..." : group.role === "OWNER" ? "🗑 Delete Group" : "🚪 Leave Group"}
                   </button>
                 </div>
               )}
@@ -403,12 +403,16 @@ export default function DashboardPage() {
         <AccessibleModal
           isOpen={!!confirmGroup}
           onClose={() => setConfirmGroup(null)}
-          title={confirmGroup.role === "OWNER" ? "حذف المجموعة / Delete Group" : "مغادرة المجموعة / Leave Group"}
-          description={`تأكيد حذف أو مغادرة ${confirmGroup.title}`}
+          title={confirmGroup.role === "OWNER" ? "🗑️ حذف المجموعة نهائياً" : "🚪 مغادرة لوحة التحكم"}
+          description={
+            confirmGroup.role === "OWNER"
+              ? `هل أنت متأكد من حذف ${confirmGroup.title} نهائياً؟ سيتم حذف جميع الكويزات والسجلات من لوحة التحكم. مجموعة التيليجرام نفسها لن تتأثر.`
+              : `سيتم إزالة وصولك إلى لوحة تحكم ${confirmGroup.title}. يمكنك إعادة الانضمام لاحقاً.`
+          }
           footer={
             <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end", width: "100%" }}>
               <button className="btn btn-secondary" onClick={() => setConfirmGroup(null)} disabled={!!deletingId}>
-                Cancel
+                إلغاء
               </button>
               {confirmGroup.role === "OWNER" && (
                 <button
@@ -417,7 +421,7 @@ export default function DashboardPage() {
                   onClick={() => handleDeleteGroup(confirmGroup, false)}
                   disabled={!!deletingId}
                 >
-                  Just Leave
+                  مغادرة فقط
                 </button>
               )}
               <button
@@ -426,26 +430,11 @@ export default function DashboardPage() {
                 onClick={() => handleDeleteGroup(confirmGroup, confirmGroup.role === "OWNER")}
                 disabled={!!deletingId}
               >
-                {deletingId ? "Working..." : confirmGroup.role === "OWNER" ? "Delete Everything" : "Leave Group"}
+                {deletingId ? "جارٍ الحذف..." : confirmGroup.role === "OWNER" ? "حذف كل شيء" : "مغادرة"}
               </button>
             </div>
           }
-        >
-          <div style={{ color: "var(--clr-text-secondary)", lineHeight: 1.6 }}>
-            {confirmGroup.role === "OWNER" ? (
-              <>
-                Are you sure you want to <strong style={{ color: "var(--clr-danger)" }}>permanently delete</strong>{" "}
-                <strong>{confirmGroup.title}</strong>? This will remove all quizzes, history, and settings from QuizForge.
-                <br /><br />
-                <strong>Note:</strong> You will still keep the Telegram group itself — only dashboard data is removed.
-              </>
-            ) : (
-              <>
-                You will be removed from the <strong>{confirmGroup.title}</strong> dashboard. You can always re-add yourself later.
-              </>
-            )}
-          </div>
-        </AccessibleModal>
+        />
       )}
     </div>
   );

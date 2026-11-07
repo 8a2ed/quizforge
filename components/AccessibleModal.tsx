@@ -8,7 +8,7 @@ export interface AccessibleModalProps extends UseModalOptions {
   onClose: () => void;
   title: string;
   description?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   footer?: React.ReactNode;
   maxWidth?: number | string;
 }

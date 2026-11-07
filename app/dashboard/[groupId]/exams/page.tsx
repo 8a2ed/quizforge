@@ -150,10 +150,10 @@ export default function ExamsPage() {
   const [saving, setSaving] = useState(false);
 
   const showToast = useCallback((type: string, msg: string) => {
-    if (type === "success") toast.success("نجاح / Success", msg);
-    else if (type === "error") toast.error("خطأ / Error", msg);
-    else if (type === "warning") toast.warning("تنبيه / Warning", msg);
-    else toast.info("إشعار / Info", msg);
+    if (type === "success") toast.success("نجاح", msg);
+    else if (type === "error") toast.error("خطأ", msg);
+    else if (type === "warning") toast.warning("تنبيه", msg);
+    else toast.info("إشعار", msg);
   }, [toast]);
 
   const load = useCallback(() => {
@@ -201,9 +201,9 @@ export default function ExamsPage() {
           });
 
           setQuestions(formattedQuestions);
-          setTitle(`Ø§Ù…ØªØ­Ø§Ù† Ø¬Ø¯ÙŠØ¯ (${formattedQuestions.length} Ø£Ø³Ø¦Ù„Ø©)`);
+          setTitle(`امتحان جديد (${formattedQuestions.length} أسئلة)`);
           setMode("create");
-          showToast("success", `ØªÙ… Ø§Ø³ØªÙŠØ±Ø§Ø¯ ${formattedQuestions.length} Ø³Ø¤Ø§Ù„ Ù…Ù† Ø§Ù„Ù…ÙƒØªØ¨Ø© Ø¨Ù†Ø¬Ø§Ø­! Ø¬Ø§Ù‡Ø² Ù„Ø¥Ù†Ø´Ø§Ø¡ Ø§Ù„Ø§Ù…ØªØ­Ø§Ù†.`);
+          showToast("success", `تم استيراد ${formattedQuestions.length} سؤال من المكتبة بنجاح! جاهز لإنشاء الامتحان.`);
           sessionStorage.removeItem("exam-draft-from-library");
 
           if (window.history?.replaceState) {
@@ -334,8 +334,8 @@ export default function ExamsPage() {
     const isResend = exam.isPublished;
     setActionModal({
       isOpen: true,
-      title: isResend ? "إعادة إرسال الاختبار في تيليجرام" : "إطلاق ونشر الاختبار",
-      description: `سيتم إرسال بطاقة اختبار "${exam.title}" وزر 'بدء الامتحان' المباشر في مجموعة التيليجرام أو الموضوع المحدد ليتمكن الطلاب من البدء فوراً.`,
+      title: isResend ? "🔄 إعادة إرسال الاختبار في تيليجرام" : "🚀 إطلاق ونشر الاختبار",
+      description: `سيتم إرسال بطاقة اختبار "${exam.title}" وزر بدء الامتحان فوراً في مجموعة التيليجرام أو الموضوع المحدد.`,
       confirmText: isResend ? "إعادة الإرسال الآن" : "🚀 إطلاق ونشر الآن",
       isDestructive: false,
       onConfirm: async () => {
@@ -363,7 +363,7 @@ export default function ExamsPage() {
   const handleDelete = (id: string, examTitle?: string) => {
     setActionModal({
       isOpen: true,
-      title: "حذف الاختبار نهائياً / Delete Exam",
+      title: "حذف الاختبار نهائياً",
       description: `هل أنت متأكد من حذف اختبار "${examTitle || "هذا الاختبار"}"؟ سيتم حذف جميع أسئلته ونتائجه ومحاولات الطلاب نهائياً ولا يمكن استرجاعها.`,
       confirmText: "🗑️ نعم، احذف الاختبار",
       isDestructive: true,
@@ -446,7 +446,7 @@ export default function ExamsPage() {
   const handleResetAttempt = (resultId: string, studentName: string) => {
     setActionModal({
       isOpen: true,
-      title: "إعادة تعيين محاولة الطالب / Reset Attempt",
+      title: "إعادة تعيين محاولة الطالب",
       description: `هل أنت متأكد من إعادة تعيين محاولة الطالب "${studentName}"؟ سيتم حذف نتيجته الحالية والسماح له بإعادة دخول الاختبار من جديد في تيليجرام.`,
       confirmText: "إعادة تعيين المحاولة",
       isDestructive: false,
@@ -501,7 +501,7 @@ export default function ExamsPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        showToast("success", `Q${q.index + 1} saved to Question Library âœ“`);
+        showToast("success", `Q${q.index + 1} saved to Question Library ✓`);
       } else {
         showToast("error", data.error || "Failed to save question");
       }
@@ -558,7 +558,7 @@ export default function ExamsPage() {
           row.push('"Not Answered"');
           row.push('"N/A"');
         } else {
-          row.push(detail.isCorrect ? '"CORRECT âœ…"' : '"INCORRECT âŒ"');
+          row.push(detail.isCorrect ? '"CORRECT ✅"' : '"INCORRECT ❌"');
           row.push(`"${(detail.chosenOptionText || "").replace(/"/g, '""')}"`);
         }
       }
@@ -573,13 +573,13 @@ export default function ExamsPage() {
     a.download = `exam-${exam.title.replace(/\s+/g, "_")}-results.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast("success", `Exported ${viewResults.results.length} result(s) to CSV âœ“`);
+    showToast("success", `Exported ${viewResults.results.length} result(s) to CSV ✓`);
   };
 
   const setQ = (i: number, field: keyof Question, val: string | string[] | number) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
-  // â”€â”€ Results view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Results view ──────────────────────────────────────────────────────────
   if (mode === "results" && viewResults) {
     const exam = viewResults.exam;
     const completedResults = viewResults.results.filter(r => r.score >= 0);
@@ -608,15 +608,16 @@ export default function ExamsPage() {
 
     return (
       <div>
+
         {/* Top Header */}
         <div className="section-header animate-fade-up">
           <div>
-            <h1>{exam.title} â€” Results & Analytics</h1>
+            <h1>{exam.title} — Results & Analytics</h1>
             <p style={{ marginTop: 4 }}>
               {exam.totalResults} completed submission{exam.totalResults !== 1 ? "s" : ""}
-              {inProgressCount > 0 && ` Â· ${inProgressCount} in progress`}
-              {` Â· Passing score: ${exam.passingScore}%`}
-              {exam.timeLimit ? ` Â· Time limit: ${Math.floor(exam.timeLimit / 60)}m` : " Â· No time limit"}
+              {inProgressCount > 0 && ` · ${inProgressCount} in progress`}
+              {` · Passing score: ${exam.passingScore}%`}
+              {exam.timeLimit ? ` · Time limit: ${Math.floor(exam.timeLimit / 60)}m` : " · No time limit"}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -627,21 +628,21 @@ export default function ExamsPage() {
               disabled={viewResults.results.length === 0}
               title="Export all student scores and answers to Excel-compatible CSV"
             >
-              ðŸ“¥ Export CSV
+              📥 Export CSV
             </button>
             <button className="btn btn-secondary btn-sm" onClick={() => { setViewResults(null); setMode("list"); }} style={{ gap: 6 }}>
-              <span className="flip-rtl">â†</span>
+              <span className="flip-rtl">←</span>
               <span>Back to Exams</span>
             </button>
           </div>
         </div>
 
-        {/* â”€â”€ KPI Metric Cards â”€â”€ */}
+        {/* ── KPI Metric Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
           {/* Card 1: Submissions */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>ðŸ‘¥ Submissions</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>👥 Submissions</span>
               {inProgressCount > 0 && (
                 <span className="badge badge-accent" style={{ fontSize: "0.68rem" }}>
                   +{inProgressCount} in progress
@@ -658,31 +659,31 @@ export default function ExamsPage() {
 
           {/* Card 2: Pass Rate */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>ðŸ† Pass Rate</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🏆 Pass Rate</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: exam.passRate >= 70 ? "var(--clr-success)" : exam.passRate >= 50 ? "var(--clr-warning)" : "var(--clr-danger)", marginTop: 4 }}>
               {exam.passRate}%
             </div>
             <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
-              âœ… {exam.passCount} passed Â· âŒ {exam.failCount} failed
+              ✅ {exam.passCount} passed · ❌ {exam.failCount} failed
             </div>
           </div>
 
           {/* Card 3: Average Score */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>ðŸŽ¯ Average Score</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🎯 Average Score</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-warning)", marginTop: 4 }}>
               {exam.avgScore}%
             </div>
             <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
-              Min: {exam.lowestScore}% Â· Max: {exam.highestScore}%
+              Min: {exam.lowestScore}% · Max: {exam.highestScore}%
             </div>
           </div>
 
           {/* Card 4: Average Duration */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>â± Avg Time Taken</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>⏱ Avg Time Taken</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-accent)", marginTop: 4 }}>
-              {exam.avgDuration ? `${Math.floor(exam.avgDuration / 60)}m ${exam.avgDuration % 60}s` : "â€”"}
+              {exam.avgDuration ? `${Math.floor(exam.avgDuration / 60)}m ${exam.avgDuration % 60}s` : "—"}
             </div>
             <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
               {exam.timeLimit && exam.avgDuration
@@ -692,7 +693,7 @@ export default function ExamsPage() {
           </div>
         </div>
 
-        {/* â”€â”€ Sub-Tabs Navigation â”€â”€ */}
+        {/* ── Sub-Tabs Navigation ── */}
         <div style={{ display: "flex", gap: 8, borderBottom: "1px solid var(--clr-border)", paddingBottom: 8, marginBottom: 16 }}>
           <button
             onClick={() => setResultsTab("students")}
@@ -704,7 +705,7 @@ export default function ExamsPage() {
               borderRadius: 0,
             }}
           >
-            ðŸ‘¥ Student Submissions ({viewResults.results.length})
+            👥 Student Submissions ({viewResults.results.length})
           </button>
           <button
             onClick={() => setResultsTab("questions")}
@@ -716,11 +717,11 @@ export default function ExamsPage() {
               borderRadius: 0,
             }}
           >
-            ðŸ“Š Question Performance & Item Analysis ({viewResults.questionAnalytics.length})
+            📊 Question Performance & Item Analysis ({viewResults.questionAnalytics.length})
           </button>
         </div>
 
-        {/* â”€â”€ TAB 1: Student Submissions â”€â”€ */}
+        {/* ── TAB 1: Student Submissions ── */}
         {resultsTab === "students" && (
           <div>
             {/* Filter Bar */}
@@ -730,7 +731,7 @@ export default function ExamsPage() {
                 <div style={{ position: "relative", flex: "1 1 200px" }}>
                   <input
                     className="input"
-                    placeholder="Search students by name or @usernameâ€¦"
+                    placeholder="Search students by name or @username…"
                     value={studentSearch}
                     onChange={e => setStudentSearch(e.target.value)}
                     style={{ width: "100%", fontSize: "0.84rem" }}
@@ -771,11 +772,11 @@ export default function ExamsPage() {
                   value={studentSort}
                   onChange={e => setStudentSort(e.target.value as any)}
                 >
-                  <option value="newest">ðŸ• Most Recent</option>
-                  <option value="highest">ðŸ† Highest Score</option>
-                  <option value="lowest">ðŸ“‰ Lowest Score</option>
-                  <option value="fastest">âš¡ Fastest Time</option>
-                  <option value="slowest">â³ Slowest Time</option>
+                  <option value="newest">🕐 Most Recent</option>
+                  <option value="highest">🏆 Highest Score</option>
+                  <option value="lowest">📉 Lowest Score</option>
+                  <option value="fastest">⚡ Fastest Time</option>
+                  <option value="slowest">⏳ Slowest Time</option>
                 </select>
               </div>
             </div>
@@ -783,7 +784,7 @@ export default function ExamsPage() {
             {/* List */}
             {filteredStudents.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state-icon">ðŸ“‹</div>
+                <div className="empty-state-icon">📋</div>
                 <h3>No matching submissions</h3>
                 <p>Try adjusting your search query or filters.</p>
               </div>
@@ -844,7 +845,7 @@ export default function ExamsPage() {
                             flexShrink: 0,
                           }}
                         >
-                          {inProgress ? "â±" : `${r.score}%`}
+                          {inProgress ? "⏱" : `${r.score}%`}
                         </div>
 
                         {/* Student Info */}
@@ -856,7 +857,7 @@ export default function ExamsPage() {
                                 ID: {r.telegramId}
                               </span>
                             ) : null}
-                            <span>ðŸ• {new Date(r.completedAt).toLocaleString()}</span>
+                            <span>🕐 {new Date(r.completedAt).toLocaleString()}</span>
                           </div>
                         </div>
 
@@ -865,7 +866,7 @@ export default function ExamsPage() {
                           {!inProgress && (
                             <div style={{ textAlign: "end" }}>
                               <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
-                                ðŸŽ¯ {r.correctCount} / {r.totalQuestions}
+                                🎯 {r.correctCount} / {r.totalQuestions}
                               </div>
                               <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
                                 Correct answers
@@ -876,7 +877,7 @@ export default function ExamsPage() {
                           {durationFormatted && (
                             <div style={{ textAlign: "end" }}>
                               <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
-                                â± {durationFormatted}
+                                ⏱ {durationFormatted}
                               </div>
                               <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
                                 {timeLimitSec ? `${Math.round((r.duration! / timeLimitSec) * 100)}% of limit` : "Time taken"}
@@ -886,7 +887,7 @@ export default function ExamsPage() {
 
                           {/* Status Badge */}
                           <span className={`badge ${inProgress ? "badge-muted" : r.passed ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.75rem", padding: "4px 10px" }}>
-                            {inProgress ? "â± In Progress" : r.passed ? "âœ“ Passed" : "âœ— Failed"}
+                            {inProgress ? "⏱ In Progress" : r.passed ? "✓ Passed" : "✗ Failed"}
                           </span>
 
                           {/* Reset Attempt Action */}
@@ -895,10 +896,10 @@ export default function ExamsPage() {
                             style={{ fontSize: "0.76rem", border: "1px solid rgba(239, 68, 68, 0.4)", color: "var(--clr-danger)", padding: "4px 10px", gap: 4, display: "inline-flex", alignItems: "center" }}
                             disabled={resettingResultId === r.id}
                             onClick={() => handleResetAttempt(r.id, r.name)}
-                            title="Ø¥Ø¹Ø§Ø¯Ø© ØªØ¹ÙŠÙŠÙ† Ø§Ù„Ù…Ø­Ø§ÙˆÙ„Ø© / Reset Attempt"
+                            title="إعادة تعيين المحاولة / Reset Attempt"
                           >
-                            <span>{resettingResultId === r.id ? "â³" : "ðŸ”„"}</span>
-                            <span>{resettingResultId === r.id ? "Ø¬Ø§Ø±ÙŠ Ø§Ù„ØªØ¹ÙŠÙŠÙ†..." : "Ø¥Ø¹Ø§Ø¯Ø© ØªØ¹ÙŠÙŠÙ† Ø§Ù„Ù…Ø­Ø§ÙˆÙ„Ø© / Reset Attempt"}</span>
+                            <span>{resettingResultId === r.id ? "⏳" : "🔄"}</span>
+                            <span>{resettingResultId === r.id ? "جاري التعيين..." : "إعادة تعيين المحاولة / Reset Attempt"}</span>
                           </button>
 
                           {/* Accordion Toggle */}
@@ -908,7 +909,7 @@ export default function ExamsPage() {
                               style={{ fontSize: "0.76rem", border: "1px solid var(--clr-border)", padding: "4px 10px" }}
                               onClick={() => toggleExpandStudent(r.id)}
                             >
-                              {isExpanded ? "â–² Hide Answers" : "ðŸ‘ View Answers"}
+                              {isExpanded ? "▲ Hide Answers" : "👁 View Answers"}
                             </button>
                           )}
                         </div>
@@ -918,7 +919,7 @@ export default function ExamsPage() {
                       {isExpanded && !inProgress && r.details && (
                         <div style={{ padding: "16px 20px", borderTop: "1px solid var(--clr-border)", background: "var(--clr-bg-elevated)" }}>
                           <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 12, color: "var(--clr-text-secondary)" }}>
-                            ðŸ“ Question-by-Question Detailed Review for {r.name}:
+                            📝 Question-by-Question Detailed Review for {r.name}:
                           </div>
 
                           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -941,24 +942,24 @@ export default function ExamsPage() {
                                     className={`badge ${!item.isAnswered ? "badge-muted" : item.isCorrect ? "badge-success" : "badge-danger"}`}
                                     style={{ fontSize: "0.72rem", flexShrink: 0 }}
                                   >
-                                    {!item.isAnswered ? "âš ï¸ Not Answered" : item.isCorrect ? "âœ… Correct" : "âŒ Incorrect"}
+                                    {!item.isAnswered ? "⚠️ Not Answered" : item.isCorrect ? "✅ Correct" : "❌ Incorrect"}
                                   </span>
                                 </div>
 
                                 <div style={{ fontSize: "0.82rem", display: "flex", flexDirection: "column", gap: 4 }}>
                                   <div style={{ color: item.isCorrect ? "var(--clr-success)" : "var(--clr-danger)" }}>
-                                    <b>Student's Answer:</b> {item.chosenOptionId !== null ? `Option ${String.fromCharCode(65 + item.chosenOptionId)} â€” ${item.chosenOptionText}` : "None"}
+                                    <b>Student's Answer:</b> {item.chosenOptionId !== null ? `Option ${String.fromCharCode(65 + item.chosenOptionId)} — ${item.chosenOptionText}` : "None"}
                                   </div>
 
                                   {!item.isCorrect && (
                                     <div style={{ color: "var(--clr-success)" }}>
-                                      <b>Correct Answer:</b> Option {String.fromCharCode(65 + item.correctOptionId)} â€” {item.correctOptionText}
+                                      <b>Correct Answer:</b> Option {String.fromCharCode(65 + item.correctOptionId)} — {item.correctOptionText}
                                     </div>
                                   )}
 
                                   {item.explanation && (
                                     <div style={{ marginTop: 4, fontSize: "0.76rem", color: "var(--clr-text-muted)", background: "rgba(0,0,0,0.15)", padding: "4px 8px", borderRadius: 4 }}>
-                                      ðŸ’¡ {item.explanation}
+                                      💡 {item.explanation}
                                     </div>
                                   )}
                                 </div>
@@ -975,12 +976,12 @@ export default function ExamsPage() {
           </div>
         )}
 
-        {/* â”€â”€ TAB 2: Question Performance & Item Analysis â”€â”€ */}
+        {/* ── TAB 2: Question Performance & Item Analysis ── */}
         {resultsTab === "questions" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {viewResults.questionAnalytics.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state-icon">ðŸ“Š</div>
+                <div className="empty-state-icon">📊</div>
                 <h3>No question analytics</h3>
                 <p>Question analysis will be computed automatically once students take the exam.</p>
               </div>
@@ -1006,7 +1007,7 @@ export default function ExamsPage() {
                             fontSize: "0.72rem",
                           }}
                         >
-                          {q.difficulty === "EASY" ? "ðŸŸ¢ Easy (Ø³Ù‡Ù„)" : q.difficulty === "MEDIUM" ? "ðŸŸ¡ Medium (Ù…ØªÙˆØ³Ø·)" : "ðŸ”´ Hard (ØµØ¹Ø¨)"}
+                          {q.difficulty === "EASY" ? "🟢 Easy (سهل)" : q.difficulty === "MEDIUM" ? "🟡 Medium (متوسط)" : "🔴 Hard (صعب)"}
                         </span>
                         <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)" }}>
                           {q.correctCount} of {q.totalAnswered} answered correctly ({q.successRate}%)
@@ -1020,7 +1021,7 @@ export default function ExamsPage() {
                         disabled={isSaving}
                         title="Save this question to your Question Library so you can reuse or send it anytime"
                       >
-                        {isSaving ? "Savingâ€¦" : "ðŸ’¾ Save to Question Library"}
+                        {isSaving ? "Saving…" : "💾 Save to Question Library"}
                       </button>
                     </div>
 
@@ -1074,7 +1075,7 @@ export default function ExamsPage() {
                                 </span>
                                 {isCorrect && (
                                   <span className="badge badge-success" style={{ fontSize: "0.65rem", padding: "1px 6px" }}>
-                                    âœ“ Correct Answer
+                                    ✓ Correct Answer
                                   </span>
                                 )}
                               </div>
@@ -1104,7 +1105,7 @@ export default function ExamsPage() {
                           color: "var(--clr-warning)",
                         }}
                       >
-                        <span>âš ï¸</span>
+                        <span>⚠️</span>
                         <div>
                           <b>Common Distractor / Trap:</b> {q.mostCommonMistake.percentage}% of students mistakenly selected{" "}
                           <b>
@@ -1117,7 +1118,7 @@ export default function ExamsPage() {
                     {/* Explanation */}
                     {q.explanation && (
                       <div style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--clr-text-muted)", padding: "6px 10px", background: "rgba(0,0,0,0.15)", borderRadius: 6 }}>
-                        ðŸ’¡ <b>Explanation:</b> {q.explanation}
+                        💡 <b>Explanation:</b> {q.explanation}
                       </div>
                     )}
                   </div>
@@ -1130,13 +1131,13 @@ export default function ExamsPage() {
     );
   }
 
-  // â”€â”€ Exam form (create / edit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Exam form (create / edit) ─────────────────────────────────────────────
   const isEditing = mode === "edit";
   if (mode === "create" || mode === "edit") return (
     <div>
             <div className="section-header animate-fade-up">
         <div><h1>{isEditing ? `Edit: ${editingExam?.title}` : "Create New Exam"}</h1></div>
-        <button className="btn btn-ghost" onClick={() => { resetForm(); setMode("list"); }}>âœ• Cancel</button>
+        <button className="btn btn-ghost" onClick={() => { resetForm(); setMode("list"); }}>✕ Cancel</button>
       </div>
 
       <div className="card animate-fade-up" style={{ marginBottom: 20 }}>
@@ -1147,7 +1148,7 @@ export default function ExamsPage() {
           </div>
           <div className="input-wrapper" style={{ marginBottom: 0 }}>
             <label className="input-label">Description</label>
-            <input className="input" placeholder="Optional introâ€¦" value={desc} onChange={e => setDesc(e.target.value)} />
+            <input className="input" placeholder="Optional intro…" value={desc} onChange={e => setDesc(e.target.value)} />
           </div>
           <div className="input-wrapper" style={{ marginBottom: 0 }}>
             <label className="input-label">Time Limit (minutes, 0 = none)</label>
@@ -1158,14 +1159,14 @@ export default function ExamsPage() {
             <input className="input" type="number" min="1" max="100" value={passingScore} onChange={e => setPassingScore(e.target.value)} />
           </div>
           <div className="input-wrapper" style={{ marginBottom: 0, gridColumn: topics.length > 0 ? undefined : "1/-1" }}>
-            <label className="input-label">ðŸ“‚ Send announcement to topic (optional)</label>
+            <label className="input-label">📂 Send announcement to topic (optional)</label>
             <select className="select" value={topicId} onChange={e => {
               const val = e.target.value ? Number(e.target.value) : "";
               setTopicId(val);
               setTopicName(val ? (topics.find(t => t.message_thread_id === val)?.name || "") : "");
             }}>
-              <option value="">ðŸ“Œ General (no topic)</option>
-              {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>ðŸ“‚ {t.name}</option>)}
+              <option value="">📌 General (no topic)</option>
+              {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>📂 {t.name}</option>)}
             </select>
           </div>
         </div>
@@ -1179,10 +1180,10 @@ export default function ExamsPage() {
           marginBottom: 16
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: "1.1rem" }}>ðŸ›¡ï¸</span>
+            <span style={{ fontSize: "1.1rem" }}>🛡️</span>
             <div>
               <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--clr-text-primary)" }}>
-                Anti-Cheating & Randomization (Ù…Ù†Ø¹ Ø§Ù„ØºØ´ ÙˆØ§Ù„Ø®Ù„Ø· Ø§Ù„Ø¹Ø´ÙˆØ§Ø¦ÙŠ)
+                Anti-Cheating & Randomization (منع الغش والخلط العشوائي)
               </div>
               <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)" }}>
                 Randomize questions and choices uniquely for each student to prevent answer sharing.
@@ -1203,7 +1204,7 @@ export default function ExamsPage() {
             }}>
               <div>
                 <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--clr-text-primary)" }}>
-                  ðŸ”€ Shuffle Questions (Ø®Ù„Ø· Ø§Ù„Ø£Ø³Ø¦Ù„Ø©)
+                  🔀 Shuffle Questions (خلط الأسئلة)
                 </div>
                 <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
                   Random question order for each student
@@ -1231,7 +1232,7 @@ export default function ExamsPage() {
             }}>
               <div>
                 <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--clr-text-primary)" }}>
-                  ðŸ”€ Shuffle Options (Ø®Ù„Ø· Ø§Ù„Ø®ÙŠØ§Ø±Ø§Øª)
+                  🔀 Shuffle Options (خلط الخيارات)
                 </div>
                 <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)" }}>
                   Random choice order (A, B, C...) per question
@@ -1259,12 +1260,12 @@ export default function ExamsPage() {
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                 <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--clr-text-muted)" }}>Q{qi + 1}</span>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {qi > 0 && <button className="btn btn-ghost btn-sm" style={{ padding: "0 6px" }} title="Move up" onClick={() => setQuestions(p => { const a = [...p]; [a[qi-1], a[qi]] = [a[qi], a[qi-1]]; return a; })}>â†‘</button>}
-                  {qi < questions.length - 1 && <button className="btn btn-ghost btn-sm" style={{ padding: "0 6px" }} title="Move down" onClick={() => setQuestions(p => { const a = [...p]; [a[qi], a[qi+1]] = [a[qi+1], a[qi]]; return a; })}>â†“</button>}
-                  {questions.length > 1 && <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 6px" }} onClick={() => setQuestions(p => p.filter((_, i) => i !== qi))}>âœ•</button>}
+                  {qi > 0 && <button className="btn btn-ghost btn-sm" style={{ padding: "0 6px" }} title="Move up" onClick={() => setQuestions(p => { const a = [...p]; [a[qi-1], a[qi]] = [a[qi], a[qi-1]]; return a; })}>↑</button>}
+                  {qi < questions.length - 1 && <button className="btn btn-ghost btn-sm" style={{ padding: "0 6px" }} title="Move down" onClick={() => setQuestions(p => { const a = [...p]; [a[qi], a[qi+1]] = [a[qi+1], a[qi]]; return a; })}>↓</button>}
+                  {questions.length > 1 && <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)", padding: "0 6px" }} onClick={() => setQuestions(p => p.filter((_, i) => i !== qi))}>✕</button>}
                 </div>
               </div>
-              <input className="input" style={{ marginBottom: 8, fontSize: "0.85rem" }} placeholder="Question textâ€¦" value={q.question} onChange={e => setQ(qi, "question", e.target.value)} />
+              <input className="input" style={{ marginBottom: 8, fontSize: "0.85rem" }} placeholder="Question text…" value={q.question} onChange={e => setQ(qi, "question", e.target.value)} />
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
                 {q.options.map((opt, oi) => (
                   <div key={oi} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1285,7 +1286,7 @@ export default function ExamsPage() {
                           setQuestions(p => p.map((qq, idx) => idx === qi ? { ...qq, options: opts, correctOptionId: newCorrect } : qq));
                         }}
                       >
-                        âœ•
+                        ✕
                       </button>
                     )}
                   </div>
@@ -1294,18 +1295,18 @@ export default function ExamsPage() {
                   <button className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }} onClick={() => setQ(qi, "options", [...q.options, ""])}>+ Option</button>
                 )}
               </div>
-              <input className="input" style={{ fontSize: "0.8rem" }} placeholder="Explanation (optional â€” shown after answering)" value={q.explanation || ""} onChange={e => setQ(qi, "explanation", e.target.value)} />
+              <input className="input" style={{ fontSize: "0.8rem" }} placeholder="Explanation (optional — shown after answering)" value={q.explanation || ""} onChange={e => setQ(qi, "explanation", e.target.value)} />
             </div>
           ))}
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
           <button className="btn btn-primary" onClick={isEditing ? handleSaveEdit : handleCreate} disabled={saving}>
-            {saving ? (isEditing ? "Savingâ€¦" : "Creatingâ€¦") : (isEditing ? "ðŸ’¾ Save Changes" : "Create Exam")}
+            {saving ? (isEditing ? "Saving…" : "Creating…") : (isEditing ? "💾 Save Changes" : "Create Exam")}
           </button>
           {isEditing && editingExam && !editingExam.isPublished && (
             <button className="btn btn-secondary" disabled={saving} onClick={async () => { await handleSaveEdit(); await handlePublish({ ...editingExam, title, passingScore: parseInt(passingScore) } as Exam); }}>
-              ðŸ’¾ Save & Launch
+              💾 Save & Launch
             </button>
           )}
         </div>
@@ -1317,7 +1318,7 @@ export default function ExamsPage() {
   return (
     <div>
       <div className="section-header animate-fade-up">
-        <div><h1>Exams</h1><p>Telegram-native exam system Â· {exams.length} exam{exams.length !== 1 ? "s" : ""}</p></div>
+        <div><h1>Exams</h1><p>Telegram-native exam system · {exams.length} exam{exams.length !== 1 ? "s" : ""}</p></div>
         <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
           <button
             className="btn btn-secondary btn-sm"
@@ -1337,9 +1338,9 @@ export default function ExamsPage() {
         </div>
       ) : exams.length === 0 ? (
         <div className="empty-state animate-fade-up">
-          <div className="empty-state-icon">ðŸ“‹</div>
+          <div className="empty-state-icon">📋</div>
           <h3>No exams yet</h3>
-          <p>Create an exam â€” students take it via Telegram DM when they click the Start button</p>
+          <p>Create an exam — students take it via Telegram DM when they click the Start button</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1350,38 +1351,38 @@ export default function ExamsPage() {
                   <div style={{ fontWeight: 700, fontSize: "0.95rem", marginBottom: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span dir="auto">{exam.title}</span>
                     {exam.isPublished
-                      ? <span className="badge badge-success" style={{ fontSize: "0.65rem" }}>âœ… Live</span>
+                      ? <span className="badge badge-success" style={{ fontSize: "0.65rem" }}>✅ Live</span>
                       : <span className="badge badge-muted" style={{ fontSize: "0.65rem" }}>Draft</span>}
                   </div>
                   {exam.description && <p dir="auto" style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", margin: "0 0 6px" }}>{exam.description}</p>}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>ðŸ“Š {(exam.questions as Question[]).length} questions</span>
-                    {exam.timeLimit && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>â± {Math.floor(exam.timeLimit / 60)}m</span>}
-                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>âœ… Pass: {exam.passingScore}%</span>
-                    <span className="badge badge-brand" style={{ fontSize: "0.68rem" }}>ðŸ‘¥ {exam._count.results} result{exam._count.results !== 1 ? "s" : ""}</span>
-                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>ðŸ• {timeAgo(exam.createdAt)}</span>
-                    {exam.createdBy && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>ðŸ‘¤ {exam.createdBy.firstName}</span>}
+                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>📊 {(exam.questions as Question[]).length} questions</span>
+                    {exam.timeLimit && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>⏱ {Math.floor(exam.timeLimit / 60)}m</span>}
+                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>✅ Pass: {exam.passingScore}%</span>
+                    <span className="badge badge-brand" style={{ fontSize: "0.68rem" }}>👥 {exam._count.results} result{exam._count.results !== 1 ? "s" : ""}</span>
+                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>🕐 {timeAgo(exam.createdAt)}</span>
+                    {exam.createdBy && <span className="badge badge-muted" style={{ fontSize: "0.68rem" }}>👤 {exam.createdBy.firstName}</span>}
                     {exam.shuffleQuestions && (
                       <span className="badge badge-muted" style={{ fontSize: "0.68rem", color: "#10b981", borderColor: "rgba(16, 185, 129, 0.3)", background: "rgba(16, 185, 129, 0.08)" }} title="Questions randomized per student">
-                        ðŸ”€ Shuffled Qs
+                        🔀 Shuffled Qs
                       </span>
                     )}
                     {exam.shuffleOptions && (
                       <span className="badge badge-muted" style={{ fontSize: "0.68rem", color: "#10b981", borderColor: "rgba(16, 185, 129, 0.3)", background: "rgba(16, 185, 129, 0.08)" }} title="Choices randomized per question">
-                        ðŸ”€ Shuffled Choices
+                        🔀 Shuffled Choices
                       </span>
                     )}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
                   {exam._count.results > 0 && (
-                    <button className="btn btn-secondary btn-sm" onClick={() => loadResults(exam)}>ðŸ“Š Results</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => loadResults(exam)}>📊 Results</button>
                   )}
                   {!exam.isPublished && (
-                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exam)}>âœï¸ Edit</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exam)}>✏️ Edit</button>
                   )}
                   <button className="btn btn-primary btn-sm" onClick={() => handlePublish(exam)}>
-                    {exam.isPublished ? "ðŸ”„ Re-send" : "ðŸš€ Launch"}
+                    {exam.isPublished ? "🔄 Re-send" : "🚀 Launch"}
                   </button>
                   <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)" }} onClick={() => handleDelete(exam.id, exam.title)}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
@@ -1392,8 +1393,7 @@ export default function ExamsPage() {
           ))}
         </div>
       )}
-
-      {/* Universal Accessible Action & Confirmation Modal */}
+      {/* Universal Accessible Action Modal */}
       <AccessibleModal
         isOpen={actionModal.isOpen}
         onClose={() => setActionModal(prev => ({ ...prev, isOpen: false }))}
@@ -1420,11 +1420,7 @@ export default function ExamsPage() {
             </button>
           </div>
         }
-      >
-        <p style={{ margin: 0, color: "var(--clr-text-secondary)", fontSize: "0.9rem", lineHeight: 1.6 }}>
-          {actionModal.description}
-        </p>
-      </AccessibleModal>
+      />
     </div>
   );
 }
