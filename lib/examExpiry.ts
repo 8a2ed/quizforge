@@ -29,10 +29,20 @@ export const examSessions: Map<string, any> = (globalThis.__examSessions ??= new
 export const sessionKey = (telegramId: string, examId: string) => `${telegramId}:${examId}`;
 
 /**
+ * Silence required to trigger inactivity warning: exactly 1 hour (60 minutes) from last interaction
+ */
+export const INACTIVITY_SILENCE_MS = 60 * 60 * 1000;
+
+/**
+ * Grace period given to the student after the 1-hour warning: 5 minutes
+ */
+export const INACTIVITY_GRACE_PERIOD_MS = 5 * 60 * 1000;
+
+/**
  * Checks all in-progress exam sessions (score === -1):
- * 1. If elapsed time >= timeLimit, marks user as failed, sends "Time is Over" to Telegram, and closes session.
- * 2. If user is inactive >= INACTIVITY_WARN_MS, sends a warning message on Telegram.
- * 3. If user remains inactive after warning for >= INACTIVITY_FAIL_MS, marks as failed and sends timeout message.
+ * 1. If overall elapsed time >= timeLimit, marks user as failed, sends 'Time is Over' to Telegram, and closes session.
+ * 2. If user is inactive >= INACTIVITY_SILENCE_MS (1 hour), sends a warning message with an interactive resume button.
+ * 3. If user remains inactive after warning for >= INACTIVITY_GRACE_PERIOD_MS (5 minutes), marks as failed with partial score.
  */
 export async function checkAndExpireExamSessions(targetExamId?: string): Promise<ExamExpiryStats> {
   const stats: ExamExpiryStats = {
@@ -152,17 +162,11 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
         continue;
       }
 
-      // ─── 2. Inactivity Tracking ──────────────────────────────────────────
-      // Default: 2 minutes silence threshold. If total time limit is tight, scale proportionally.
-      const INACTIVITY_WARN_MS = Math.min(
-        120_000,
-        timeLimitSeconds ? Math.max(30_000, Math.floor((timeLimitSeconds * 1000) / 3)) : 120_000
-      );
-      const INACTIVITY_FAIL_MS = 60_000; // 60s grace period after warning
+      // ─── 2. Inactivity Tracking (1-Hour Silence + 5-Minute Grace) ───────
       const inactiveMs = now - lastActiveAt;
 
-      // Case 2A: User has gone inactive and has NOT been warned yet
-      if (inactiveMs >= INACTIVITY_WARN_MS && !warnedAt) {
+      // Case 2A: User has been inactive for 1 hour and has NOT been warned yet
+      if (inactiveMs >= INACTIVITY_SILENCE_MS && !warnedAt) {
         rawData.warnedAt = now;
 
         await withRetry(() =>
@@ -181,14 +185,30 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
           const warnText = [
             `⚠️ <b>تنبيه عدم التفاعل: اختبار ${escapeHtml(exam.title)}</b>`,
             "",
-            `مرحباً <b>${escapeHtml(studentName)}</b>، نلاحظ توقفك عن الإجابة في الاختبار منذ فترة!`,
+            `مرحباً <b>${escapeHtml(studentName)}</b>، نلاحظ توقفك عن الإجابة في الاختبار لمدة <b>ساعة كاملة (60 دقيقة)</b>!`,
             "",
-            `⏱ <b>لديك دقيقة واحدة (60 ثانية)</b> للعودة واختيار إجابة السؤال، وإلا سيتم إغلاق الاختبار تلقائياً واحتساب النتيجة بالرسوب ❌.`,
+            `⏱ <b>لديك مهلة 5 دقائق</b> للضغط على زر متابعة الاختبار أدناه أو إرسال إجابة السؤال، وإلا سيتم إغلاق الاختبار تلقائياً واحتساب النتيجة بالرسوب ❌.`,
             "",
-            `👉 <i>يرجى الإجابة على السؤال المعروض في المحادثة للمتابعة وعدم فقدان المحاولة.</i>`,
+            `👉 <i>اضغط على الزر بالأسفل لتأكيد تواجدك ومتابعة الاختبار:</i>`,
           ].join("\n");
 
-          await telegram.sendMessage({ chat_id: chatId, text: warnText, parse_mode: "HTML" }).catch(() => {});
+          await telegram.sendMessage({
+            chat_id: chatId,
+            text: warnText,
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "▶️ متابعة الاختبار (أنا هنا)",
+                    callback_data: `exam_resume:${exam.id}`,
+                  },
+                ],
+              ],
+            },
+          }).catch((tgErr) => {
+            console.error("[examExpiry] Failed to send inactive warning:", tgErr);
+          });
         }
 
         stats.warnedCount++;
@@ -196,8 +216,8 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
         continue;
       }
 
-      // Case 2B: User was already warned and grace period expired with no response
-      if (warnedAt && now - warnedAt >= INACTIVITY_FAIL_MS) {
+      // Case 2B: User was already warned and the 5-minute grace period expired with no response
+      if (warnedAt && now - warnedAt >= INACTIVITY_GRACE_PERIOD_MS) {
         let correctCount = 0;
         for (let i = 0; i < studentQuestions.length; i++) {
           const chosen = studentAnswers[i] ?? studentAnswers[String(i)] ?? -1;
@@ -233,13 +253,13 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
             "",
             `عذراً <b>${escapeHtml(studentName)}</b>، تم إنهاء جلستك في اختبار:`,
             `📋 <b>${escapeHtml(exam.title)}</b>`,
-            `نظراً لعدم الاستجابة والتفاعل بعد إرسال التنبيه التحذيري.`,
+            `نظراً لعدم التفاعل لمدة ساعة وتجاوز مهلة الـ 5 دقائق الإضافية دون استجابة.`,
             "",
             `❌ <b>النتيجة النهائية: راسب (عدم استجابة)</b>`,
-            `📊 الدرجة المحتسبة: <b>${finalScore}%</b> (${correctCount}/${totalQ} إجابة)`,
-            `⏱ الوقت المستغرق: <b>${Math.floor(elapsedSeconds / 60)}د ${elapsedSeconds % 60}ث</b>`,
+            `📊 الدرجة المحتسبة للأسئلة المنجزة: <b>${finalScore}%</b> (${correctCount}/${totalQ} إجابة صحيحة)`,
+            `⏱ الوقت المنقضي: <b>${Math.floor(elapsedSeconds / 60)}د ${elapsedSeconds % 60}ث</b>`,
             "",
-            `<i>إذا كان لديك عذر تقني، يرجى التواصل مع مشرف المادة لإعادة تعيين المحاولة.</i>`,
+            `<i>إذا واجهتك مشكلة تقنية، يرجى التواصل مع مشرف المادة لإعادة تعيين المحاولة.</i>`,
           ].join("\n");
 
           try {
@@ -264,8 +284,7 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
         stats.expiredCount++;
         continue;
       }
-
-      stats.activeCount++;
+stats.activeCount++;
     }
   } catch (error) {
     console.error("[examExpiry] Error checking exam sessions:", error);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma, dbPing } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
+import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -26,6 +27,13 @@ export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET || "changeme";
   const token = authHeader?.split("Bearer ")[1] || urlParams.get("secret");
   if (token !== cronSecret) {
+    // ── 3. Check and expire overdue/inactive exam sessions ───────────────────
+    try {
+      await checkAndExpireExamSessions();
+    } catch (e) {
+      console.error("[Cron] checkAndExpireExamSessions error:", e);
+    }
+
     return NextResponse.json({ error: "Unauthorized / Missing CRON_SECRET" }, { status: 401 });
   }
 

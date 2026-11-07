@@ -446,9 +446,25 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
         answers: (data.answers as Record<number, number>) || {},
         currentQ: Number(data.currentQ) || 0,
         startedAt: Number(data.startedAt) || Date.now(),
+        lastActiveAt: Date.now(),
+        warnedAt: null,
         timeLimit: exam.timeLimit,
         passingScore: exam.passingScore,
       };
+
+      // Reset activity and clear warning in database
+      withRetry(() => prisma.examResult.updateMany({
+        where: { examId: exam.id, telegramId, score: -1 },
+        data: {
+          answers: {
+            ...data,
+            lastActiveAt: session.lastActiveAt,
+            warnedAt: null,
+            msgId,
+            chatId,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      })).catch(() => {});
     } else {
       const cfg = parseExamConfig(exam.description);
       const studentQuestions = prepareStudentExamQuestions(
@@ -592,6 +608,110 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
 }
 
 // exam_cancel:{examId}
+
+// exam_resume:{examId} — fired when user clicks "متابعة الاختبار" on inactivity warning
+async function handleExamResume(cb: Record<string, unknown>, examId: string) {
+  const user       = cb.from as Record<string, unknown>;
+  const telegramId = String((user as { id: number }).id);
+  const cbId       = cb.id as string;
+  const key        = sessionKey(telegramId, examId);
+  let session      = examSessions.get(key);
+
+  // Recovery from database if memory was cleared or serverless cold start
+  if (!session) {
+    try {
+      let inProgress = await withRetry(() => prisma.examResult.findFirst({
+        where: { examId, telegramId, score: -1 },
+        include: { exam: true },
+      }));
+      if (!inProgress) {
+        const stripped = examId.replace(/^exam[_-]/i, "");
+        inProgress = await withRetry(() => prisma.examResult.findFirst({
+          where: { examId: stripped, telegramId, score: -1 },
+          include: { exam: true },
+        }));
+      }
+      if (inProgress && inProgress.exam) {
+        const data = (inProgress.answers as Record<string, unknown>) || {};
+        session = {
+          examId: inProgress.examId,
+          examTitle: inProgress.exam.title,
+          chatId: Number(data.chatId) || (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id,
+          msgId: Number(data.msgId) || (cb.message as { message_id?: number })?.message_id || 0,
+          name: inProgress.name,
+          telegramId,
+          questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
+          answers: (data.answers as Record<number, number>) || {},
+          currentQ: Number(data.currentQ) || 0,
+          startedAt: Number(data.startedAt) || Date.now(),
+          lastActiveAt: Date.now(),
+          warnedAt: null,
+          timeLimit: inProgress.exam.timeLimit,
+          passingScore: inProgress.exam.passingScore,
+        };
+        examSessions.set(key, session);
+      }
+    } catch (e) {
+      console.error("[exam] session recovery error in handleExamResume:", e);
+    }
+  }
+
+  if (!session) {
+    return ackCb(cbId, "⚠️ لا توجد جلسة اختبار نشطة حالياً، أو انتهى الاختبار بالفعل.", true);
+  }
+
+  // Check if exam overall time limit has expired
+  if (session.timeLimit) {
+    const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+    if (elapsed >= session.timeLimit) {
+      await ackCb(cbId, "⏰ انتهى الوقت المخصص للاختبار!", true);
+      await finishExam(session, true);
+      return;
+    }
+  }
+
+  // Reset inactivity timer and clear warning
+  session.lastActiveAt = Date.now();
+  session.warnedAt = null;
+
+  // Persist updated activity in database
+  withRetry(() => prisma.examResult.updateMany({
+    where: { examId: session!.examId, telegramId, score: -1 },
+    data: {
+      answers: {
+        answers: session!.answers,
+        questions: session!.questions,
+        currentQ: session!.currentQ,
+        startedAt: session!.startedAt,
+        lastActiveAt: session!.lastActiveAt,
+        warnedAt: null,
+        msgId: session!.msgId,
+        chatId: session!.chatId,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  })).catch(e => console.error("[exam] save resume progress error:", e));
+
+  await ackCb(cbId, "✅ تم استئناف الاختبار وتمديد الجلسة بنجاح!", false);
+
+  // Update warning message to indicate it has been acknowledged
+  try {
+    const warnMsgId = (cb.message as { message_id?: number })?.message_id;
+    const warnChatId = (cb.message as { chat?: { id: number } })?.chat?.id;
+    if (warnMsgId && warnChatId) {
+      await tgCall("editMessageText", {
+        chat_id: warnChatId,
+        message_id: warnMsgId,
+        text: `✅ <b>تم استئناف الاختبار بنجاح!</b>\n\nتابع إجابتك على الأسئلة أدناه 👇`,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      });
+    }
+  } catch { /* ignore edit errors */ }
+
+  // Re-display or send current question
+  await sendQuestion(session);
+}
+
 async function handleExamCancel(cb: Record<string, unknown>, examId: string) {
   const user       = cb.from as Record<string, unknown>;
   const telegramId = String((user as { id: number }).id);
@@ -1048,6 +1168,9 @@ export async function POST(req: NextRequest) {
       } else if (data.startsWith("exam_answer:")) {
         const parts = data.split(":");                      // ["exam_answer", examId, qIdx, optId]
         if (parts.length === 4) await handleExamAnswer(cb, parts[1], Number(parts[2]), Number(parts[3]));
+
+      } else if (data.startsWith("exam_resume:")) {
+        await handleExamResume(cb, data.slice("exam_resume:".length));
 
       } else if (data.startsWith("exam_cancel:")) {
         await handleExamCancel(cb, data.slice("exam_cancel:".length));
