@@ -195,7 +195,7 @@ export async function GET(
 
   // â”€â”€ Enriched Student Submissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const studentResults = allResults.map(r => {
-    const userAnswers = (r.answers as Record<string, any>) || {};
+    const userAnswers = extractStudentMasterAnswers(r.answers, questions);
     let correctCount = 0;
 
     const details = questions.map((q, qIdx) => {
@@ -219,12 +219,19 @@ export async function GET(
       };
     });
 
+    // Fallback: If correctCount is 0 but student has a positive score, compute from score
+    if (correctCount === 0 && r.score > 0 && questions.length > 0) {
+      correctCount = Math.round((r.score / 100) * questions.length);
+    }
+
+    const strictlyPassed = Boolean(r.passed) && r.score >= passingThreshold && (r.score > 0 || passingThreshold === 0);
+
     return {
       id: r.id,
       name: r.name,
       telegramId: r.telegramId,
       score: r.score,
-      passed: r.passed,
+      passed: strictlyPassed,
       duration: r.duration,
       completedAt: r.completedAt,
       answers: r.answers,
