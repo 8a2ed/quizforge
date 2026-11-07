@@ -405,7 +405,14 @@ async function finishExam(session: ExamSession, timedOut = false) {
   const masterAnswers = mapStudentAnswersToMaster(questions as unknown as StudentExamQuestion[], answers);
 
   try {
-    const existingInProgress = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: -1 } }));
+    const existingInProgress = await withRetry(() => prisma.examResult.findFirst({
+      where: {
+        OR: [
+          { examId, telegramId, score: -1 },
+          { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+        ]
+      }
+    }));
     if (existingInProgress) {
       await withRetry(() => prisma.examResult.update({
         where: { id: existingInProgress.id },
@@ -592,13 +599,20 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     let session: ExamSession;
     if (inProgress && inProgress.answers && typeof inProgress.answers === "object") {
       const data = inProgress.answers as Record<string, unknown>;
+      const savedAnswers = (data.answers as Record<number, number>) || {};
+      const maxAnsweredIdx = Object.keys(savedAnswers).reduce((max, k) => {
+        const n = Number(k);
+        return isNaN(n) ? max : Math.max(max, n);
+      }, -1);
+      const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
+
       session = {
         examId: exam.id,
         examTitle: exam.title,
         chatId, msgId, name, telegramId,
         questions: (data.questions as unknown as ExamQuestion[]) || (exam.questions as unknown as ExamQuestion[]),
-        answers: (data.answers as Record<number, number>) || {},
-        currentQ: Number(data.currentQ) || 0,
+        answers: savedAnswers,
+        currentQ,
         startedAt: Number(data.startedAt) || Date.now(),
         lastActiveAt: Date.now(),
         warnedAt: null,
@@ -607,11 +621,17 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       };
 
       // Reset activity and clear warning in database
-      withRetry(() => prisma.examResult.updateMany({
-        where: { examId: exam.id, telegramId, score: -1 },
+      await withRetry(() => prisma.examResult.updateMany({
+        where: {
+          OR: [
+            { examId: exam.id, telegramId, score: -1 },
+            { examId: exam.id.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+          ]
+        },
         data: {
           answers: {
             ...data,
+            currentQ: session.currentQ,
             lastActiveAt: session.lastActiveAt,
             warnedAt: null,
             msgId,
@@ -692,6 +712,13 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
       }
       if (inProgress && inProgress.exam) {
         const data = (inProgress.answers as Record<string, unknown>) || {};
+        const savedAnswers = (data.answers as Record<number, number>) || {};
+        const maxAnsweredIdx = Object.keys(savedAnswers).reduce((max, k) => {
+          const n = Number(k);
+          return isNaN(n) ? max : Math.max(max, n);
+        }, -1);
+        const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
+
         session = {
           examId: inProgress.examId,
           examTitle: inProgress.exam.title,
@@ -699,8 +726,8 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
           msgId: (cb.message as { message_id: number }).message_id,
           name: inProgress.name, telegramId,
           questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
-          answers: (data.answers as Record<number, number>) || {},
-          currentQ: Number(data.currentQ) || 0,
+          answers: savedAnswers,
+          currentQ,
           startedAt: Number(data.startedAt) || Date.now(),
           timeLimit: inProgress.exam.timeLimit,
           passingScore: inProgress.exam.passingScore,
@@ -724,25 +751,30 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     }
   }
 
-  // Double-click protection: silently ignore older clicks
+  // Double-click protection: silently ignore clicks on already answered questions
   if (qIndex < session.currentQ) {
     return ackCb(cbId);
   }
-  if (qIndex > session.currentQ) {
-    return ackCb(cbId, "يرجى الإجابة على السؤال الحالي أولاً.", true);
-  }
 
+  // Record answer and advance currentQ safely without desync traps
   session.answers[qIndex] = optionId;
-  session.currentQ++;
+  session.currentQ = Math.max(session.currentQ + 1, qIndex + 1);
   session.lastActiveAt = Date.now();
   session.warnedAt = null;
 
   if (session.currentQ >= session.questions.length) {
+    await ackCb(cbId);
     await finishExam(session);
   } else {
     // Save in-progress progress ONLY while exam is active to prevent race with finishExam
-    withRetry(() => prisma.examResult.updateMany({
-      where: { examId: session!.examId, telegramId, score: -1 },
+    // ALWAYS await updateMany to ensure state is committed before serverless freeze
+    await withRetry(() => prisma.examResult.updateMany({
+      where: {
+        OR: [
+          { examId: session!.examId, telegramId, score: -1 },
+          { examId: session!.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+        ]
+      },
       data: {
         answers: {
           answers: session!.answers,
@@ -978,6 +1010,13 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
       }
       if (inProgress && inProgress.exam) {
         const data = (inProgress.answers as Record<string, unknown>) || {};
+        const savedAnswers = (data.answers as Record<number, number>) || {};
+        const maxAnsweredIdx = Object.keys(savedAnswers).reduce((max, k) => {
+          const n = Number(k);
+          return isNaN(n) ? max : Math.max(max, n);
+        }, -1);
+        const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
+
         session = {
           examId: inProgress.examId,
           examTitle: inProgress.exam.title,
@@ -986,8 +1025,8 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
           name: inProgress.name,
           telegramId,
           questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
-          answers: (data.answers as Record<number, number>) || {},
-          currentQ: Number(data.currentQ) || 0,
+          answers: savedAnswers,
+          currentQ,
           startedAt: Number(data.startedAt) || Date.now(),
           lastActiveAt: Date.now(),
           warnedAt: null,
@@ -1020,8 +1059,13 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
   session.warnedAt = null;
 
   // Persist updated activity in database
-  withRetry(() => prisma.examResult.updateMany({
-    where: { examId: session!.examId, telegramId, score: -1 },
+  await withRetry(() => prisma.examResult.updateMany({
+    where: {
+      OR: [
+        { examId: session!.examId, telegramId, score: -1 },
+        { examId: session!.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+      ]
+    },
     data: {
       answers: {
         answers: session!.answers,
