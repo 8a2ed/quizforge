@@ -1,6 +1,35 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
+import { Alexandria, Cairo, Inter, Outfit } from "next/font/google";
 import "./globals.css";
+
+const alexandria = Alexandria({
+  subsets: ["arabic", "latin"],
+  weight: ["400", "600", "700"],
+  display: "swap",
+  variable: "--font-alexandria",
+});
+
+const cairo = Cairo({
+  subsets: ["arabic", "latin"],
+  weight: ["400", "600", "700"],
+  display: "swap",
+  variable: "--font-cairo",
+});
+
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
+  variable: "--font-inter",
+});
+
+const outfit = Outfit({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  display: "swap",
+  variable: "--font-outfit",
+});
 
 export const metadata: Metadata = {
   title: {
@@ -32,14 +61,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ar" dir="rtl" data-scroll-behavior="smooth" suppressHydrationWarning>
+    <html
+      lang="ar"
+      dir="rtl"
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+      className={`${alexandria.variable} ${cairo.variable} ${inter.variable} ${outfit.variable}`}
+    >
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Alexandria:wght@300;400;500;600;700;800&family=Cairo:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
         <meta name="theme-color" content="#080b11" />
         <meta name="color-scheme" content="dark" />
         <script
@@ -62,10 +91,10 @@ export default function RootLayout({
         />
       </head>
       <body suppressHydrationWarning>
-        {/* Telegram Mini App SDK — loaded before any client JS */}
+        {/* Third-party Telegram WebApp script loaded after page interactive */}
         <Script
           src="https://telegram.org/js/telegram-web-app.js"
-          strategy="beforeInteractive"
+          strategy="afterInteractive"
         />
         {children}
       </body>

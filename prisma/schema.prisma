@@ -125,6 +125,9 @@ model Quiz {
   answers  PollAnswer[]
   collections CollectionQuiz[]
 
+  @@index([groupId, createdAt])
+  @@index([scheduledAt])
+  @@index([pollId])
   @@map("quizzes")
 }
 
@@ -224,6 +227,9 @@ model Exam {
   createdBy User         @relation(fields: [createdById], references: [id])
   results   ExamResult[]
 
+  @@index([groupId])
+  @@index([createdAt])
+  @@index([isPublished])
   @@map("exams")
 }
 
@@ -240,5 +246,9 @@ model ExamResult {
   examId String
   exam   Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
 
+  @@index([examId, telegramId, score])
+  @@index([examId, completedAt])
+  @@index([telegramId])
+  @@index([score])
   @@map("exam_results")
 }

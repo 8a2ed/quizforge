@@ -48,9 +48,9 @@
   --grad-card: linear-gradient(145deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
 
   /* Typography */
-  --font-display: "Outfit", "Alexandria", system-ui, sans-serif;
-  --font-body: "Inter", "Cairo", "Alexandria", system-ui, sans-serif;
-  --font-arabic: "Alexandria", "Cairo", "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-outfit), var(--font-alexandria), system-ui, sans-serif;
+  --font-body: var(--font-inter), var(--font-cairo), var(--font-alexandria), system-ui, sans-serif;
+  --font-arabic: var(--font-alexandria), var(--font-cairo), "Segoe UI", system-ui, sans-serif;
 
   /* Spacing */
   --space-1: 4px;

@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useToast } from "@/lib/useToast";
 import { AccessibleModal } from "@/components/AccessibleModal";
+import { useDebounce } from "@/lib/useDebounce";
 
 interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; imageUrl?: string; }
 interface Topic { message_thread_id: number; name: string; }
@@ -179,6 +180,9 @@ export default function ExamsPage() {
   // Results interactive filters
   const [resultsTab, setResultsTab] = useState<"students" | "questions">("students");
   const [studentSearch, setStudentSearch] = useState("");
+  const debouncedStudentSearch = useDebounce(studentSearch, 250);
+  const [resultsPage, setResultsPage] = useState(1);
+  const RESULTS_PER_PAGE = 25;
   const [studentFilter, setStudentFilter] = useState<"all" | "passed" | "failed" | "inProgress">("all");
   const [studentSort, setStudentSort] = useState<"newest" | "highest" | "lowest" | "fastest" | "slowest">("newest");
   const [expandedStudentIds, setExpandedStudentIds] = useState<Set<string>>(new Set());
@@ -494,6 +498,9 @@ export default function ExamsPage() {
       confirmText: willPause ? "⏸ إيقاف مؤقتاً" : "▶️ استئناف وتفعيل",
       isDestructive: false,
       onConfirm: async () => {
+        // Optimistic UI update: flip badge and button immediately before server response
+        setExams(prev => prev.map(e => e.id === exam.id ? { ...e, isPaused: willPause } : e));
+        setActionModal(prev => ({ ...prev, isOpen: false }));
         setModalLoading(true);
         try {
           const res = await fetch(`/api/groups/${groupId}/exams`, {
@@ -507,10 +514,15 @@ export default function ExamsPage() {
             const syncNote = data.telegramUpdated ? " وتحديث رسالة المجموعة" : "";
             toast.success("تم بنجاح", `تم ${actionWord} الاختبار بنجاح${syncNote}!`);
             load();
-            setActionModal(prev => ({ ...prev, isOpen: false }));
           } else {
+            // Revert optimistic update on failure
+            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, isPaused: !willPause } : e));
             toast.error("خطأ", data.error || "تعذر تغيير حالة الاختبار");
           }
+        } catch {
+          // Revert optimistic update on network error
+          setExams(prev => prev.map(e => e.id === exam.id ? { ...e, isPaused: !willPause } : e));
+          toast.error("خطأ", "حدث خطأ في الاتصال");
         } finally {
           setModalLoading(false);
         }
@@ -872,8 +884,7 @@ export default function ExamsPage() {
           }}
         >
           <div style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", flexDirection: "column", alignItems: "center" }} onClick={e => e.stopPropagation()}>
-            <img
-              src={lightboxImage}
+            <img loading="lazy" decoding="async" src={lightboxImage}
               alt="Question Full Preview"
               style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}
             />
@@ -902,8 +913,8 @@ export default function ExamsPage() {
         if (studentFilter === "passed" && (!r.passed || inProgress)) return false;
         if (studentFilter === "failed" && (r.passed || inProgress)) return false;
         if (studentFilter === "inProgress" && !inProgress) return false;
-        if (!studentSearch.trim()) return true;
-        const term = studentSearch.toLowerCase();
+        if (!debouncedStudentSearch.trim()) return true;
+        const term = debouncedStudentSearch.toLowerCase();
         return (
           r.name.toLowerCase().includes(term) ||
           (r.telegramId && r.telegramId.toLowerCase().includes(term))
@@ -916,6 +927,10 @@ export default function ExamsPage() {
         if (studentSort === "slowest") return (b.duration || 0) - (a.duration || 0);
         return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
       });
+
+    const totalResultsPages = Math.max(1, Math.ceil(filteredStudents.length / RESULTS_PER_PAGE));
+    const safeResultsPage = Math.min(resultsPage, totalResultsPages);
+    const paginatedStudents = filteredStudents.slice((safeResultsPage - 1) * RESULTS_PER_PAGE, safeResultsPage * RESULTS_PER_PAGE);
 
     return (
       <div>
@@ -1124,8 +1139,9 @@ export default function ExamsPage() {
                 <p>Try adjusting your search query or filters.</p>
               </div>
             ) : (
+              <>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {filteredStudents.map(r => {
+                {paginatedStudents.map(r => {
                   const inProgress = r.score < 0;
                   const isExpanded = expandedStudentIds.has(r.id);
                   const timeLimitSec = exam.timeLimit;
@@ -1347,6 +1363,37 @@ export default function ExamsPage() {
                   );
                 })}
               </div>
+
+              {/* Pagination Controls for Student Submissions */}
+              {totalResultsPages > 1 && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, padding: "10px 14px", background: "var(--clr-bg-card)", borderRadius: 8, border: "1px solid var(--clr-border)" }}>
+                  <div style={{ fontSize: "0.82rem", color: "var(--clr-text-muted)" }}>
+                    عرض {((safeResultsPage - 1) * RESULTS_PER_PAGE) + 1} - {Math.min(safeResultsPage * RESULTS_PER_PAGE, filteredStudents.length)} من {filteredStudents.length} محاولة
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      disabled={safeResultsPage <= 1}
+                      onClick={() => setResultsPage(p => Math.max(1, p - 1))}
+                      style={{ padding: "4px 10px", fontSize: "0.78rem" }}
+                    >
+                      السابق ◀
+                    </button>
+                    <span style={{ fontSize: "0.82rem", fontWeight: 600, padding: "0 8px" }}>
+                      {safeResultsPage} / {totalResultsPages}
+                    </span>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      disabled={safeResultsPage >= totalResultsPages}
+                      onClick={() => setResultsPage(p => Math.min(totalResultsPages, p + 1))}
+                      style={{ padding: "4px 10px", fontSize: "0.78rem" }}
+                    >
+                      ▶ التالي
+                    </button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </div>
         )}
@@ -1406,8 +1453,7 @@ export default function ExamsPage() {
                     </div>
                     {q.imageUrl && (
                       <div style={{ marginBottom: 12 }}>
-                        <img
-                          src={q.imageUrl}
+                        <img loading="lazy" decoding="async" src={q.imageUrl}
                           alt="Question Graphic"
                           onClick={() => setLightboxImage(q.imageUrl || null)}
                           style={{ maxHeight: 180, maxWidth: "100%", borderRadius: 8, border: "1px solid var(--clr-border)", cursor: "pointer", objectFit: "contain" }}
@@ -1724,8 +1770,7 @@ export default function ExamsPage() {
                 {q.imageUrl ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <div style={{ position: "relative", cursor: "pointer" }} onClick={() => setLightboxImage(q.imageUrl || null)} title="انقر لتكبير الصورة">
-                      <img
-                        src={q.imageUrl}
+                      <img loading="lazy" decoding="async" src={q.imageUrl}
                         alt="Question Attachment"
                         style={{ width: 80, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--clr-brand)" }}
                       />
