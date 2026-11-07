@@ -217,6 +217,52 @@ export default function ExamsPage() {
     }
   }, []);
 
+
+  // Check if draft exists from bulk import
+  useEffect(() => {
+    try {
+      const isFromBulk = typeof window !== "undefined" && (
+        new URLSearchParams(window.location.search).get("fromBulk") === "1" ||
+        !!sessionStorage.getItem("exam-draft-from-bulk")
+      );
+      if (!isFromBulk) return;
+
+      const stored = sessionStorage.getItem("exam-draft-from-bulk");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const formattedQuestions: Question[] = parsed.map((q: any) => {
+            const rawOpts = Array.isArray(q.options) && q.options.length > 0
+              ? q.options.map((o: any) => String(o ?? "").trim())
+              : ["", ""];
+            const cleanOpts = rawOpts.length >= 2 ? rawOpts : [...rawOpts, ...Array(2 - rawOpts.length).fill("")];
+            const safeCorrect = (typeof q.correctOptionId === "number" && q.correctOptionId >= 0 && q.correctOptionId < cleanOpts.length)
+              ? q.correctOptionId
+              : 0;
+            return {
+              question: String(q.question || "").trim(),
+              options: cleanOpts,
+              correctOptionId: safeCorrect,
+              explanation: q.explanation ? String(q.explanation).trim() : undefined,
+            };
+          });
+
+          setQuestions(formattedQuestions);
+          setTitle(`امتحان جديد (${formattedQuestions.length} سؤال)`);
+          setMode("create");
+          showToast("success", `✅ تم استيراد ${formattedQuestions.length} سؤال من الاستيراد المجمع! جاهز لإنشاء الامتحان.`);
+          sessionStorage.removeItem("exam-draft-from-bulk");
+
+          if (window.history?.replaceState) {
+            window.history.replaceState({}, "", window.location.pathname);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load draft from bulk import:", e);
+    }
+  }, []);
+
   // Reset form
   const resetForm = () => {
     setTitle(""); setDesc(""); setTimeLimit(""); setPassingScore("60");

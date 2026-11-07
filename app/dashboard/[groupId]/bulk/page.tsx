@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
@@ -614,6 +614,7 @@ function parseCSV(text: string, topicsList: Topic[] = [], collectionsList: Colle
 
 export default function BulkPage() {
   const { groupId } = useParams() as { groupId: string };
+  const router = useRouter();
   const [mode, setMode] = useState<"smart" | "file">("smart");
   const [rawText, setRawText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -1131,6 +1132,32 @@ export default function BulkPage() {
   const updateItem = (id: string, updates: Partial<QuizPreview>) => setQueue(prev => prev.map(p => p.id === id ? { ...p, ...updates, errors: validate({ ...p, ...updates }) } : p));
   const deleteItem = (id: string) => setQueue(prev => prev.filter(p => p.id !== id));
 
+
+  // ── Convert valid quiz questions to Exam ─────────────────────────────────
+  const handleConvertToExam = useCallback(() => {
+    const validQuizItems = queue.filter(
+      (q) => q.type === "quiz" && (!q.errors || q.errors.length === 0) && typeof q.correctOptionId === "number"
+    );
+    if (validQuizItems.length === 0) {
+      notify("error", "لا توجد أسئلة صالحة (Quiz) لتحويلها. تأكد من أن الأسئلة من نوع Quiz وخالية من الأخطاء.");
+      return;
+    }
+    const examQuestions = validQuizItems.map((q) => ({
+      question: q.question,
+      options: q.options,
+      correctOptionId: q.correctOptionId as number,
+      explanation: q.explanation || undefined,
+    }));
+    try {
+      sessionStorage.setItem("exam-draft-from-bulk", JSON.stringify(examQuestions));
+      notify("success", `تم تجهيز ${examQuestions.length} سؤال لإنشاء الامتحان...`);
+      setTimeout(() => router.push(`/dashboard/${groupId}/exams?fromBulk=1`), 500);
+    } catch (e) {
+      notify("error", "فشل حفظ الأسئلة في الذاكرة المؤقتة. حاول مرة أخرى.");
+    }
+  }, [queue, groupId, router]);
+
+
   return (
     <div dir="auto" className="mx-auto max-w-6xl pb-24" style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
       <AnimatePresence>
@@ -1502,6 +1529,22 @@ export default function BulkPage() {
                 <span style={{ fontWeight: 700, color: completionPostConfig.enabled ? "var(--clr-success)" : "var(--clr-text-muted)" }}>
                   {completionPostConfig.enabled ? "مفعّل ✓" : "معطّل"}
                 </span>
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{
+                  border: "1px solid var(--clr-brand)",
+                  color: "var(--clr-brand)",
+                  fontWeight: 600,
+                  gap: 6,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+                onClick={handleConvertToExam}
+                title="تحويل الأسئلة الصالحة إلى امتحان جديد"
+                disabled={queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length === 0}
+              >
+                🎓 تحويل إلى امتحان ({queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length})
               </button>
               <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={() => setQueue([])}>Clear</button>
               <button className="btn btn-secondary" onClick={() => handleSend("save")} disabled={uploading}>📁 Save</button>
