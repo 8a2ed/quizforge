@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accessible Modal Dialog Component</title>
+  <style>
+    /* ==========================================================================
+       CSS Reset & Global Design System
+       ========================================================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-page: #0b0d11;
+      --bg-card: rgba(20, 22, 28, 0.75);
+      --bg-card-border: rgba(255, 255, 255, 0.08);
+      --bg-input: #12141a;
+      
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+
+      --cyan-primary: #00c4ff;
+      --cyan-hover: #38d2ff;
+      --cyan-glow: rgba(0, 196, 255, 0.35);
+
+      --danger-color: #ef4444;
+      --danger-hover: #dc2626;
+      --danger-bg: rgba(239, 68, 68, 0.12);
+      --danger-border: rgba(239, 68, 68, 0.3);
+
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+
+      --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      font-family: var(--font-stack);
+      background-color: var(--bg-page);
+      color: var(--text-main);
+      line-height: 1.6;
+      min-height: 200vh; /* Deliberately long page to test scroll lock & layout shift */
+      padding: 48px 24px;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(0, 196, 255, 0.06) 0%, transparent 40%),
+        radial-gradient(circle at 85% 65%, rgba(139, 92, 246, 0.05) 0%, transparent 45%);
+      background-attachment: fixed;
+    }
+
+    /* Universal Focus Ring */
+    :focus-visible {
+      outline: 2px solid var(--cyan-primary) !important;
+      outline-offset: 2px !important;
+    }
+
+    /* Container */
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    header.page-header {
+      margin-bottom: 40px;
+      border-bottom: 1px solid var(--bg-card-border);
+      padding-bottom: 24px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(0, 196, 255, 0.1);
+      border: 1px solid rgba(0, 196, 255, 0.25);
+      color: var(--cyan-primary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      border-radius: 9999px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      margin-bottom: 8px;
+    }
+
+    p.lead {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      max-width: 680px;
+    }
+
+    /* Dashboard Demo Grid */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-md);
+      padding: 24px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .card h3 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+
+    .card p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+      flex-grow: 1;
+    }
+
+    .card-footer {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    /* Event Logging Panel */
+    .log-panel {
+      background: #0f1117;
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-md);
+      padding: 16px 20px;
+      margin-top: 32px;
+    }
+
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .log-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .log-entries {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.82rem;
+      color: #a7f3d0;
+      max-height: 140px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .log-entry {
+      display: flex;
+      gap: 8px;
+    }
+
+    .log-time {
+      color: var(--text-dim);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px; /* Touch target >= 40px */
+      padding: 8px 18px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      font-family: inherit;
+      border-radius: 10px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary {
+      background-color: var(--cyan-primary);
+      color: #080b10; /* High contrast: ~12:1 against #00c4ff */
+      border: 1px solid transparent;
+      box-shadow: 0 2px 10px var(--cyan-glow);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--cyan-hover);
+      box-shadow: 0 4px 16px rgba(0, 196, 255, 0.45);
+    }
+
+    .btn-ghost {
+      background-color: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e5e7eb;
+    }
+
+    .btn-ghost:hover {
+      background-color: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-danger {
+      background-color: var(--danger-color);
+      color: #ffffff;
+      border: 1px solid transparent;
+      box-shadow: 0 2px 10px rgba(239, 68, 68, 0.3);
+    }
+
+    .btn-danger:hover {
+      background-color: var(--danger-hover);
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.45);
+    }
+
+    /* ==========================================================================
+       Modal Component CSS
+       ========================================================================== */
+    .md-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 1000;
+      padding: 24px 16px;
+      overflow-y: auto;
+
+      /* Initial hidden transition state */
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 180ms ease, visibility 180ms ease;
+    }
+
+    /* Visible state for overlay */
+    .md-overlay.is-open {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    .md-dialog {
+      width: 100%;
+      max-width: 420px;
+      max-height: calc(100vh - 48px);
+      background: rgba(22, 22, 26, 0.98);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      position: relative;
+      outline: none; /* Focusable container via tabindex="-1" */
+
+      /* Transform animation */
+      transform: scale(0.97) translateY(8px);
+      transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease;
+      opacity: 0;
+    }
+
+    .md-overlay.is-open .md-dialog {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+
+    /* Dialog Header */
+    .md-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-shrink: 0;
+    }
+
+    .md-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #ffffff;
+      line-height: 1.3;
+    }
+
+    /* 32px Close Button */
+    .md-close-btn {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      padding: 0;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      line-height: 1;
+      transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+    }
+
+    .md-close-btn:hover {
+      background-color: var(--danger-bg);
+      color: var(--danger-color);
+      border-color: var(--danger-border);
+    }
+
+    /* Dialog Body */
+    .md-body {
+      font-size: 0.925rem;
+      color: var(--text-muted);
+      line-height: 1.55;
+      overflow-y: auto;
+      flex-grow: 1;
+    }
+
+    /* Dialog Footer */
+    .md-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      margin-top: 24px;
+      flex-shrink: 0;
+    }
+
+    /* Form Inputs within Dialog */
+    .form-group {
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-label {
+      font-size: 0.825rem;
+      font-weight: 500;
+      color: #d1d5db;
+    }
+
+    .form-input, .form-select {
+      width: 100%;
+      min-height: 40px; /* Touch target >= 40px */
+      padding: 8px 12px;
+      background: var(--bg-input);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-sm);
+      color: #ffffff;
+      font-size: 0.9rem;
+      font-family: inherit;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    .form-input:focus, .form-select:focus {
+      border-color: var(--cyan-primary);
+    }
+
+    .form-select option {
+      background: #16161a;
+      color: #ffffff;
+    }
+
+    .danger-callout {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      margin-top: 14px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .danger-callout svg {
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    /* prefers-reduced-motion: skip all animations and transitions */
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+
+      .md-overlay,
+      .md-dialog,
+      .btn,
+      .md-close-btn {
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header class="page-header">
+      <div class="badge">Component Demo</div>
+      <h1>Accessible Modal Dialog</h1>
+      <p class="lead">
+        A dependency-free, WAI-ARIA compliant modal dialog component driven by a single JavaScript class. Demonstrates strict focus trapping, scroll lock compensation, Escape hierarchy, safe backdrop dismiss, and return focus management.
+      </p>
+    </header>
+
+    <div class="dashboard-grid">
+      <!-- Card 1: Form Modal Trigger -->
+      <div class="card">
+        <div>
+          <h3>Team Management</h3>
+          <p>Open a structured form dialog to invite a new team member with specific role privileges. Demonstrates autofocus, form keyboard navigation, and tab loops.</p>
+        </div>
+        <div class="card-footer">
+          <button type="button" class="btn btn-primary" data-md-open="modal-invite">
+            Invite Member
+          </button>
+        </div>
+      </div>
+
+      <!-- Card 2: Destructive Modal Trigger -->
+      <div class="card">
+        <div>
+          <h3>Danger Zone</h3>
+          <p>Open a critical confirmation dialog with high visual contrast and destructive intent styling. Demonstrates focus routing to safe action by default.</p>
+        </div>
+        <div class="card-footer">
+          <button type="button" class="btn btn-danger" data-md-open="modal-delete">
+            Delete Project
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Event Log -->
+    <div class="log-panel">
+      <div class="log-header">
+        <span class="log-title">Modal Event Dispatcher Log</span>
+        <button type="button" class="btn btn-ghost" id="clear-logs" style="min-height: 28px; padding: 2px 10px; font-size: 0.75rem;">Clear Log</button>
+      </div>
+      <div class="log-entries" id="event-log">
+        <div class="log-entry">
+          <span class="log-time">[ready]</span>
+          <span>Modal component initialized. Ready for user interaction.</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 48px; color: var(--text-dim); font-size: 0.85rem;">
+      <p>ℹ️ <em>Scroll down this page to test the scrollbar lock mechanism. When a modal opens, document scrolling is locked and scrollbar removal is pixel-compensated to eliminate layout shift.</em></p>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       DEMO 1: Form Dialog (Email + Role)
+       ========================================================================== -->
+  <div id="modal-invite" class="md-overlay" role="presentation" hidden>
+    <div class="md-dialog"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="modal-invite-title"
+         aria-describedby="modal-invite-desc"
+         tabindex="-1">
+      
+      <header class="md-header">
+        <h2 id="modal-invite-title" class="md-title">Invite Team Member</h2>
+        <button type="button" class="md-close-btn" aria-label="Close dialog" data-md-close>
+          &times;
+        </button>
+      </header>
+
+      <form id="invite-form" onsubmit="event.preventDefault();">
+        <div class="md-body" id="modal-invite-desc">
+          <p style="margin-bottom: 16px;">
+            Send an invitation to collaborate. They will receive an email containing a secure single-use login link.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label" for="invite-email">Email Address</label>
+            <!-- autofocus: focus lands here automatically on open -->
+            <input type="email" id="invite-email" class="form-input" placeholder="colleague@company.com" required autofocus>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="invite-role">Role & Permissions</label>
+            <select id="invite-role" class="form-select">
+              <option value="member">Member (Read & Write)</option>
+              <option value="editor">Editor (Full Content Control)</option>
+              <option value="admin">Administrator (Billing & Management)</option>
+            </select>
+          </div>
+        </div>
+
+        <footer class="md-footer">
+          <button type="button" class="btn btn-ghost" data-md-close>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-invite">Send Invitation</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       DEMO 2: Destructive Confirm Dialog
+       ========================================================================== -->
+  <div id="modal-delete" class="md-overlay" role="presentation" hidden>
+    <div class="md-dialog"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="modal-delete-title"
+         aria-describedby="modal-delete-desc"
+         tabindex="-1">
+      
+      <header class="md-header">
+        <h2 id="modal-delete-title" class="md-title">Delete Project?</h2>
+        <button type="button" class="md-close-btn" aria-label="Close dialog" data-md-close>
+          &times;
+        </button>
+      </header>
+
+      <div class="md-body" id="modal-delete-desc">
+        <p>
+          Are you sure you want to delete <strong style="color: #ffffff;">"Production Cluster Alpha"</strong>? This action is permanent and cannot be reversed.
+        </p>
+
+        <div class="danger-callout">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <span>All associated API keys, database snapshots, and telemetry logs will be instantly and irrevocably destroyed.</span>
+        </div>
+      </div>
+
+      <footer class="md-footer">
+        <!-- Autofocus on Cancel button for destructive dialogs as an accessible safety best-practice -->
+        <button type="button" class="btn btn-ghost" data-md-close autofocus>Cancel</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-delete">Delete Permanently</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       Modal JavaScript Implementation
+       ========================================================================== -->
+  <script>
+    /**
+     * ScrollLockManager
+     * Reference-counts scroll locks across multiple/stacked dialogs
+     * Compensates for scrollbar width to prevent page content shift.
+     */
+    class ScrollLockManager {
+      static lockCount = 0;
+      static savedOverflow = '';
+      static savedPaddingRight = '';
+
+      static lock() {
+        if (this.lockCount === 0) {
+          const docEl = document.documentElement;
+          this.savedOverflow = docEl.style.overflow;
+          this.savedPaddingRight = docEl.style.paddingRight;
+
+          // Compute scrollbar width
+          const scrollbarWidth = window.innerWidth - docEl.clientWidth;
+          if (scrollbarWidth > 0) {
+            const currentPadding = parseFloat(window.getComputedStyle(docEl).paddingRight) || 0;
+            docEl.style.paddingRight = `${currentPadding + scrollbarWidth}px`;
+          }
+          docEl.style.overflow = 'hidden';
+        }
+        this.lockCount++;
+      }
+
+      static unlock() {
+        this.lockCount = Math.max(0, this.lockCount - 1);
+        if (this.lockCount === 0) {
+          const docEl = document.documentElement;
+          docEl.style.overflow = this.savedOverflow;
+          docEl.style.paddingRight = this.savedPaddingRight;
+        }
+      }
+
+      static forceReset() {
+        this.lockCount = 0;
+        const docEl = document.documentElement;
+        docEl.style.overflow = this.savedOverflow;
+        docEl.style.paddingRight = this.savedPaddingRight;
+      }
+    }
+
+    /**
+     * Modal Component
+     * Comprehensive WAI-ARIA compliant modal dialog class.
+     */
+    class Modal {
+      // Global stack to track open dialog hierarchy (Escape closes topmost only)
+      static openStack = [];
+
+      // Static global Escape key listener initialized once
+      static _escapeListenerInitialized = false;
+
+      static initGlobalEscape() {
+        if (this._escapeListenerInitialized) return;
+        this._escapeListenerInitialized = true;
+
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && Modal.openStack.length > 0) {
+            const topmostModal = Modal.openStack[Modal.openStack.length - 1];
+            if (topmostModal && topmostModal.options.closeOnEscape) {
+              event.preventDefault();
+              topmostModal.close();
+            }
+          }
+        });
+      }
+
+      /**
+       * @param {HTMLElement} overlayElement - The root overlay container
+       * @param {Object} options - Configuration options
+       */
+      constructor(overlayElement, options = {}) {
+        if (!overlayElement || !(overlayElement instanceof HTMLElement)) {
+          throw new TypeError('Modal requires a valid DOM HTMLElement for the overlay.');
+        }
+
+        this.overlay = overlayElement;
+        this.dialog = this.overlay.querySelector('[role="dialog"]') || this.overlay.firstElementChild;
+
+        if (!this.dialog) {
+          throw new Error('Modal overlay must contain a child dialog element.');
+        }
+
+        this.options = {
+          onOpen: typeof options.onOpen === 'function' ? options.onOpen : () => {},
+          onClose: typeof options.onClose === 'function' ? options.onClose : () => {},
+          closeOnBackdrop: options.closeOnBackdrop !== false,
+          closeOnEscape: options.closeOnEscape !== false,
+        };
+
+        this._isOpen = false;
+        this.returnTarget = null;
+        this._pointerDownOnOverlay = false;
+        this._transitionTimeout = null;
+
+        // Bound event handler references for clean removal
+        this._handleKeyDown = this._handleKeyDown.bind(this);
+        this._handlePointerDown = this._handlePointerDown.bind(this);
+        this._handleClick = this._handleClick.bind(this);
+
+        this._setupAttributes();
+        this._attachListeners();
+
+        Modal.initGlobalEscape();
+      }
+
+      /**
+       * Ensure required accessibility attributes are present
+       */
+      _setupAttributes() {
+        if (!this.dialog.hasAttribute('tabindex')) {
+          this.dialog.setAttribute('tabindex', '-1');
+        }
+        if (!this.dialog.hasAttribute('role')) {
+          this.dialog.setAttribute('role', 'dialog');
+        }
+        if (!this.dialog.hasAttribute('aria-modal')) {
+          this.dialog.setAttribute('aria-modal', 'true');
+        }
+      }
+
+      /**
+       * Attach listeners for backdrop clicks, close triggers, and focus trap
+       */
+      _attachListeners() {
+        this.overlay.addEventListener('pointerdown', this._handlePointerDown);
+        this.overlay.addEventListener('click', this._handleClick);
+        this.overlay.addEventListener('keydown', this._handleKeyDown);
+      }
+
+      /**
+       * Track pointerdown target to ensure backdrop click started on overlay
+       */
+      _handlePointerDown(event) {
+        // True only if pointer landed directly on the overlay backdrop itself
+        this._pointerDownOnOverlay = (event.target === this.overlay);
+      }
+
+      /**
+       * Handle click events: close buttons & backdrop dismissal
+       */
+      _handleClick(event) {
+        // 1. Check for explicit close affordance ([data-md-close] or header close button)
+        const closeTrigger = event.target.closest('[data-md-close]');
+        if (closeTrigger && this.overlay.contains(closeTrigger)) {
+          event.preventDefault();
+          this.close();
+          return;
+        }
+
+        // 2. Check for backdrop click dismissal:
+        // Must have both started on overlay (pointerdown) AND completed on overlay (click)
+        if (this.options.closeOnBackdrop && this._pointerDownOnOverlay && event.target === this.overlay) {
+          event.preventDefault();
+          this.close();
+        }
+
+        this._pointerDownOnOverlay = false;
+      }
+
+      /**
+       * Focus Trap: Strict Tab and Shift+Tab key trapping
+       */
+      _handleKeyDown(event) {
+        if (event.key !== 'Tab') return;
+
+        // Recompute focusable elements on every Tab press (dynamic DOM resilience)
+        const focusables = this._getFocusableElements();
+
+        if (focusables.length === 0) {
+          // If no interactive elements inside, keep focus anchored on the dialog container
+          event.preventDefault();
+          this.dialog.focus();
+          return;
+        }
+
+        const firstElement = focusables[0];
+        const lastElement = focusables[focusables.length - 1];
+        const currentActive = document.activeElement;
+
+        if (event.shiftKey) {
+          // Backward tab: wrap from first to last
+          if (currentActive === firstElement || currentActive === this.dialog || !this.dialog.contains(currentActive)) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          // Forward tab: wrap from last to first
+          if (currentActive === lastElement) {
+            event.preventDefault();
+            firstElement.focus();
+          }
+        }
+      }
+
+      /**
+       * Query and filter currently visible focusable elements
+       */
+      _getFocusableElements() {
+        const selector = [
+          'a[href]',
+          'button:not([disabled])',
+          'input:not([disabled]):not([type="hidden"])',
+          'select:not([disabled])',
+          'textarea:not([disabled])',
+          '[tabindex]:not([tabindex="-1"])',
+          'details > summary:first-of-type',
+          '[contenteditable]:not([contenteditable="false"])'
+        ].join(', ');
+
+        const elements = Array.from(this.dialog.querySelectorAll(selector));
+
+        return elements.filter((el) => {
+          if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') {
+            return false;
+          }
+          // Check CSS computed visibility
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+            return false;
+          }
+          // Check if element has dimension or layout
+          if (el.offsetParent === null && style.position !== 'fixed') {
+            return false;
+          }
+          return true;
+        });
+      }
+
+      /**
+       * Open the modal dialog
+       */
+      open() {
+        if (this._isOpen) return;
+
+        // 1. Store the active element to restore focus on close
+        this.returnTarget = document.activeElement;
+
+        this._isOpen = true;
+        clearTimeout(this._transitionTimeout);
+
+        // 2. Lock page scroll without layout shift
+        ScrollLockManager.lock();
+
+        // 3. Register on the global open stack
+        Modal.openStack.push(this);
+
+        // 4. Update stack z-index for stacked/nested modals
+        this.overlay.style.zIndex = (1000 + Modal.openStack.length * 10).toString();
+
+        // 5. Make overlay visible in DOM
+        this.overlay.removeAttribute('hidden');
+        this.overlay.setAttribute('aria-hidden', 'false');
+
+        // 6. Trigger CSS enter animation
+        // Force reflow so the transition reliably starts from initial scale/opacity
+        void this.overlay.offsetHeight;
+        this.overlay.classList.add('is-open');
+
+        // 7. Route initial focus into the dialog
+        this._setInitialFocus();
+
+        // 8. Dispatch CustomEvent & call onOpen callback
+        this.overlay.dispatchEvent(new CustomEvent('modal:open', {
+          bubbles: true,
+          detail: { modal: this }
+        }));
+
+        this.options.onOpen();
+      }
+
+      /**
+       * Route initial focus: prefers [autofocus], else first focusable, else container
+       */
+      _setInitialFocus() {
+        // Request animation frame to guarantee layout is painted
+        requestAnimationFrame(() => {
+          if (!this._isOpen) return;
+
+          // 1. Check for element with autofocus attribute
+          const autoFocusElement = this.dialog.querySelector('[autofocus]');
+          if (autoFocusElement && this._isElementFocusable(autoFocusElement)) {
+            autoFocusElement.focus();
+            return;
+          }
+
+          // 2. Check for first focusable element
+          const focusables = this._getFocusableElements();
+          if (focusables.length > 0) {
+            focusables[0].focus();
+            return;
+          }
+
+          // 3. Fallback to dialog container itself
+          this.dialog.focus();
+        });
+      }
+
+      _isElementFocusable(el) {
+        if (!el || el.disabled) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      }
+
+      /**
+       * Close the modal dialog
+       */
+      close() {
+        if (!this._isOpen) return;
+
+        this._isOpen = false;
+        clearTimeout(this._transitionTimeout);
+
+        // 1. Remove from global open stack
+        const stackIndex = Modal.openStack.indexOf(this);
+        if (stackIndex !== -1) {
+          Modal.openStack.splice(stackIndex, 1);
+        }
+
+        // 2. Trigger CSS exit animation
+        this.overlay.classList.remove('is-open');
+
+        // 3. Dispatch CustomEvent & call onClose callback immediately
+        this.overlay.dispatchEvent(new CustomEvent('modal:close', {
+          bubbles: true,
+          detail: { modal: this }
+        }));
+
+        this.options.onClose();
+
+        // Check for reduced motion
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const transitionDuration = prefersReducedMotion ? 0 : 200;
+
+        this._transitionTimeout = setTimeout(() => {
+          if (!this._isOpen) {
+            this.overlay.setAttribute('hidden', '');
+            this.overlay.setAttribute('aria-hidden', 'true');
+            // Unlock scroll
+            ScrollLockManager.unlock();
+          }
+        }, transitionDuration);
+
+        // 4. Restore focus back to original return target
+        this._restoreFocus();
+      }
+
+      /**
+       * Safely restore focus to the stored trigger target
+       */
+      _restoreFocus() {
+        if (this.returnTarget && typeof this.returnTarget.focus === 'function') {
+          // Verify returnTarget is still connected in document
+          if (document.contains(this.returnTarget)) {
+            try {
+              this.returnTarget.focus();
+            } catch (err) {
+              console.warn('Unable to restore focus to return target:', err);
+            }
+          }
+        }
+        this.returnTarget = null;
+      }
+
+      /**
+       * Query current open state
+       */
+      isOpen() {
+        return this._isOpen;
+      }
+
+      /**
+       * Tear down event listeners and restore DOM state
+       */
+      destroy() {
+        if (this._isOpen) {
+          this.close();
+          ScrollLockManager.forceReset();
+        }
+
+        clearTimeout(this._transitionTimeout);
+
+        this.overlay.removeEventListener('pointerdown', this._handlePointerDown);
+        this.overlay.removeEventListener('click', this._handleClick);
+        this.overlay.removeEventListener('keydown', this._handleKeyDown);
+
+        this.overlay.classList.remove('is-open');
+        this.overlay.setAttribute('hidden', '');
+        this.overlay.setAttribute('aria-hidden', 'true');
+
+        const stackIndex = Modal.openStack.indexOf(this);
+        if (stackIndex !== -1) {
+          Modal.openStack.splice(stackIndex, 1);
+        }
+      }
+
+      /**
+       * Declarative Trigger Initializer:
+       * Wires any button with [data-md-open="dialogId"] to open the matching dialog.
+       */
+      static initDeclarativeTriggers(modalRegistry = new Map()) {
+        document.addEventListener('click', (event) => {
+          const trigger = event.target.closest('[data-md-open]');
+          if (!trigger) return;
+
+          const targetId = trigger.getAttribute('data-md-open');
+          if (!targetId) return;
+
+          const overlay = document.getElementById(targetId);
+          if (!overlay) {
+            console.warn(`Modal overlay with ID "${targetId}" not found.`);
+            return;
+          }
+
+          event.preventDefault();
+
+          let modalInstance = modalRegistry.get(overlay);
+          if (!modalInstance) {
+            modalInstance = new Modal(overlay);
+            modalRegistry.set(overlay, modalInstance);
+          }
+
+          modalInstance.open();
+        });
+      }
+    }
+
+    // ==========================================================================
+    // Application Initialization & Event Monitoring
+    // ==========================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+      const modalRegistry = new Map();
+
+      // Initialize declarative triggers for any [data-md-open] buttons on the page
+      Modal.initDeclarativeTriggers(modalRegistry);
+
+      // Event Logging Helper for testing & demonstration
+      const logContainer = document.getElementById('event-log');
+      const clearBtn = document.getElementById('clear-logs');
+
+      function appendLog(message, type = 'info') {
+        if (!logContainer) return;
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-time';
+        const now = new Date();
+        timeSpan.textContent = `[${now.toTimeString().split(' ')[0]}.${String(now.getMilliseconds()).padStart(3, '0')}]`;
+
+        const textSpan = document.createElement('span');
+        textSpan.textContent = message;
+        if (type === 'danger') textSpan.style.color = '#fca5a5';
+        if (type === 'success') textSpan.style.color = '#67e8f9';
+
+        entry.appendChild(timeSpan);
+        entry.appendChild(textSpan);
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          logContainer.replaceChildren();
+        });
+      }
+
+      // Explicitly instantiate or customize modals if programmatic hooks are desired
+      const inviteOverlay = document.getElementById('modal-invite');
+      const deleteOverlay = document.getElementById('modal-delete');
+
+      if (inviteOverlay) {
+        const inviteModal = new Modal(inviteOverlay, {
+          onOpen: () => appendLog('Event: modal:open on #modal-invite ("Invite Member")', 'success'),
+          onClose: () => appendLog('Event: modal:close on #modal-invite ("Invite Member")'),
+        });
+        modalRegistry.set(inviteOverlay, inviteModal);
+
+        // Form Submission demo
+        const inviteForm = document.getElementById('invite-form');
+        if (inviteForm) {
+          inviteForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const emailInput = document.getElementById('invite-email');
+            const roleSelect = document.getElementById('invite-role');
+            appendLog(`Action: Invitation sent to ${emailInput.value} (${roleSelect.value})`, 'success');
+            inviteModal.close();
+            inviteForm.reset();
+          });
+        }
+      }
+
+      if (deleteOverlay) {
+        const deleteModal = new Modal(deleteOverlay, {
+          onOpen: () => appendLog('Event: modal:open on #modal-delete ("Delete Project")', 'danger'),
+          onClose: () => appendLog('Event: modal:close on #modal-delete ("Delete Project")'),
+        });
+        modalRegistry.set(deleteOverlay, deleteModal);
+
+        // Confirm Delete button demo
+        const confirmDeleteBtn = document.getElementById('btn-confirm-delete');
+        if (confirmDeleteBtn) {
+          confirmDeleteBtn.addEventListener('click', () => {
+            appendLog('Action: Project "Production Cluster Alpha" permanently deleted!', 'danger');
+            deleteModal.close();
+          });
+        }
+      }
+    });
+  </script>
+</body>
+</html>

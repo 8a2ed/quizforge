@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useDirection } from "../../lib/useDirection";
+import { ToastProvider } from "@/components/ToastStack";
 
 function Icon({ path }: { path: string }) {
   return (
@@ -84,6 +85,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           label: isRtl ? "التقييمات والمحتوى" : "Assessments & Content",
           items: [
             { href: `/dashboard/${groupId}/curriculum`, icon: ICONS.sparkles, label: isRtl ? "توليد المناهج بالذكاء الاصطناعي" : "AI Curriculum" },
+            { href: `/dashboard/${groupId}/wizard`,     icon: ICONS.sparkles, label: isRtl ? "المعالج الذكي" : "Quiz Wizard" },
             { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: isRtl ? "الاختبارات" : "Exams" },
             { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: isRtl ? "بنك الأسئلة" : "Library" },
             { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: isRtl ? "سجل الكويزات" : "History" },
@@ -116,6 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     ? [
         { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: isRtl ? "الرئيسية" : "Overview" },
         { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: isRtl ? "إنشاء" : "Create"   },
+        { href: `/dashboard/${groupId}/wizard`,   icon: ICONS.sparkles, label: isRtl ? "المعالج" : "Wizard" },
         { href: `/dashboard/${groupId}/exams`,    icon: ICONS.exams,   label: isRtl ? "اختبارات" : "Exams"    },
         { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: isRtl ? "المكتبة" : "Library"  },
         { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: isRtl ? "السجل" : "History"  },
@@ -126,199 +129,201 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       ];
 
   return (
-    <div className="app-layout">
-      {/* Mobile overlay */}
-      {mobileOpen && (
-        <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 65, backdropFilter: "blur(8px)" }}
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
+    <ToastProvider>
+      <div className="app-layout">
+        {/* Mobile overlay */}
+        {mobileOpen && (
+          <div
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 65, backdropFilter: "blur(8px)" }}
+            onClick={() => setMobileOpen(false)}
+          />
+        )}
 
-      {/* Sidebar — slides in smoothly on mobile */}
-      <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
-        <div className="sidebar-logo">
-          <div className="logo-mark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
-            <span className="logo-text">QuizForge</span>
-            <span className="badge badge-brand" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>PRO</span>
-          </div>
-          {mobileOpen && (
-            <button
-              className="btn btn-ghost btn-icon show-mobile"
-              onClick={() => setMobileOpen(false)}
-              aria-label="Close menu"
-              style={{ width: 32, height: 32 }}
-            >
-              ✕
-            </button>
-          )}
-        </div>
-
-        <nav className="sidebar-nav">
-          {groupId && (
-            <Link
-              href="/dashboard"
-              className={`nav-item ${pathname === "/dashboard" ? "active" : ""}`}
-              onClick={() => setMobileOpen(false)}
-              style={{ marginBottom: 4 }}
-            >
-              <Icon path={ICONS.groups} />
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                <span className="flip-rtl" style={{ display: "inline-block" }}>←</span>
-                <span>{isRtl ? "كافة المجموعات" : "All Groups"}</span>
-              </span>
-            </Link>
-          )}
-
-          {navSections.map((sec) => (
-            <div key={sec.label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <div className="nav-section-label">{sec.label}</div>
-              {sec.items.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`nav-item ${pathname === item.href ? "active" : ""}`}
-                  onClick={() => setMobileOpen(false)}
-                >
-                  <Icon path={item.icon} />
-                  <span>{item.label}</span>
-                </Link>
-              ))}
-            </div>
-          ))}
-
-          <div style={{ flex: 1, minHeight: 20 }} />
-        </nav>
-
-        <div className="sidebar-footer">
-          {user && (
-            <div className="user-card" onClick={handleLogout} title={isRtl ? "تسجيل الخروج" : "Click to logout"}>
-              <div className="avatar">
-                {user.photoUrl ? (
-                  <img src={user.photoUrl} alt={user.firstName} />
-                ) : (
-                  initials
-                )}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div className="user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {user.firstName}
-                  </div>
-                  <span className="status-dot-online" title={isRtl ? "متصل" : "Online"} />
-                </div>
-                {user.username && (
-                  <div className="user-handle">@{user.username}</div>
-                )}
-              </div>
-              <Icon path={ICONS.logout} />
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <div className="main-content">
-        {/* Header */}
-        <header className="page-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-            {/* Mobile hamburger menu toggle */}
-            <button
-              className="btn btn-ghost btn-icon show-mobile"
-              onClick={() => setMobileOpen(true)}
-              aria-label={isRtl ? "القائمة" : "Open menu"}
-              title={isRtl ? "القائمة" : "Open menu"}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="18" x2="21" y2="18" />
+        {/* Sidebar — slides in smoothly on mobile */}
+        <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
+          <div className="sidebar-logo">
+            <div className="logo-mark">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-            </button>
-
-            {groupId && (
-              <Link href="/dashboard" className="btn btn-ghost btn-sm hide-mobile" style={{ gap: 6 }}>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="flip-rtl"
-                >
-                  <path d="M15 18l-6-6 6-6"/>
-                </svg>
-                <span>{isRtl ? "كل المجموعات" : "All Groups"}</span>
-              </Link>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+              <span className="logo-text">QuizForge</span>
+              <span className="badge badge-brand" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>PRO</span>
+            </div>
+            {mobileOpen && (
+              <button
+                className="btn btn-ghost btn-icon show-mobile"
+                onClick={() => setMobileOpen(false)}
+                aria-label="Close menu"
+                style={{ width: 32, height: 32 }}
+              >
+                ✕
+              </button>
             )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-            {/* Language / Direction Toggle */}
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm lang-toggle-btn"
-              onClick={toggleDirection}
-              title={isRtl ? "Switch to English" : "التبديل إلى العربية"}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 12px",
-                borderRadius: "var(--radius-full)",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-              }}
-            >
-              <span style={{ fontSize: "1rem", lineHeight: 1 }}>🌐</span>
-              <span>{isRtl ? "English" : "العربية"}</span>
-            </button>
-
+          <nav className="sidebar-nav">
             {groupId && (
-              <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary btn-sm">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 5v14M5 12h14"/>
-                </svg>
-                <span>{isRtl ? "كويز جديد" : "New Quiz"}</span>
+              <Link
+                href="/dashboard"
+                className={`nav-item ${pathname === "/dashboard" ? "active" : ""}`}
+                onClick={() => setMobileOpen(false)}
+                style={{ marginBottom: 4 }}
+              >
+                <Icon path={ICONS.groups} />
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span className="flip-rtl" style={{ display: "inline-block" }}>←</span>
+                  <span>{isRtl ? "كافة المجموعات" : "All Groups"}</span>
+                </span>
               </Link>
             )}
+
+            {navSections.map((sec) => (
+              <div key={sec.label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <div className="nav-section-label">{sec.label}</div>
+                {sec.items.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`nav-item ${pathname === item.href ? "active" : ""}`}
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    <Icon path={item.icon} />
+                    <span>{item.label}</span>
+                  </Link>
+                ))}
+              </div>
+            ))}
+
+            <div style={{ flex: 1, minHeight: 20 }} />
+          </nav>
+
+          <div className="sidebar-footer">
             {user && (
-              <div className="avatar sm hide-mobile" title={user.firstName}>
-                {user.photoUrl ? (
-                  <img src={user.photoUrl} alt={user.firstName} />
-                ) : (
-                  initials
-                )}
+              <div className="user-card" onClick={handleLogout} title={isRtl ? "تسجيل الخروج" : "Click to logout"}>
+                <div className="avatar">
+                  {user.photoUrl ? (
+                    <img src={user.photoUrl} alt={user.firstName} />
+                  ) : (
+                    initials
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div className="user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {user.firstName}
+                    </div>
+                    <span className="status-dot-online" title={isRtl ? "متصل" : "Online"} />
+                  </div>
+                  {user.username && (
+                    <div className="user-handle">@{user.username}</div>
+                  )}
+                </div>
+                <Icon path={ICONS.logout} />
               </div>
             )}
           </div>
-        </header>
+        </aside>
 
-        {/* Page content */}
-        <main className="page-body">
-          {children}
-        </main>
+        {/* Main content */}
+        <div className="main-content">
+          {/* Header */}
+          <header className="page-header">
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+              {/* Mobile hamburger menu toggle */}
+              <button
+                className="btn btn-ghost btn-icon show-mobile"
+                onClick={() => setMobileOpen(true)}
+                aria-label={isRtl ? "القائمة" : "Open menu"}
+                title={isRtl ? "القائمة" : "Open menu"}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+              </button>
+
+              {groupId && (
+                <Link href="/dashboard" className="btn btn-ghost btn-sm hide-mobile" style={{ gap: 6 }}>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="flip-rtl"
+                  >
+                    <path d="M15 18l-6-6 6-6"/>
+                  </svg>
+                  <span>{isRtl ? "كل المجموعات" : "All Groups"}</span>
+                </Link>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+              {/* Language / Direction Toggle */}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm lang-toggle-btn"
+                onClick={toggleDirection}
+                title={isRtl ? "Switch to English" : "التبديل إلى العربية"}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 12px",
+                  borderRadius: "var(--radius-full)",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                }}
+              >
+                <span style={{ fontSize: "1rem", lineHeight: 1 }}>🌐</span>
+                <span>{isRtl ? "English" : "العربية"}</span>
+              </button>
+
+              {groupId && (
+                <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary btn-sm">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  <span>{isRtl ? "كويز جديد" : "New Quiz"}</span>
+                </Link>
+              )}
+              {user && (
+                <div className="avatar sm hide-mobile" title={user.firstName}>
+                  {user.photoUrl ? (
+                    <img src={user.photoUrl} alt={user.firstName} />
+                  ) : (
+                    initials
+                  )}
+                </div>
+              )}
+            </div>
+          </header>
+
+          {/* Page content */}
+          <main className="page-body">
+            {children}
+          </main>
+        </div>
+
+        {/* Bottom Tab Bar — mobile only via CSS, always rendered */}
+        <nav className="bottom-tab-bar" aria-label="Mobile Navigation">
+          {bottomTabs.map((tab) => (
+            <Link
+              key={tab.href}
+              href={tab.href}
+              className={`bottom-tab-item ${pathname === tab.href ? "active" : ""}`}
+            >
+              <Icon path={tab.icon} />
+              <span>{tab.label}</span>
+            </Link>
+          ))}
+        </nav>
       </div>
-
-      {/* Bottom Tab Bar — mobile only via CSS, always rendered */}
-      <nav className="bottom-tab-bar" aria-label="Mobile Navigation">
-        {bottomTabs.map((tab) => (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            className={`bottom-tab-item ${pathname === tab.href ? "active" : ""}`}
-          >
-            <Icon path={tab.icon} />
-            <span>{tab.label}</span>
-          </Link>
-        ))}
-      </nav>
-    </div>
+    </ToastProvider>
   );
 }
