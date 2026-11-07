@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { telegram } from "@/lib/telegram";
 import {
   parseExamConfig,
+  extractStudentMasterAnswers,
   prepareStudentExamQuestions,
   mapStudentAnswersToMaster,
   type StudentExamQuestion,
@@ -322,6 +323,16 @@ async function finishExam(session: ExamSession, timedOut = false) {
     console.error("[exam] save result error:", e);
   }
 
+  // Check if exam config allows immediate review
+  let allowSolutions = true;
+  try {
+    const examRec = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: { description: true } }));
+    if (examRec) {
+      const cfg = parseExamConfig(examRec.description);
+      allowSolutions = cfg.showSolutionsImmediately !== false;
+    }
+  } catch {}
+
   const icon = timedOut ? "⏰" : passed ? "🏆" : "📋";
   const header = [
     `${icon} <b>اكتمل الامتحان: ${escapeHtml(examTitle)}</b>`,
@@ -331,48 +342,46 @@ async function finishExam(session: ExamSession, timedOut = false) {
     `الإجابات الصحيحة: <b>${correct}/${questions.length}</b> · الوقت المستغرق: <b>${Math.floor(duration / 60)}د ${duration % 60}ث</b>`,
     `الحد الأدنى للنجاح: <b>${passingScore}%</b>`,
     "",
-    "─────────────────",
+    allowSolutions
+      ? "👉 <i>اضغط على الزر بالأسفل لمراجعة كل سؤال مع إجابتك والإجابة النموذجية والشرح الكامل:</i>"
+      : "🔒 <i>ملاحظة: سيتم إتاحة مراجعة الأسئلة والإجابات والشرح بعد انتهاء وقت الاختبار بالكامل.</i>",
   ].join("\n");
 
-  const fullText = [header, ...breakdown].join("\n");
+  const reviewKeyboard = allowSolutions
+    ? [
+        [
+          {
+            text: "📖 مراجعة الأسئلة والإجابات النموذجية",
+            callback_data: `exam_review:${examId}:0`,
+          },
+        ],
+      ]
+    : [];
 
   try {
-    if (fullText.length <= 3800) {
-      const res = await tgCall("editMessageText", {
+    const res = await tgCall("editMessageText", {
+      chat_id: chatId,
+      message_id: msgId,
+      text: header,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: reviewKeyboard },
+    });
+    if (!res || (res as any).ok === false) {
+      await tgCall("sendMessage", {
         chat_id: chatId,
-        message_id: msgId,
-        text: fullText,
+        text: header,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [] },
+        reply_markup: { inline_keyboard: reviewKeyboard },
       });
-      if (!res || (res as any).ok === false) {
-        await tgCall("sendMessage", { chat_id: chatId, text: fullText, parse_mode: "HTML" });
-      }
-    } else {
-      await tgCall("editMessageText", {
-        chat_id: chatId,
-        message_id: msgId,
-        text: header + "\n<i>تفاصيل الأسئلة مرسلة أدناه:</i>",
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [] },
-      }).catch(() => {});
-
-      let chunk = "";
-      for (const item of breakdown) {
-        if ((chunk + "\n" + item).length > 3000) {
-          await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
-          chunk = item;
-        } else {
-          chunk = chunk ? chunk + "\n" + item : item;
-        }
-      }
-      if (chunk) {
-        await tgCall("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
-      }
     }
   } catch (err) {
     console.error("[exam] finishExam message send error:", err);
-    await tgCall("sendMessage", { chat_id: chatId, text: fullText.slice(0, 3800), parse_mode: "HTML" }).catch(() => {});
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: header,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: reviewKeyboard },
+    }).catch(() => {});
   }
 }
 
@@ -608,6 +617,194 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
 }
 
 // exam_cancel:{examId}
+
+
+// ─── Exam Review & Pagination Handlers ───────────────────────────────────────
+// exam_review:{examId}:{qIdx} — Paginated review of questions, answers, and explanations
+async function handleExamReview(cb: Record<string, unknown>, examId: string, qIdx: number) {
+  const user = cb.from as Record<string, unknown>;
+  const telegramId = String((user as { id: number }).id);
+  const cbId = cb.id as string;
+  const chatId = (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id;
+  const msgId = (cb.message as { message_id?: number })?.message_id;
+
+  try {
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+    }
+    if (!exam) return ackCb(cbId, "الاختبار غير موجود.", true);
+
+    const result = await withRetry(() => prisma.examResult.findFirst({
+      where: { examId: exam!.id, telegramId, score: { gte: 0 } },
+    }));
+    if (!result) return ackCb(cbId, "لم يتم العثور على نتيجة سابقة لهذا الاختبار.", true);
+
+    const cfg = parseExamConfig(exam.description);
+    if (cfg.showSolutionsImmediately === false) {
+      return ackCb(cbId, "🔒 مراجعة الأسئلة محجوبة حالياً من قبل مشرف المادة.", true);
+    }
+
+    const rawQuestions = Array.isArray(exam.questions) ? exam.questions : [];
+    const totalQ = rawQuestions.length;
+    if (totalQ === 0) return ackCb(cbId, "لا توجد أسئلة في هذا الاختبار.", true);
+
+    const safeQIdx = Math.max(0, Math.min(totalQ - 1, qIdx));
+    const q = rawQuestions[safeQIdx] as unknown as MasterExamQuestion;
+
+    const masterAnswers = extractStudentMasterAnswers(result.answers, rawQuestions as any);
+    const studentChoice = masterAnswers[String(safeQIdx)] ?? masterAnswers[safeQIdx];
+    const isAnswered = studentChoice !== undefined && studentChoice !== null && !isNaN(Number(studentChoice));
+    const isCorrect = isAnswered && Number(studentChoice) === q.correctOptionId;
+
+    // Build options with indicators
+    const optionsText = (q.options || []).map((opt, optIdx) => {
+      const letter = String.fromCharCode(65 + optIdx);
+      const isStudentChoice = isAnswered && Number(studentChoice) === optIdx;
+      const isCorrectOpt = optIdx === q.correctOptionId;
+
+      if (isStudentChoice && isCorrectOpt) {
+        return `✅ <b>${letter}. ${escapeHtml(opt)}</b> <i>(إجابتك الصحيحة)</i>`;
+      } else if (isStudentChoice && !isCorrectOpt) {
+        return `❌ <b>${letter}. ${escapeHtml(opt)}</b> <i>(إجابتك الخاطئة)</i>`;
+      } else if (isCorrectOpt) {
+        return `✅ <b>${letter}. ${escapeHtml(opt)}</b> <i>(الإجابة النموذجية الصحيحة)</i>`;
+      } else {
+        return `<b>${letter}.</b> ${escapeHtml(opt)}`;
+      }
+    }).join("\n");
+
+    const answerStatusText = !isAnswered
+      ? "⚠️ <i>لم يتم اختيار إجابة لهذا السؤال أثناء الاختبار.</i>"
+      : isCorrect
+      ? "✅ <b>إجابتك صحيحة وممتازة!</b>"
+      : "❌ <b>إجابتك غير صحيحة.</b>";
+
+    const textLines = [
+      `📖 <b>مراجعة: ${escapeHtml(exam.title)}</b>`,
+      `<code>━━━━━━━━━━━━━━━━━━━━</code>`,
+      `السؤال <b>${safeQIdx + 1}</b> من <b>${totalQ}</b> · ${isCorrect ? "✅ صحيحة" : isAnswered ? "❌ خاطئة" : "⚠️ لم يُجب"}`,
+      "",
+      `<b>س${safeQIdx + 1}: ${escapeHtml(q.question)}</b>`,
+      "",
+      optionsText,
+      "",
+      answerStatusText,
+    ];
+
+    if (q.explanation && String(q.explanation).trim()) {
+      textLines.push("", `💡 <b>الشرح والتوضيح:</b>`, `<i>${escapeHtml(String(q.explanation).trim())}</i>`);
+    }
+
+    const reviewText = textLines.join("\n");
+
+    // Pagination navigation row
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (safeQIdx > 0) {
+      navRow.push({ text: "⬅️ السابق", callback_data: `exam_review:${exam.id}:${safeQIdx - 1}` });
+    }
+    navRow.push({ text: `${safeQIdx + 1} / ${totalQ}`, callback_data: "exam_review_noop" });
+    if (safeQIdx < totalQ - 1) {
+      navRow.push({ text: "التالي ➡️", callback_data: `exam_review:${exam.id}:${safeQIdx + 1}` });
+    }
+
+    const keyboard = [
+      navRow,
+      [
+        { text: "📊 العودة لملخص النتيجة", callback_data: `exam_summary:${exam.id}` },
+      ],
+    ];
+
+    await ackCb(cbId);
+
+    if (msgId) {
+      await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text: reviewText,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      }).catch(async () => {
+        await tgCall("sendMessage", {
+          chat_id: chatId,
+          text: reviewText,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      });
+    }
+  } catch (err) {
+    console.error("[exam] handleExamReview error:", err);
+    await ackCb(cbId, "تعذر تحميل المراجعة حالياً.", true);
+  }
+}
+
+// exam_summary:{examId} — Re-displays the final exam summary card
+async function handleExamReviewSummary(cb: Record<string, unknown>, examId: string) {
+  const user = cb.from as Record<string, unknown>;
+  const telegramId = String((user as { id: number }).id);
+  const cbId = cb.id as string;
+  const chatId = (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id;
+  const msgId = (cb.message as { message_id?: number })?.message_id;
+
+  try {
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+    }
+    if (!exam) return ackCb(cbId, "الاختبار غير موجود.", true);
+
+    const result = await withRetry(() => prisma.examResult.findFirst({
+      where: { examId: exam!.id, telegramId, score: { gte: 0 } },
+    }));
+    if (!result) return ackCb(cbId, "لا توجد نتيجة مسجلة.", true);
+
+    const cfg = parseExamConfig(exam.description);
+    const allowSolutions = cfg.showSolutionsImmediately !== false;
+    const totalQ = Array.isArray(exam.questions) ? exam.questions.length : 0;
+    const correct = Math.round((result.score / 100) * Math.max(1, totalQ));
+
+    const durStr = result.duration ? `${Math.floor(result.duration / 60)}د ${result.duration % 60}ث` : "غير محدد";
+
+    const text = [
+      `${result.passed ? "🏆" : "📋"} <b>ملخص نتيجتك: ${escapeHtml(exam.title)}</b>`,
+      "",
+      `<b>الدرجة النهائية: ${result.score}% — ${result.passed ? "ناجح ✅" : "راسب ❌"}</b>`,
+      `الإجابات الصحيحة: <b>${correct}/${totalQ}</b> · الوقت المستغرق: <b>${durStr}</b>`,
+      `الحد الأدنى للنجاح: <b>${exam.passingScore}%</b>`,
+      "",
+      allowSolutions
+        ? "👉 <i>يمكنك استعراض ومراجعة كل سؤال مع إجابتك والشرح النموذجي الكامل:</i>"
+        : "🔒 <i>ملاحظة: مراجعة الأسئلة محجوبة حالياً.</i>",
+    ].join("\n");
+
+    const keyboard = allowSolutions
+      ? [
+          [
+            {
+              text: "📖 مراجعة الأسئلة والإجابات النموذجية",
+              callback_data: `exam_review:${exam.id}:0`,
+            },
+          ],
+        ]
+      : [];
+
+    await ackCb(cbId);
+
+    if (msgId) {
+      await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error("[exam] handleExamReviewSummary error:", err);
+    await ackCb(cbId, "تعذر عرض الملخص.", true);
+  }
+}
 
 // exam_resume:{examId} — fired when user clicks "متابعة الاختبار" on inactivity warning
 async function handleExamResume(cb: Record<string, unknown>, examId: string) {
@@ -1168,6 +1365,16 @@ export async function POST(req: NextRequest) {
       } else if (data.startsWith("exam_answer:")) {
         const parts = data.split(":");                      // ["exam_answer", examId, qIdx, optId]
         if (parts.length === 4) await handleExamAnswer(cb, parts[1], Number(parts[2]), Number(parts[3]));
+
+      } else if (data.startsWith("exam_review:")) {
+        const parts = data.split(":");
+        await handleExamReview(cb, parts[1], Number(parts[2]) || 0);
+
+      } else if (data.startsWith("exam_summary:")) {
+        await handleExamReviewSummary(cb, data.slice("exam_summary:".length));
+
+      } else if (data === "exam_review_noop") {
+        await ackCb(cb.id as string);
 
       } else if (data.startsWith("exam_resume:")) {
         await handleExamResume(cb, data.slice("exam_resume:".length));

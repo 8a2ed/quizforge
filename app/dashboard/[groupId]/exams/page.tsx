@@ -12,7 +12,7 @@ interface Exam {
   questions: Question[]; timeLimit: number | null; passingScore: number;
   isPublished: boolean; launchMsgId?: number | null; createdAt: string;
   topicId?: number | null; topicName?: string | null;
-  shuffleQuestions?: boolean; shuffleOptions?: boolean;
+  shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean;
   _count: { results: number };
   createdBy?: { firstName: string; username?: string | null };
 }
@@ -145,6 +145,7 @@ export default function ExamsPage() {
   const [topicName, setTopicName] = useState("");
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [shuffleOptions, setShuffleOptions] = useState(true);
+  const [showSolutionsImmediately, setShowSolutionsImmediately] = useState(true);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [questions, setQuestions] = useState<Question[]>([emptyQ()]);
   const [saving, setSaving] = useState(false);
@@ -221,6 +222,7 @@ export default function ExamsPage() {
     setTitle(""); setDesc(""); setTimeLimit(""); setPassingScore("60");
     setTopicId(""); setTopicName("");
     setShuffleQuestions(true); setShuffleOptions(true);
+    setShowSolutionsImmediately(true);
     setQuestions([emptyQ()]); setEditingExam(null);
   };
 
@@ -236,6 +238,7 @@ export default function ExamsPage() {
     setTopicName(exam.topicName || "");
     setShuffleQuestions(exam.shuffleQuestions ?? true);
     setShuffleOptions(exam.shuffleOptions ?? true);
+    setShowSolutionsImmediately(exam.showSolutionsImmediately ?? true);
     setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options] })));
     setMode("edit");
   };
@@ -294,6 +297,7 @@ export default function ExamsPage() {
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
         shuffleQuestions,
         shuffleOptions,
+        showSolutionsImmediately,
       }),
     });
     const data = await res.json();
@@ -579,6 +583,86 @@ export default function ExamsPage() {
     showToast("success", `Exported ${viewResults.results.length} result(s) to CSV ✓`);
   };
 
+  
+  // ── Export Exam Questions & Explanations to Excel CSV ────────────────────────
+  const exportExamQuestionsCSV = (examToExport: Exam) => {
+    const questionsList = examToExport.questions || [];
+    if (questionsList.length === 0) {
+      toast.warning("تنبيه", "لا توجد أسئلة لتصديرها في هذا الاختبار");
+      return;
+    }
+
+    const headers = [
+      "#",
+      "السؤال (Question)",
+      "الخيار A",
+      "الخيار B",
+      "الخيار C",
+      "الخيار D",
+      "رمز الإجابة الصحيحة",
+      "نص الإجابة الصحيحة",
+      "الشرح والتوضيح (Explanation)",
+    ];
+
+    const rows = questionsList.map((q, idx) => {
+      const optA = q.options[0] ? `"${q.options[0].replace(/"/g, '""')}"` : '""';
+      const optB = q.options[1] ? `"${q.options[1].replace(/"/g, '""')}"` : '""';
+      const optC = q.options[2] ? `"${q.options[2].replace(/"/g, '""')}"` : '""';
+      const optD = q.options[3] ? `"${q.options[3].replace(/"/g, '""')}"` : '""';
+      const correctLetter = String.fromCharCode(65 + (Number(q.correctOptionId) || 0));
+      const correctText = q.options[q.correctOptionId] ? `"${q.options[q.correctOptionId].replace(/"/g, '""')}"` : '""';
+      const explanation = q.explanation ? `"${q.explanation.replace(/"/g, '""')}"` : '""';
+
+      return [
+        idx + 1,
+        `"${(q.question || "").replace(/"/g, '""')}"`,
+        optA,
+        optB,
+        optC,
+        optD,
+        `"${correctLetter}"`,
+        correctText,
+        explanation,
+      ].join(",");
+    });
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `exam-${examToExport.title.replace(/\s+/g, "_")}-questions.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("تم التصدير", `تم تصدير ${questionsList.length} سؤال إلى ملف Excel/CSV بنجاح ✓`);
+  };
+
+  // ── Export Exam Questions & Explanations to JSON Backup ──────────────────────
+  const exportExamQuestionsJSON = (examToExport: Exam) => {
+    const exportData = {
+      title: examToExport.title,
+      description: examToExport.description,
+      timeLimit: examToExport.timeLimit,
+      passingScore: examToExport.passingScore,
+      shuffleQuestions: examToExport.shuffleQuestions ?? true,
+      shuffleOptions: examToExport.shuffleOptions ?? true,
+      showSolutionsImmediately: examToExport.showSolutionsImmediately ?? true,
+      totalQuestions: (examToExport.questions || []).length,
+      questions: examToExport.questions || [],
+      exportedAt: new Date().toISOString(),
+    };
+
+    const jsonContent = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `exam-${examToExport.title.replace(/\s+/g, "_")}-backup.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("تم التصدير", "تم تصدير بنك الأسئلة كملف JSON احتياطي بنجاح ✓");
+  };
+
   const setQ = (i: number, field: keyof Question, val: string | string[] | number) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
@@ -661,7 +745,23 @@ export default function ExamsPage() {
               disabled={viewResults.results.length === 0}
               title="Export all student scores and answers to Excel-compatible CSV"
             >
-              📥 Export CSV
+              📥 درجات الطلاب (CSV)
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ border: "1px solid var(--clr-border)", gap: 4 }}
+              onClick={() => exportExamQuestionsCSV(viewResults.exam)}
+              title="تصدير بنك الأسئلة والإجابة النموذجية والشرح كملف Excel"
+            >
+              📄 أسئلة وشرح (CSV)
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ border: "1px solid var(--clr-border)", gap: 4 }}
+              onClick={() => exportExamQuestionsJSON(viewResults.exam)}
+              title="تصدير بنك الأسئلة كملف JSON احتياطي"
+            >
+              📦 JSON
             </button>
             <button
               className="btn btn-secondary btn-sm"

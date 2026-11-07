@@ -1,6 +1,7 @@
 export interface ExamConfig {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
+  showSolutionsImmediately?: boolean;
 }
 
 export interface StudentExamQuestion {
@@ -40,18 +41,21 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
   cleanDescription: string;
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
+  showSolutionsImmediately: boolean;
 } {
   const desc = String(rawDescription || "").trim();
   const match = desc.match(CONFIG_REGEX);
 
   let shuffleQuestions = true;
   let shuffleOptions = true;
+  let showSolutionsImmediately = true;
 
   if (match) {
     try {
       const parsed = JSON.parse(match[1]);
       if (typeof parsed.shuffleQuestions === "boolean") shuffleQuestions = parsed.shuffleQuestions;
       if (typeof parsed.shuffleOptions === "boolean") shuffleOptions = parsed.shuffleOptions;
+      if (typeof parsed.showSolutionsImmediately === "boolean") showSolutionsImmediately = parsed.showSolutionsImmediately;
     } catch {
       // ignore parse error, use defaults
     }
@@ -63,6 +67,7 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
     cleanDescription,
     shuffleQuestions,
     shuffleOptions,
+    showSolutionsImmediately,
   };
 }
 
@@ -71,12 +76,13 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
  */
 export function formatExamDescription(
   cleanDescription: string | null | undefined,
-  config: { shuffleQuestions?: boolean; shuffleOptions?: boolean }
+  config: { shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean }
 ): string {
   const base = String(cleanDescription || "").replace(CONFIG_REGEX, "").trim();
   const meta = {
     shuffleQuestions: config.shuffleQuestions ?? true,
     shuffleOptions: config.shuffleOptions ?? true,
+    showSolutionsImmediately: config.showSolutionsImmediately ?? true,
   };
 
   const tag = `<!--config:${JSON.stringify(meta)}-->`;
@@ -153,4 +159,65 @@ export function mapStudentAnswersToMaster(
   });
 
   return masterAnswers;
+}
+
+
+/**
+ * Universal extractor for student answers that handles:
+ * 1. Flat master maps: { "0": 1, "1": 3 }
+ * 2. Session objects: { answers: { ... }, questions: [...] }
+ * 3. Array formats: [1, 3, 0]
+ */
+export function extractStudentMasterAnswers(
+  rawAnswers: unknown,
+  masterQuestions?: Array<{ question: string; options: string[]; correctOptionId: number; explanation?: string }>
+): Record<string, number> {
+  if (!rawAnswers) return {};
+
+  let parsed: any = rawAnswers;
+  if (typeof rawAnswers === "string") {
+    try { parsed = JSON.parse(rawAnswers); } catch { return {}; }
+  }
+
+  if (typeof parsed !== "object" || parsed === null) return {};
+
+  // Case A: Session format { answers: { ... }, questions: [...] }
+  if (parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
+    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      try {
+        const mapped = mapStudentAnswersToMaster(parsed.questions as StudentExamQuestion[], parsed.answers);
+        const res: Record<string, number> = {};
+        for (const [k, v] of Object.entries(mapped)) {
+          res[String(k)] = Number(v);
+        }
+        return res;
+      } catch {
+        // fallback
+      }
+    }
+    const res: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed.answers)) {
+      res[String(k)] = Number(v);
+    }
+    return res;
+  }
+
+  // Case B: Array format [1, 0, 2]
+  if (Array.isArray(parsed)) {
+    const res: Record<string, number> = {};
+    parsed.forEach((val, idx) => {
+      if (typeof val === "number") res[String(idx)] = val;
+      else if (val && typeof val.chosenOptionId === "number") res[String(idx)] = val.chosenOptionId;
+    });
+    return res;
+  }
+
+  // Case C: Flat object { "0": 1, "1": 0 }
+  const res: Record<string, number> = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (v !== undefined && v !== null && !isNaN(Number(v))) {
+      res[String(k)] = Number(v);
+    }
+  }
+  return res;
 }
