@@ -125,25 +125,36 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     return;
   }
 
-  // Check if student completed already
-  const existingCompleted = await withRetry(() => prisma.examResult.findFirst({
-    where: { examId: exam.id, telegramId, score: { gte: 0 } }
+  const cfg = parseExamConfig(exam.description);
+  const maxAttempts = cfg.maxAttempts ?? 1;
+
+  // Check completed attempts
+  const completedAttempts = await withRetry(() => prisma.examResult.findMany({
+    where: { examId: exam.id, telegramId, score: { gte: 0 } },
+    orderBy: { score: "desc" },
   }));
-  if (existingCompleted) {
-    await tgCall("sendMessage", {
-      chat_id: chatId,
-      text: `✅ <b>لقد أكملت اختبار ${escapeHtml(exam.title)} مسبقاً.</b>\n\n📊 درجتك النهائية: <b>${existingCompleted.score}%</b> (${existingCompleted.passed ? "ناجح ✅" : "راسب ❌"})\n\n<i>تواصل مع معلمك أو مشرف المادة إذا كنت بحاجة لإعادة الاختبار.</i>`,
-      parse_mode: "HTML",
-    });
-    return;
-  }
+  const attemptCount = completedAttempts.length;
 
   // Check for in-progress session
   const inProgress = await withRetry(() => prisma.examResult.findFirst({
     where: { examId: exam.id, telegramId, score: -1 }
   }));
 
-  const cfg = parseExamConfig(exam.description);
+  if (!inProgress && maxAttempts > 0 && attemptCount >= maxAttempts) {
+    const bestScore = completedAttempts[0]?.score ?? 0;
+    const reviewKeyboard = cfg.showSolutionsImmediately !== false
+      ? [[{ text: "📖 مراجعة الأسئلة والإجابات النموذجية", callback_data: `exam_review:${exam.id}:0` }]]
+      : [];
+
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: `✅ <b>لقد استنفدت جميع محاولاتك المتاحة لاختبار (${escapeHtml(exam.title)}).</b>\n\n🔢 المحاولات المكتملة: <b>${attemptCount} من ${maxAttempts}</b>\n🏆 أفضل درجة حققتها: <b>${bestScore}%</b> (${bestScore >= exam.passingScore ? "ناجح ✅" : "راسب ❌"})\n\n<i>تواصل مع معلمك أو مشرف المادة إذا كنت بحاجة لإعادة تعيين المحاولات.</i>`,
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: reviewKeyboard },
+    });
+    return;
+  }
+
   const questions = (Array.isArray(exam.questions) ? exam.questions : []) as unknown as ExamQuestion[];
   if (questions.length === 0) {
     await tgCall("sendMessage", {
@@ -159,6 +170,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     `\n\n📊 <b>${questions.length} أسئلة</b>`,
     exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
     `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
+    maxAttempts === 1 ? "" : `\n🔄 <b>المحاولات المسموحة: ${maxAttempts === 0 ? "غير محدود" : maxAttempts}</b> (المحاولة الحالية: <b>${attemptCount + 1}</b>${attemptCount > 0 ? ` · أفضل درجة سابقة: <b>${completedAttempts[0]?.score}%</b>` : ""})`,
     cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
     inProgress ? "\n\n⚠️ <i>لديك جلسة امتحان جارية! اضغط على استئناف للمتابعة.</i>" : "\n\n👉 <i>اضغط على زر البدء أدناه لبدء الاختبار — تصلك الأسئلة سؤالاً تلو الآخر.</i>",
   ].filter(Boolean).join("");
@@ -169,7 +181,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [[
-        { text: inProgress ? "▶️ استئناف الامتحان (Resume)" : "🚀 بدء الامتحان (Begin)", callback_data: `exam_begin:${exam.id}` },
+        { text: inProgress ? "▶️ استئناف الامتحان (Resume)" : (attemptCount > 0 ? `🚀 بدء المحاولة ${attemptCount + 1}` : "🚀 بدء الامتحان (Begin)"), callback_data: `exam_begin:${exam.id}` },
         { text: "❌ إلغاء", callback_data: `exam_cancel:${exam.id}` },
       ]],
     },
@@ -393,10 +405,10 @@ async function finishExam(session: ExamSession, timedOut = false) {
   const masterAnswers = mapStudentAnswersToMaster(questions as unknown as StudentExamQuestion[], answers);
 
   try {
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId } }));
-    if (existing) {
+    const existingInProgress = await withRetry(() => prisma.examResult.findFirst({ where: { examId, telegramId, score: -1 } }));
+    if (existingInProgress) {
       await withRetry(() => prisma.examResult.update({
-        where: { id: existing.id },
+        where: { id: existingInProgress.id },
         data: { name, answers: masterAnswers, score, passed, duration, completedAt: new Date() },
       }));
     } else {
@@ -408,15 +420,30 @@ async function finishExam(session: ExamSession, timedOut = false) {
     console.error("[exam] save result error:", e);
   }
 
-  // Check if exam config allows immediate review
+  // Check exam config for solutions review and max attempts
   let allowSolutions = true;
+  let maxAttempts = 1;
   try {
     const examRec = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: { description: true } }));
     if (examRec) {
       const cfg = parseExamConfig(examRec.description);
       allowSolutions = cfg.showSolutionsImmediately !== false;
+      maxAttempts = cfg.maxAttempts ?? 1;
     }
   } catch {}
+
+  const completedAttemptsCount = await withRetry(() => prisma.examResult.count({
+    where: { examId, telegramId, score: { gte: 0 } }
+  })).catch(() => 1);
+
+  const hasMoreAttempts = maxAttempts === 0 || completedAttemptsCount < maxAttempts;
+  const remainingAttempts = maxAttempts === 0 ? "غير محدود" : Math.max(0, maxAttempts - completedAttemptsCount);
+
+  const attemptNote = maxAttempts === 1
+    ? ""
+    : hasMoreAttempts
+    ? `\n🔄 <b>المحاولات:</b> أنجزت ${completedAttemptsCount} من ${maxAttempts === 0 ? "غير محدود" : maxAttempts} (متبقي لك <b>${remainingAttempts}</b> محاولة).`
+    : `\n🏁 <b>المحاولات:</b> استنفدت جميع محاولاتك (${maxAttempts}/${maxAttempts}).`;
 
   const icon = timedOut ? "⏰" : passed ? "🏆" : "📋";
   const header = [
@@ -426,22 +453,30 @@ async function finishExam(session: ExamSession, timedOut = false) {
     `<b>الدرجة النهائية: ${score}% — ${passed ? "ناجح ✅" : "راسب ❌"}</b>`,
     `الإجابات الصحيحة: <b>${correct}/${questions.length}</b> · الوقت المستغرق: <b>${Math.floor(duration / 60)}د ${duration % 60}ث</b>`,
     `الحد الأدنى للنجاح: <b>${passingScore}%</b>`,
+    attemptNote,
     "",
     allowSolutions
       ? "👉 <i>اضغط على الزر بالأسفل لمراجعة كل سؤال مع إجابتك والإجابة النموذجية والشرح الكامل:</i>"
       : "🔒 <i>ملاحظة: سيتم إتاحة مراجعة الأسئلة والإجابات والشرح بعد انتهاء وقت الاختبار بالكامل.</i>",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
-  const reviewKeyboard = allowSolutions
-    ? [
-        [
-          {
-            text: "📖 مراجعة الأسئلة والإجابات النموذجية",
-            callback_data: `exam_review:${examId}:0`,
-          },
-        ],
-      ]
-    : [];
+  const reviewKeyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+  if (allowSolutions) {
+    reviewKeyboard.push([
+      {
+        text: "📖 مراجعة الأسئلة والإجابات النموذجية",
+        callback_data: `exam_review:${examId}:0`,
+      },
+    ]);
+  }
+  if (hasMoreAttempts) {
+    reviewKeyboard.push([
+      {
+        text: `🔄 إعادة الاختبار (محاولة ${completedAttemptsCount + 1}/${maxAttempts === 0 ? "∞" : maxAttempts})`,
+        callback_data: `exam_begin:${examId}`,
+      },
+    ]);
+  }
 
   try {
     const res = await tgCall("editMessageText", {
@@ -487,8 +522,19 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
     }
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح حالياً.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً بدرجة ${existing.score}%.`, true);
+    const cfg = parseExamConfig(exam.description);
+    const maxAttempts = cfg.maxAttempts ?? 1;
+
+    const completedAttempts = await withRetry(() => prisma.examResult.findMany({
+      where: { examId: exam.id, telegramId, score: { gte: 0 } },
+      orderBy: { score: "desc" },
+    }));
+    const attemptCount = completedAttempts.length;
+
+    if (maxAttempts > 0 && attemptCount >= maxAttempts) {
+      const best = completedAttempts[0]?.score ?? 0;
+      return ackCb(cbId, `لقد استنفدت جميع محاولاتك (${attemptCount}/${maxAttempts}). أفضل درجة: ${best}%.`, true);
+    }
 
     const botUser = await getBotUsername();
     if (botUser) {
@@ -524,12 +570,24 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     }
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح.", true);
 
-    const existing = await withRetry(() => prisma.examResult.findFirst({ where: { examId: exam.id, telegramId, score: { gte: 0 } } }));
-    if (existing) return ackCb(cbId, `لقد أتممت هذا الاختبار مسبقاً (${existing.score}%).`, true);
+    const cfg = parseExamConfig(exam.description);
+    const maxAttempts = cfg.maxAttempts ?? 1;
 
     const inProgress = await withRetry(() => prisma.examResult.findFirst({
       where: { examId: exam.id, telegramId, score: -1 }
     }));
+
+    if (!inProgress) {
+      const completedAttempts = await withRetry(() => prisma.examResult.findMany({
+        where: { examId: exam.id, telegramId, score: { gte: 0 } },
+        orderBy: { score: "desc" },
+      }));
+      const attemptCount = completedAttempts.length;
+
+      if (maxAttempts > 0 && attemptCount >= maxAttempts) {
+        return ackCb(cbId, `عذراً، لقد استنفدت الحد الأقصى للمحاولات المسموحة (${maxAttempts}).`, true);
+      }
+    }
 
     let session: ExamSession;
     if (inProgress && inProgress.answers && typeof inProgress.answers === "object") {

@@ -12,7 +12,7 @@ interface Exam {
   questions: Question[]; timeLimit: number | null; passingScore: number;
   isPublished: boolean; launchMsgId?: number | null; createdAt: string;
   topicId?: number | null; topicName?: string | null;
-  shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean;
+  shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean; maxAttempts?: number;
   _count: { results: number };
   createdBy?: { firstName: string; username?: string | null };
 }
@@ -42,6 +42,8 @@ interface Result {
   answers?: Record<string, any>;
   correctCount: number;
   totalQuestions: number;
+  attemptNumber?: number;
+  totalStudentAttempts?: number;
   details: QuestionDetail[];
 }
 
@@ -83,6 +85,7 @@ interface ExamStats {
   lowestScore: number;
   avgDuration: number;
   questionsCount: number;
+  maxAttempts?: number;
 }
 
 interface ViewResultsState {
@@ -193,6 +196,7 @@ export default function ExamsPage() {
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [showSolutionsImmediately, setShowSolutionsImmediately] = useState(true);
+  const [maxAttempts, setMaxAttempts] = useState<number>(1);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [questions, setQuestions] = useState<Question[]>([emptyQ()]);
   const [saving, setSaving] = useState(false);
@@ -318,6 +322,7 @@ export default function ExamsPage() {
     setTopicId(""); setTopicName("");
     setShuffleQuestions(true); setShuffleOptions(true);
     setShowSolutionsImmediately(true);
+    setMaxAttempts(1);
     setQuestions([emptyQ()]); setEditingExam(null);
   };
 
@@ -334,6 +339,7 @@ export default function ExamsPage() {
     setShuffleQuestions(exam.shuffleQuestions ?? true);
     setShuffleOptions(exam.shuffleOptions ?? true);
     setShowSolutionsImmediately(exam.showSolutionsImmediately ?? true);
+    setMaxAttempts(exam.maxAttempts ?? 1);
     setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options], imageUrl: q.imageUrl })));
     setMode("edit");
   };
@@ -394,6 +400,7 @@ export default function ExamsPage() {
         shuffleQuestions,
         shuffleOptions,
         showSolutionsImmediately,
+        maxAttempts,
       }),
     });
     const data = await res.json();
@@ -423,6 +430,8 @@ export default function ExamsPage() {
         topicName: topicId ? (topics.find(t => t.message_thread_id === topicId)?.name || "") : null,
         shuffleQuestions,
         shuffleOptions,
+        showSolutionsImmediately,
+        maxAttempts,
       }),
     });
     setSaving(false);
@@ -1090,7 +1099,14 @@ export default function ExamsPage() {
 
                         {/* Student Info */}
                         <div style={{ flex: 1, minWidth: 160 }}>
-                          <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</span>
+                            {r.attemptNumber && (r.totalStudentAttempts || 1) > 1 && (
+                              <span className="badge badge-accent" style={{ fontSize: "0.68rem", padding: "1px 6px" }}>
+                                محاولة #{r.attemptNumber}
+                              </span>
+                            )}
+                          </div>
                           <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
                             {r.telegramId ? (
                               <span style={{ color: "var(--clr-brand)", marginInlineEnd: 6 }}>
@@ -1456,6 +1472,17 @@ export default function ExamsPage() {
               {topics.map(t => <option key={t.message_thread_id} value={t.message_thread_id}>📂 {t.name}</option>)}
             </select>
           </div>
+          <div className="input-wrapper" style={{ marginBottom: 0 }}>
+            <label className="input-label">🔢 المحاولات المسموحة لكل طالب (Attempts)</label>
+            <select className="select" value={maxAttempts} onChange={e => setMaxAttempts(Number(e.target.value))}>
+              <option value={1}>محاولة واحدة فقط (1 attempt - رسمي)</option>
+              <option value={2}>محاولتان (2 attempts - فرصة للتحسين)</option>
+              <option value={3}>3 محاولات (3 attempts)</option>
+              <option value={5}>5 محاولات (5 attempts)</option>
+              <option value={0}>عدد غير محدود (Unlimited - تدريب حر)</option>
+            </select>
+          </div>
+
         </div>
 
         {/* Anti-Cheating & Randomization Settings */}
@@ -1741,6 +1768,9 @@ export default function ExamsPage() {
                         🔀 Shuffled Choices
                       </span>
                     )}
+                    <span className="badge badge-muted" style={{ fontSize: "0.68rem" }} title="عدد المحاولات المسموحة لكل طالب">
+                      🔄 {exam.maxAttempts === 0 ? "محاولات غير محدودة" : exam.maxAttempts && exam.maxAttempts > 1 ? `${exam.maxAttempts} محاولات` : "محاولة واحدة"}
+                    </span>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>

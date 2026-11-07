@@ -93,6 +93,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ grou
       shuffleQuestions: cfg.shuffleQuestions,
       shuffleOptions: cfg.shuffleOptions,
       showSolutionsImmediately: cfg.showSolutionsImmediately,
+      maxAttempts: cfg.maxAttempts ?? 1,
     };
   });
 
@@ -106,7 +107,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { title, description, questions, timeLimit, passingScore, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately } = body;
+  const { title, description, questions, timeLimit, passingScore, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately, maxAttempts } = body;
 
   if (!title?.trim()) return NextResponse.json({ error: "Exam title is required" }, { status: 400 });
   const cleanedQuestions = sanitizeQuestions(questions);
@@ -121,6 +122,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
     shuffleQuestions: shuffleQuestions !== false,
     shuffleOptions: shuffleOptions !== false,
     showSolutionsImmediately: showSolutionsImmediately !== false,
+    maxAttempts: typeof maxAttempts === "number" ? Math.max(0, maxAttempts) : 1,
   });
 
   const exam = await withRetry(() => prisma.exam.create({
@@ -158,7 +160,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately } = body;
+  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately, maxAttempts } = body;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   let cleanedQuestions: SanitizedQuestion[] | undefined = undefined;
@@ -174,17 +176,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   const cleanTimeLimit = timeLimit !== undefined ? (Number(timeLimit) > 0 ? Math.round(Number(timeLimit)) : null) : undefined;
 
   let formattedDesc: string | undefined = undefined;
-  if (description !== undefined || shuffleQuestions !== undefined || shuffleOptions !== undefined || showSolutionsImmediately !== undefined) {
+  if (description !== undefined || shuffleQuestions !== undefined || shuffleOptions !== undefined || showSolutionsImmediately !== undefined || maxAttempts !== undefined) {
     const current = await withRetry(() => prisma.exam.findUnique({ where: { id }, select: { description: true } }));
     const currentCfg = parseExamConfig(current?.description);
     const nextCleanDesc = description !== undefined ? description : currentCfg.cleanDescription;
     const nextShuffleQ = shuffleQuestions !== undefined ? Boolean(shuffleQuestions) : currentCfg.shuffleQuestions;
     const nextShuffleOpts = shuffleOptions !== undefined ? Boolean(shuffleOptions) : currentCfg.shuffleOptions;
     const nextSolutions = showSolutionsImmediately !== undefined ? Boolean(showSolutionsImmediately) : currentCfg.showSolutionsImmediately;
+    const nextAttempts = maxAttempts !== undefined ? Math.max(0, Number(maxAttempts)) : currentCfg.maxAttempts;
     formattedDesc = formatExamDescription(nextCleanDesc, {
       shuffleQuestions: nextShuffleQ,
       shuffleOptions: nextShuffleOpts,
       showSolutionsImmediately: nextSolutions,
+      maxAttempts: nextAttempts,
     });
   }
 

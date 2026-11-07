@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
-import { mapStudentAnswersToMaster, type StudentExamQuestion } from "@/lib/examConfig";
+import { mapStudentAnswersToMaster, parseExamConfig, type StudentExamQuestion } from "@/lib/examConfig";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -197,6 +197,22 @@ export async function GET(
   });
 
   // â”€â”€ Enriched Student Submissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Build attempt numbering per student ─────────────────────────
+  const studentSubmissionsMap: Record<string, typeof allResults> = {};
+  for (const r of allResults) {
+    const key = r.telegramId || r.name;
+    if (!studentSubmissionsMap[key]) studentSubmissionsMap[key] = [];
+    studentSubmissionsMap[key].push(r);
+  }
+
+  const attemptNumberMap: Record<string, number> = {};
+  for (const [key, list] of Object.entries(studentSubmissionsMap)) {
+    const sorted = [...list].sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+    sorted.forEach((item, idx) => {
+      attemptNumberMap[item.id] = idx + 1;
+    });
+  }
+
   const studentResults = allResults.map(r => {
     const userAnswers = extractStudentMasterAnswers(r.answers, questions);
     let correctCount = 0;
@@ -241,6 +257,8 @@ export async function GET(
       answers: r.answers,
       correctCount,
       totalQuestions: questions.length,
+      attemptNumber: attemptNumberMap[r.id] || 1,
+      totalStudentAttempts: studentSubmissionsMap[r.telegramId || r.name]?.length || 1,
       details,
     };
   });
@@ -264,6 +282,7 @@ export async function GET(
       lowestScore,
       avgDuration,
       questionsCount: questions.length,
+      maxAttempts: parseExamConfig(exam.description).maxAttempts ?? 1,
     },
     questionAnalytics,
     results: studentResults,

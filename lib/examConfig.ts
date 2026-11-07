@@ -2,6 +2,7 @@ export interface ExamConfig {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
   showSolutionsImmediately?: boolean;
+  maxAttempts?: number;
 }
 
 export interface StudentExamQuestion {
@@ -44,6 +45,7 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
   showSolutionsImmediately: boolean;
+  maxAttempts: number;
 } {
   const desc = String(rawDescription || "").trim();
   const match = desc.match(CONFIG_REGEX);
@@ -51,6 +53,7 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
   let shuffleQuestions = true;
   let shuffleOptions = true;
   let showSolutionsImmediately = true;
+  let maxAttempts = 1;
 
   if (match) {
     try {
@@ -58,6 +61,7 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
       if (typeof parsed.shuffleQuestions === "boolean") shuffleQuestions = parsed.shuffleQuestions;
       if (typeof parsed.shuffleOptions === "boolean") shuffleOptions = parsed.shuffleOptions;
       if (typeof parsed.showSolutionsImmediately === "boolean") showSolutionsImmediately = parsed.showSolutionsImmediately;
+      if (typeof parsed.maxAttempts === "number") maxAttempts = Math.max(0, parsed.maxAttempts);
     } catch {
       // ignore parse error, use defaults
     }
@@ -70,6 +74,7 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
     shuffleQuestions,
     shuffleOptions,
     showSolutionsImmediately,
+    maxAttempts,
   };
 }
 
@@ -78,13 +83,14 @@ export function parseExamConfig(rawDescription: string | null | undefined): {
  */
 export function formatExamDescription(
   cleanDescription: string | null | undefined,
-  config: { shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean }
+  config: { shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean; maxAttempts?: number }
 ): string {
   const base = String(cleanDescription || "").replace(CONFIG_REGEX, "").trim();
   const meta = {
     shuffleQuestions: config.shuffleQuestions ?? true,
     shuffleOptions: config.shuffleOptions ?? true,
     showSolutionsImmediately: config.showSolutionsImmediately ?? true,
+    maxAttempts: typeof config.maxAttempts === "number" ? Math.max(0, config.maxAttempts) : 1,
   };
 
   const tag = `<!--config:${JSON.stringify(meta)}-->`;
