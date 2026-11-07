@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
+import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -32,6 +33,9 @@ export async function GET(
   const { groupId, examId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Sweep and finalize overdue or inactive sessions for this specific exam
+  await checkAndExpireExamSessions(examId).catch((e) => console.error("[results/GET] checkAndExpire error:", e));
 
   const exam = await withRetry(() => prisma.exam.findFirst({
     where: { id: examId, groupId },
@@ -67,7 +71,7 @@ export async function GET(
   const validDurations = completedResults.map(r => r.duration || 0).filter(d => d > 0);
   const avgDuration = validDurations.length > 0 ? Math.round(validDurations.reduce((a, b) => a + b, 0) / validDurations.length) : 0;
 
-  // ── Per-Question Analytics ───────────────────────────────────────
+  // â”€â”€ Per-Question Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const questionAnalytics = questions.map((q, qIdx) => {
     let qCorrectCount = 0;
     let qTotalAnswered = 0;
@@ -132,7 +136,7 @@ export async function GET(
     };
   });
 
-  // ── Enriched Student Submissions ─────────────────────────────────
+  // â”€â”€ Enriched Student Submissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const studentResults = allResults.map(r => {
     const userAnswers = (r.answers as Record<string, any>) || {};
     let correctCount = 0;

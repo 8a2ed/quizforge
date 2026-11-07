@@ -4,6 +4,7 @@ import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { telegram } from "@/lib/telegram";
 import { parseExamConfig, formatExamDescription } from "@/lib/examConfig";
+import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -70,6 +71,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ grou
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Sweep and finalize any overdue or inactive sessions before listing
+  await checkAndExpireExamSessions().catch((e) => console.error("[exams/GET] checkAndExpire error:", e));
 
   const exams = await withRetry(() => prisma.exam.findMany({
     where: { groupId },
