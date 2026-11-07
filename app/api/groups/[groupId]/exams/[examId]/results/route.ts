@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
+import { mapStudentAnswersToMaster, type StudentExamQuestion } from "@/lib/examConfig";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
 
@@ -23,6 +24,61 @@ interface ExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+}
+
+
+function extractStudentMasterAnswers(
+  rawAnswers: unknown,
+  masterQuestions: ExamQuestion[]
+): Record<string, number> {
+  if (!rawAnswers) return {};
+
+  let parsed: any = rawAnswers;
+  if (typeof rawAnswers === "string") {
+    try { parsed = JSON.parse(rawAnswers); } catch { return {}; }
+  }
+
+  if (typeof parsed !== "object" || parsed === null) return {};
+
+  // Case A: Session format { answers: { ... }, questions: [...] }
+  if (parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
+    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      try {
+        const mapped = mapStudentAnswersToMaster(parsed.questions as StudentExamQuestion[], parsed.answers);
+        const res: Record<string, number> = {};
+        for (const [k, v] of Object.entries(mapped)) {
+          res[String(k)] = Number(v);
+        }
+        return res;
+      } catch {
+        // fallback
+      }
+    }
+    const res: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed.answers)) {
+      res[String(k)] = Number(v);
+    }
+    return res;
+  }
+
+  // Case B: Array format [1, 0, 2] or [{ questionIndex: 0, optionIndex: 1 }]
+  if (Array.isArray(parsed)) {
+    const res: Record<string, number> = {};
+    parsed.forEach((val, idx) => {
+      if (typeof val === "number") res[String(idx)] = val;
+      else if (val && typeof val.chosenOptionId === "number") res[String(idx)] = val.chosenOptionId;
+    });
+    return res;
+  }
+
+  // Case C: Flat object { "0": 1, "1": 0 }
+  const res: Record<string, number> = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (v !== undefined && v !== null && !isNaN(Number(v))) {
+      res[String(k)] = Number(v);
+    }
+  }
+  return res;
 }
 
 // GET /api/groups/[groupId]/exams/[examId]/results
@@ -59,7 +115,8 @@ export async function GET(
   const inProgressResults = allResults.filter(r => r.score < 0);
 
   const totalCompleted = completedResults.length;
-  const passCount = completedResults.filter(r => r.passed).length;
+  const passingThreshold = exam.passingScore ?? 50;
+  const passCount = completedResults.filter(r => Boolean(r.passed) && r.score >= passingThreshold && (r.score > 0 || passingThreshold === 0)).length;
   const failCount = totalCompleted - passCount;
   const passRate = totalCompleted > 0 ? Math.round((passCount / totalCompleted) * 100) : 0;
 
@@ -78,7 +135,7 @@ export async function GET(
     const optionCounts = new Array(q.options.length).fill(0);
 
     for (const r of completedResults) {
-      const userAnswers = (r.answers as Record<string, any>) || {};
+      const userAnswers = extractStudentMasterAnswers(r.answers, questions);
       const chosen = userAnswers[String(qIdx)] ?? userAnswers[qIdx];
       if (chosen !== undefined && chosen !== null) {
         const chosenNum = Number(chosen);

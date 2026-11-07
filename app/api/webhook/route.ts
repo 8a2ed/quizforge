@@ -300,7 +300,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
 
   const totalQuestions = Math.max(1, questions.length);
   const score    = Math.round((correct / totalQuestions) * 100);
-  const passed   = timedOut ? false : score >= passingScore;
+  const passed   = !timedOut && score >= passingScore && (score > 0 || passingScore === 0);
   const duration = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
 
   // Map student answers back to master question and option indices so teacher analytics align perfectly
@@ -583,26 +583,26 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
   session.lastActiveAt = Date.now();
   session.warnedAt = null;
 
-  // Save progress to database
-  withRetry(() => prisma.examResult.updateMany({
-    where: { examId: session!.examId, telegramId, score: -1 },
-    data: {
-      answers: {
-        answers: session!.answers,
-        questions: session!.questions,
-        currentQ: session!.currentQ,
-        startedAt: session!.startedAt,
-        lastActiveAt: session!.lastActiveAt,
-        warnedAt: null,
-        msgId: session!.msgId,
-        chatId: session!.chatId,
-      } as unknown as Prisma.InputJsonValue,
-    },
-  })).catch(e => console.error("[exam] save progress error:", e));
-
   if (session.currentQ >= session.questions.length) {
     await finishExam(session);
   } else {
+    // Save in-progress progress ONLY while exam is active to prevent race with finishExam
+    withRetry(() => prisma.examResult.updateMany({
+      where: { examId: session!.examId, telegramId, score: -1 },
+      data: {
+        answers: {
+          answers: session!.answers,
+          questions: session!.questions,
+          currentQ: session!.currentQ,
+          startedAt: session!.startedAt,
+          lastActiveAt: session!.lastActiveAt,
+          warnedAt: null,
+          msgId: session!.msgId,
+          chatId: session!.chatId,
+        } as unknown as Prisma.InputJsonValue,
+      },
+    })).catch(e => console.error("[exam] save progress error:", e));
+
     await sendQuestion(session, cbId);
   }
 }

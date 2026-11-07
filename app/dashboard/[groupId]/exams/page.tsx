@@ -446,10 +446,11 @@ export default function ExamsPage() {
   const handleResetAttempt = (resultId: string, studentName: string) => {
     setActionModal({
       isOpen: true,
-      title: "إعادة تعيين محاولة الطالب",
-      description: `هل أنت متأكد من إعادة تعيين محاولة الطالب "${studentName}"؟ سيتم حذف نتيجته الحالية والسماح له بإعادة دخول الاختبار من جديد في تيليجرام.`,
-      confirmText: "إعادة تعيين المحاولة",
-      isDestructive: false,
+      title: "إعادة تعيين محاولة الطالب / Reset Attempt",
+      description: `هل أنت متأكد من إعادة تعيين محاولة الطالب "${studentName}"؟ سيتم حذف نتيجته ومحاولته الحالية بالكامل والسماح له بإعادة دخول الاختبار من جديد في تيليجرام.`,
+      confirmText: "نعم، أعد التعيين 🔄",
+      cancelText: "إلغاء",
+      isDestructive: true,
       onConfirm: async () => {
         setResettingResultId(resultId);
         setModalLoading(true);
@@ -458,7 +459,7 @@ export default function ExamsPage() {
             method: "DELETE",
           });
           if (res.ok) {
-            toast.success("تمت الإعادة", "تمت إعادة تعيين محاولة الطالب بنجاح");
+            toast.success("تمت الإعادة", `تمت إعادة تعيين محاولة الطالب "${studentName}" بنجاح!`);
             if (viewResults) {
               loadResults(viewResults.exam);
             }
@@ -467,6 +468,8 @@ export default function ExamsPage() {
           } else {
             toast.error("خطأ", "فشلت إعادة تعيين محاولة الطالب");
           }
+        } catch (err: any) {
+          toast.error("خطأ", err?.message || "حدث خطأ أثناء الاتصال");
         } finally {
           setResettingResultId(null);
           setModalLoading(false);
@@ -579,6 +582,36 @@ export default function ExamsPage() {
   const setQ = (i: number, field: keyof Question, val: string | string[] | number) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
+  const renderActionModal = () => (
+    <AccessibleModal
+      isOpen={actionModal.isOpen}
+      onClose={() => setActionModal(prev => ({ ...prev, isOpen: false }))}
+      title={actionModal.title}
+      description={actionModal.description}
+      footer={
+        <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", width: "100%" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setActionModal(prev => ({ ...prev, isOpen: false }))}
+            disabled={modalLoading}
+          >
+            {actionModal.cancelText || "إلغاء"}
+          </button>
+          <button
+            type="button"
+            className={actionModal.isDestructive ? "btn btn-danger" : "btn btn-primary"}
+            style={actionModal.isDestructive ? { background: "#ff6b6b", color: "#fff", borderColor: "#ff6b6b" } : undefined}
+            onClick={actionModal.onConfirm}
+            disabled={modalLoading}
+          >
+            {modalLoading ? "جارٍ التنفيذ..." : actionModal.confirmText}
+          </button>
+        </div>
+      }
+    />
+  );
+
   // ── Results view ──────────────────────────────────────────────────────────
   if (mode === "results" && viewResults) {
     const exam = viewResults.exam;
@@ -630,7 +663,15 @@ export default function ExamsPage() {
             >
               📥 Export CSV
             </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => { setViewResults(null); setMode("list"); }} style={{ gap: 6 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setActionModal(prev => ({ ...prev, isOpen: false }));
+                setViewResults(null);
+                setMode("list");
+              }}
+              style={{ gap: 6 }}
+            >
               <span className="flip-rtl">←</span>
               <span>Back to Exams</span>
             </button>
@@ -865,8 +906,20 @@ export default function ExamsPage() {
                         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                           {!inProgress && (
                             <div style={{ textAlign: "end" }}>
-                              <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
-                                🎯 {r.correctCount} / {r.totalQuestions}
+                              <div
+                                style={{
+                                  fontSize: "0.88rem",
+                                  fontWeight: 700,
+                                  direction: "ltr",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                }}
+                              >
+                                <span>🎯</span>
+                                <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                                  {r.correctCount} / {r.totalQuestions}
+                                </span>
                               </div>
                               <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
                                 Correct answers
@@ -876,8 +929,18 @@ export default function ExamsPage() {
 
                           {durationFormatted && (
                             <div style={{ textAlign: "end" }}>
-                              <div style={{ fontSize: "0.88rem", fontWeight: 700 }}>
-                                ⏱ {durationFormatted}
+                              <div
+                                style={{
+                                  fontSize: "0.88rem",
+                                  fontWeight: 700,
+                                  direction: "ltr",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                }}
+                              >
+                                <span>⏱</span>
+                                <span dir="ltr">{durationFormatted}</span>
                               </div>
                               <div style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>
                                 {timeLimitSec ? `${Math.round((r.duration! / timeLimitSec) * 100)}% of limit` : "Time taken"}
@@ -1127,6 +1190,9 @@ export default function ExamsPage() {
             )}
           </div>
         )}
+
+        {/* Universal Accessible Modal inside Results view */}
+        {renderActionModal()}
       </div>
     );
   }
@@ -1394,33 +1460,7 @@ export default function ExamsPage() {
         </div>
       )}
       {/* Universal Accessible Action Modal */}
-      <AccessibleModal
-        isOpen={actionModal.isOpen}
-        onClose={() => setActionModal(prev => ({ ...prev, isOpen: false }))}
-        title={actionModal.title}
-        description={actionModal.description}
-        footer={
-          <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", width: "100%" }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setActionModal(prev => ({ ...prev, isOpen: false }))}
-              disabled={modalLoading}
-            >
-              {actionModal.cancelText || "إلغاء"}
-            </button>
-            <button
-              type="button"
-              className={actionModal.isDestructive ? "btn btn-danger" : "btn btn-primary"}
-              style={actionModal.isDestructive ? { background: "#ff6b6b", color: "#fff", borderColor: "#ff6b6b" } : undefined}
-              onClick={actionModal.onConfirm}
-              disabled={modalLoading}
-            >
-              {modalLoading ? "جارٍ التنفيذ..." : actionModal.confirmText}
-            </button>
-          </div>
-        }
-      />
+      {renderActionModal()}
     </div>
   );
 }
