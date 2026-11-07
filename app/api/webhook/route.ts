@@ -126,6 +126,14 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   }
 
   const cfg = parseExamConfig(exam.description);
+  if (cfg.isPaused) {
+    await tgCall("sendMessage", {
+      chat_id: chatId,
+      text: `⏸ <b>الاختبار متوقف مؤقتاً: (${escapeHtml(exam.title)})</b>\n\n⚠️ عذراً، تم إيقاف هذا الاختبار مؤقتاً بواسطة المعلم.\nيرجى التواصل مع المعلم أو المحاولة في وقت لاحق.`,
+      parse_mode: "HTML",
+    });
+    return;
+  }
   const maxAttempts = cfg.maxAttempts ?? 1;
 
   // Check completed attempts
@@ -530,6 +538,9 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح حالياً.", true);
 
     const cfg = parseExamConfig(exam.description);
+    if (cfg.isPaused) {
+      return ackCb(cbId, "⚠️ هذا الاختبار متوقف مؤقتاً حالياً بقرار من المعلم.", true);
+    }
     const maxAttempts = cfg.maxAttempts ?? 1;
 
     const completedAttempts = await withRetry(() => prisma.examResult.findMany({
@@ -578,6 +589,9 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح.", true);
 
     const cfg = parseExamConfig(exam.description);
+    if (cfg.isPaused) {
+      return ackCb(cbId, "⚠️ تم إيقاف هذا الاختبار مؤقتاً بواسطة المعلم.", true);
+    }
     const maxAttempts = cfg.maxAttempts ?? 1;
 
     const inProgress = await withRetry(() => prisma.examResult.findFirst({
@@ -1553,6 +1567,12 @@ export async function POST(req: NextRequest) {
 
       } else if (data.startsWith("exam_begin:")) {
         await handleExamBegin(cb, data.slice("exam_begin:".length));
+
+      } else if (data.startsWith("exam_paused:")) {
+        await ackCb(cb.id as string, "⚠️ هذا الاختبار متوقف مؤقتاً حالياً بقرار من المعلم.", true);
+
+      } else if (data.startsWith("exam_closed:")) {
+        await ackCb(cb.id as string, "❌ هذا الاختبار غير متاح حالياً.", true);
 
       } else if (data.startsWith("exam_answer:")) {
         const parts = data.split(":");                      // ["exam_answer", examId, qIdx, optId]

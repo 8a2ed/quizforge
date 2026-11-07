@@ -335,14 +335,21 @@ export async function DELETE(
 
   // Clean up any in-progress attempt records and in-memory session for a full fresh retake
   if (result.telegramId) {
+    const strippedExamId = examId.replace(/^exam[_-]/i, "");
     await withRetry(() =>
       prisma.examResult.deleteMany({
-        where: { examId, telegramId: result.telegramId, score: -1 },
+        where: {
+          OR: [
+            { examId, telegramId: result.telegramId, score: -1 },
+            { examId: strippedExamId, telegramId: result.telegramId, score: -1 }
+          ]
+        },
       })
     ).catch(() => {});
 
     if (globalThis.__examSessions) {
       globalThis.__examSessions.delete(`${result.telegramId}:${examId}`);
+      globalThis.__examSessions.delete(`${result.telegramId}:${strippedExamId}`);
     }
   }
 

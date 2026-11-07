@@ -10,7 +10,7 @@ interface Topic { message_thread_id: number; name: string; }
 interface Exam {
   id: string; title: string; description?: string;
   questions: Question[]; timeLimit: number | null; passingScore: number;
-  isPublished: boolean; launchMsgId?: number | null; createdAt: string;
+  isPublished: boolean; isPaused?: boolean; launchMsgId?: number | null; createdAt: string;
   topicId?: number | null; topicName?: string | null;
   shuffleQuestions?: boolean; shuffleOptions?: boolean; showSolutionsImmediately?: boolean; maxAttempts?: number;
   _count: { results: number };
@@ -434,17 +434,31 @@ export default function ExamsPage() {
         maxAttempts,
       }),
     });
+    const data = await res.json().catch(() => ({}));
     setSaving(false);
-    if (res.ok) { showToast("success", "Exam changes saved!"); resetForm(); setMode("list"); load(); }
-    else showToast("error", "Failed to save exam");
+    if (res.ok && data.ok) {
+      const msg = data.telegramUpdated
+        ? "تم حفظ التعديلات وتحديث رسالة الإعلان في تيليجرام بنجاح! ✅"
+        : (editingExam.isPublished
+            ? "تم حفظ إعدادات الامتحان بنجاح في النظام ✅"
+            : "تم حفظ التعديلات بنجاح! ✅");
+      showToast("success", msg);
+      resetForm();
+      setMode("list");
+      load();
+    } else {
+      showToast("error", data.error || "فشل حفظ التعديلات");
+    }
   };
 
   const handlePublish = (exam: Exam) => {
     const isResend = exam.isPublished;
     setActionModal({
       isOpen: true,
-      title: isResend ? "🔄 إعادة إرسال الاختبار في تيليجرام" : "🚀 إطلاق ونشر الاختبار",
-      description: `سيتم إرسال بطاقة اختبار "${exam.title}" وزر بدء الامتحان فوراً في مجموعة التيليجرام أو الموضوع المحدد.`,
+      title: isResend ? "🔄 إعادة إرسال إعلان الاختبار في تيليجرام" : "🚀 إطلاق ونشر الاختبار",
+      description: isResend
+        ? `سيتم إرسال بطاقة إعلان جديدة لاختبار "${exam.title}" إلى المجموعة على تيليجرام.`
+        : `سيتم إرسال بطاقة اختبار "${exam.title}" وزر بدء الامتحان فوراً في مجموعة التيليجرام أو الموضوع المحدد.`,
       confirmText: isResend ? "إعادة الإرسال الآن" : "🚀 إطلاق ونشر الآن",
       isDestructive: false,
       onConfirm: async () => {
@@ -453,7 +467,7 @@ export default function ExamsPage() {
           const res = await fetch(`/api/groups/${groupId}/exams`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: exam.id, isPublished: true }),
+            body: JSON.stringify({ id: exam.id, isPublished: true, relaunch: true }),
           });
           if (res.ok) {
             toast.success("تم النشر بنجاح", `تم ${isResend ? "إعادة إرسال" : "إطلاق"} الاختبار في التيليجرام!`);
@@ -461,6 +475,41 @@ export default function ExamsPage() {
             setActionModal(prev => ({ ...prev, isOpen: false }));
           } else {
             toast.error("خطأ", "فشل نشر الاختبار في تيليجرام");
+          }
+        } finally {
+          setModalLoading(false);
+        }
+      },
+    });
+  };
+
+  const handleTogglePause = (exam: Exam) => {
+    const willPause = !exam.isPaused;
+    setActionModal({
+      isOpen: true,
+      title: willPause ? "⏸ إيقاف الاختبار مؤقتاً" : "▶️ استئناف وتفعيل الاختبار",
+      description: willPause
+        ? `هل أنت متأكد من رغبتك في إيقاف اختبار "${exam.title}" مؤقتاً؟ لن يتمكن الطلاب من بدء محاولات جديدة حتى تقوم باستئنافه، وسيتم تعديل رسالة الإعلان في المجموعة تلقائياً إن وُجدت.`
+        : `هل تريد استئناف اختبار "${exam.title}" وتفعيله للطلاب الآن؟ سيتمكن الطلاب من خوض الاختبار مجدداً وتحديث رسالة المجموعة.`,
+      confirmText: willPause ? "⏸ إيقاف مؤقتاً" : "▶️ استئناف وتفعيل",
+      isDestructive: false,
+      onConfirm: async () => {
+        setModalLoading(true);
+        try {
+          const res = await fetch(`/api/groups/${groupId}/exams`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: exam.id, isPaused: willPause }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            const actionWord = willPause ? "إيقاف" : "استئناف";
+            const syncNote = data.telegramUpdated ? " وتحديث رسالة المجموعة" : "";
+            toast.success("تم بنجاح", `تم ${actionWord} الاختبار بنجاح${syncNote}!`);
+            load();
+            setActionModal(prev => ({ ...prev, isOpen: false }));
+          } else {
+            toast.error("خطأ", data.error || "تعذر تغيير حالة الاختبار");
           }
         } finally {
           setModalLoading(false);
@@ -802,6 +851,43 @@ export default function ExamsPage() {
         </div>
       }
     />
+  );
+
+  const renderModals = () => (
+    <>
+      {renderActionModal()}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(0, 0, 0, 0.85)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", flexDirection: "column", alignItems: "center" }} onClick={e => e.stopPropagation()}>
+            <img
+              src={lightboxImage}
+              alt="Question Full Preview"
+              style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 12, gap: 6 }}
+              onClick={() => setLightboxImage(null)}
+            >
+              ✕ إغلاق المعاينة
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 
   // ── Results view ──────────────────────────────────────────────────────────
@@ -1428,8 +1514,8 @@ export default function ExamsPage() {
           </div>
         )}
 
-        {/* Universal Accessible Modal inside Results view */}
-        {renderActionModal()}
+        {/* Universal Accessible Modals inside Results view */}
+        {renderModals()}
       </div>
     );
   }
@@ -1439,9 +1525,32 @@ export default function ExamsPage() {
   if (mode === "create" || mode === "edit") return (
     <div>
             <div className="section-header animate-fade-up">
-        <div><h1>{isEditing ? `Edit: ${editingExam?.title}` : "Create New Exam"}</h1></div>
+        <div><h1>{isEditing ? `تعديل: ${editingExam?.title}` : "Create New Exam"}</h1></div>
         <button className="btn btn-ghost" onClick={() => { resetForm(); setMode("list"); }}>✕ Cancel</button>
       </div>
+
+      {isEditing && editingExam?.isPublished && (
+        <div style={{
+          padding: "12px 16px",
+          background: "rgba(99, 102, 241, 0.08)",
+          border: "1px solid rgba(99, 102, 241, 0.25)",
+          borderRadius: 10,
+          marginBottom: 16,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          fontSize: "0.86rem",
+          color: "var(--clr-text)"
+        }}>
+          <span style={{ fontSize: "1.3rem" }}>📢</span>
+          <div>
+            <b>هذا الاختبار منشور ومتاح حالياً للطلاب.</b>
+            <div style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+              عند حفظ التعديلات، سيتم تحديث الإعدادات في النظام وتعديل رسالة الإعلان في المجموعة تلقائياً على تيليجرام إن وُجدت.
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card animate-fade-up" style={{ marginBottom: 20 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -1698,7 +1807,7 @@ export default function ExamsPage() {
 
         <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
           <button className="btn btn-primary" onClick={isEditing ? handleSaveEdit : handleCreate} disabled={saving}>
-            {saving ? (isEditing ? "Saving…" : "Creating…") : (isEditing ? "💾 Save Changes" : "Create Exam")}
+            {saving ? (isEditing ? "جاري الحفظ…" : "جاري الإنشاء…") : (isEditing ? (editingExam?.isPublished ? "💾 حفظ وتحديث إعلان الامتحان" : "💾 Save Changes") : "Create Exam")}
           </button>
           {isEditing && editingExam && !editingExam.isPublished && (
             <button className="btn btn-secondary" disabled={saving} onClick={async () => { await handleSaveEdit(); await handlePublish({ ...editingExam, title, passingScore: parseInt(passingScore) } as Exam); }}>
@@ -1707,6 +1816,8 @@ export default function ExamsPage() {
           )}
         </div>
       </div>
+      {/* Universal Accessible Modals inside Form view */}
+      {renderModals()}
     </div>
   );
 
@@ -1747,7 +1858,9 @@ export default function ExamsPage() {
                   <div style={{ fontWeight: 700, fontSize: "0.95rem", marginBottom: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span dir="auto">{exam.title}</span>
                     {exam.isPublished
-                      ? <span className="badge badge-success" style={{ fontSize: "0.65rem" }}>✅ Live</span>
+                      ? (exam.isPaused
+                          ? <span className="badge badge-warning" style={{ fontSize: "0.65rem", background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", borderColor: "rgba(245, 158, 11, 0.3)" }}>⏸ متوقف مؤقتاً</span>
+                          : <span className="badge badge-success" style={{ fontSize: "0.65rem" }}>✅ Live</span>)
                       : <span className="badge badge-muted" style={{ fontSize: "0.65rem" }}>Draft</span>}
                   </div>
                   {exam.description && <p dir="auto" style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)", margin: "0 0 6px" }}>{exam.description}</p>}
@@ -1773,12 +1886,20 @@ export default function ExamsPage() {
                     </span>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", alignItems: "center" }}>
                   {exam._count.results > 0 && (
                     <button className="btn btn-secondary btn-sm" onClick={() => loadResults(exam)}>📊 Results</button>
                   )}
-                  {!exam.isPublished && (
-                    <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exam)}>✏️ Edit</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exam)} title="تعديل إعدادات وأسئلة الامتحان">✏️ Edit</button>
+                  {exam.isPublished && (
+                    <button
+                      className={`btn btn-sm ${exam.isPaused ? "btn-secondary" : "btn-ghost"}`}
+                      style={exam.isPaused ? { color: "#10b981", borderColor: "rgba(16, 185, 129, 0.4)", background: "rgba(16, 185, 129, 0.08)" } : { color: "#f59e0b", borderColor: "rgba(245, 158, 11, 0.3)" }}
+                      onClick={() => handleTogglePause(exam)}
+                      title={exam.isPaused ? "استئناف الامتحان وتفعيله للطلاب" : "إيقاف الامتحان مؤقتاً"}
+                    >
+                      {exam.isPaused ? "▶️ استئناف" : "⏸ إيقاف مؤقت"}
+                    </button>
                   )}
                   <button className="btn btn-primary btn-sm" onClick={() => handlePublish(exam)}>
                     {exam.isPublished ? "🔄 Re-send" : "🚀 Launch"}
@@ -1792,40 +1913,8 @@ export default function ExamsPage() {
           ))}
         </div>
       )}
-      {/* Universal Accessible Action Modal */}
-      {renderActionModal()}
-      {/* Lightbox Modal for Question Images */}
-      {lightboxImage && (
-        <div
-          onClick={() => setLightboxImage(null)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 10000,
-            background: "rgba(0, 0, 0, 0.85)",
-            backdropFilter: "blur(6px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <div style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", flexDirection: "column", alignItems: "center" }} onClick={e => e.stopPropagation()}>
-            <img
-              src={lightboxImage}
-              alt="Question Full Preview"
-              style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}
-            />
-            <button
-              className="btn btn-secondary btn-sm"
-              style={{ marginTop: 12, gap: 6 }}
-              onClick={() => setLightboxImage(null)}
-            >
-              ✕ إغلاق المعاينة
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Universal Accessible Modals inside List view */}
+      {renderModals()}
 
     </div>
   );

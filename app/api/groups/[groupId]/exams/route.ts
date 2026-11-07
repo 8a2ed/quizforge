@@ -94,6 +94,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ grou
       shuffleOptions: cfg.shuffleOptions,
       showSolutionsImmediately: cfg.showSolutionsImmediately,
       maxAttempts: cfg.maxAttempts ?? 1,
+      isPaused: cfg.isPaused || false,
     };
   });
 
@@ -153,15 +154,188 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   });
 }
 
-// PATCH /api/groups/[groupId]/exams — update exam
+// ─── Format & Sync Exam Announcement on Telegram ──────────────────────────────
+function formatExamAnnouncementText(
+  exam: { title: string; description: string | null; timeLimit: number | null; passingScore: number; isPublished: boolean },
+  questionsCount: number,
+  isPaused: boolean
+): string {
+  const cfg = parseExamConfig(exam.description);
+  const cleanDesc = cfg.cleanDescription;
+  const maxAttempts = cfg.maxAttempts ?? 1;
+
+  if (!exam.isPublished) {
+    return [
+      `❌ <b>[تم إغلاق الاختبار] ${escapeHtml(exam.title)}</b>`,
+      `\n\n⚠️ <i>تم إغلاق هذا الاختبار وإلغاء نشره بواسطة المعلم.</i>`,
+    ].join("");
+  }
+
+  if (isPaused) {
+    return [
+      `⏸ <b>[متوقف مؤقتاً] ${escapeHtml(exam.title)}</b>`,
+      cleanDesc ? `\n${escapeHtml(cleanDesc)}` : "",
+      `\n\n📊 <b>${questionsCount} أسئلة</b>`,
+      exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
+      `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
+      maxAttempts === 1 ? "" : `\n🔄 <b>المحاولات المسموحة: ${maxAttempts === 0 ? "غير محدود" : maxAttempts}</b>`,
+      cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
+      `\n\n⚠️ <i>هذا الاختبار متوقف مؤقتاً حالياً بقرار من المعلم. لا يمكن بدء محاولات جديدة في الوقت الحالي.</i>`,
+    ].filter(Boolean).join("");
+  }
+
+  return [
+    `📋 <b>${escapeHtml(exam.title)}</b>`,
+    cleanDesc ? `\n${escapeHtml(cleanDesc)}` : "",
+    `\n\n📊 <b>${questionsCount} أسئلة</b>`,
+    exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
+    `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
+    maxAttempts === 1 ? "" : `\n🔄 <b>المحاولات المسموحة: ${maxAttempts === 0 ? "غير محدود" : maxAttempts}</b>`,
+    cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
+    `\n\n👉 <i>اضغط على الزر أدناه لبدء الامتحان في محادثة خاصة مع البوت (Telegram DM).</i>`,
+  ].filter(Boolean).join("");
+}
+
+async function syncTelegramExamAnnouncement({
+  exam,
+  chatId,
+  launchTopicId,
+  relaunch = false,
+}: {
+  exam: {
+    id: string;
+    title: string;
+    description: string | null;
+    timeLimit: number | null;
+    passingScore: number;
+    questions: unknown;
+    launchMsgId: number | null;
+    topicId: number | null;
+    isPublished: boolean;
+  };
+  chatId: string;
+  launchTopicId?: number | null;
+  relaunch?: boolean;
+}): Promise<{ telegramUpdated: boolean; newLaunchMsgId?: number }> {
+  if (!BOT_TOKEN) return { telegramUpdated: false };
+
+  const qsCount = Array.isArray(exam.questions) ? exam.questions.length : 0;
+  const cfg = parseExamConfig(exam.description);
+  const isPaused = Boolean(cfg.isPaused);
+  const text = formatExamAnnouncementText(exam, qsCount, isPaused);
+
+  let botUsername = BOT_USERNAME;
+  if (!botUsername) {
+    try {
+      const me = await telegram.getMe();
+      if (me?.username) botUsername = me.username.replace(/^@/, "");
+    } catch {}
+  }
+
+  const startButton = !exam.isPublished
+    ? { text: "❌ الاختبار مغلق", callback_data: `exam_closed:${exam.id}` }
+    : isPaused
+    ? { text: "⏸ الاختبار متوقف مؤقتاً", callback_data: `exam_paused:${exam.id}` }
+    : (botUsername
+        ? { text: "🚀 بدء الامتحان (Start Exam)", url: `https://t.me/${botUsername}?start=exam_${exam.id}` }
+        : { text: "🚀 بدء الامتحان (Start Exam)", callback_data: `exam_start:${exam.id}` });
+
+  // If relaunch requested OR no launch message exists yet:
+  if (relaunch || !exam.launchMsgId) {
+    if (!exam.isPublished) return { telegramUpdated: false };
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 15_000);
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({
+          chat_id: chatId,
+          ...(launchTopicId ? { message_thread_id: launchTopicId } : {}),
+          text,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[startButton]],
+          },
+        }),
+      });
+      clearTimeout(t);
+      const data = await res.json();
+      if (data.ok && data.result?.message_id) {
+        return { telegramUpdated: true, newLaunchMsgId: data.result.message_id };
+      }
+      return { telegramUpdated: false };
+    } catch (e) {
+      console.error("[syncTelegramExamAnnouncement] sendMessage error:", e);
+      return { telegramUpdated: false };
+    }
+  }
+
+  // Otherwise, edit the existing launch message if found
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 15_000);
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ac.signal,
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: exam.launchMsgId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[startButton]],
+        },
+      }),
+    });
+    clearTimeout(t);
+    const data = await res.json();
+    if (data.ok || data.description?.includes("message is not modified")) {
+      return { telegramUpdated: true };
+    }
+    console.log("[syncTelegramExamAnnouncement] editMessageText note:", data.description);
+    return { telegramUpdated: false };
+  } catch (err) {
+    console.error("[syncTelegramExamAnnouncement] editMessageText error:", err);
+    return { telegramUpdated: false };
+  }
+}
+
+// PATCH /api/groups/[groupId]/exams — update exam settings, publish/relaunch, or pause/resume
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ groupId: string }> }) {
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { id, title, description, questions, timeLimit, passingScore, isPublished, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately, maxAttempts } = body;
+  const {
+    id,
+    title,
+    description,
+    questions,
+    timeLimit,
+    passingScore,
+    isPublished,
+    isPaused,
+    topicId,
+    topicName,
+    shuffleQuestions,
+    shuffleOptions,
+    showSolutionsImmediately,
+    maxAttempts,
+    relaunch,
+  } = body;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  const existingExam = await withRetry(() => prisma.exam.findFirst({
+    where: { id, groupId },
+    include: { group: true }
+  }));
+  if (!existingExam) {
+    return NextResponse.json({ error: "Exam not found" }, { status: 404 });
+  }
 
   let cleanedQuestions: SanitizedQuestion[] | undefined = undefined;
   if (questions !== undefined) {
@@ -176,24 +350,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   const cleanTimeLimit = timeLimit !== undefined ? (Number(timeLimit) > 0 ? Math.round(Number(timeLimit)) : null) : undefined;
 
   let formattedDesc: string | undefined = undefined;
-  if (description !== undefined || shuffleQuestions !== undefined || shuffleOptions !== undefined || showSolutionsImmediately !== undefined || maxAttempts !== undefined) {
-    const current = await withRetry(() => prisma.exam.findUnique({ where: { id }, select: { description: true } }));
-    const currentCfg = parseExamConfig(current?.description);
+  if (description !== undefined || shuffleQuestions !== undefined || shuffleOptions !== undefined || showSolutionsImmediately !== undefined || maxAttempts !== undefined || isPaused !== undefined) {
+    const currentCfg = parseExamConfig(existingExam.description);
     const nextCleanDesc = description !== undefined ? description : currentCfg.cleanDescription;
     const nextShuffleQ = shuffleQuestions !== undefined ? Boolean(shuffleQuestions) : currentCfg.shuffleQuestions;
     const nextShuffleOpts = shuffleOptions !== undefined ? Boolean(shuffleOptions) : currentCfg.shuffleOptions;
     const nextSolutions = showSolutionsImmediately !== undefined ? Boolean(showSolutionsImmediately) : currentCfg.showSolutionsImmediately;
     const nextAttempts = maxAttempts !== undefined ? Math.max(0, Number(maxAttempts)) : currentCfg.maxAttempts;
+    const nextPaused = isPaused !== undefined ? Boolean(isPaused) : currentCfg.isPaused;
     formattedDesc = formatExamDescription(nextCleanDesc, {
       shuffleQuestions: nextShuffleQ,
       shuffleOptions: nextShuffleOpts,
       showSolutionsImmediately: nextSolutions,
       maxAttempts: nextAttempts,
+      isPaused: nextPaused,
     });
   }
 
-  const updated = await withRetry(() => prisma.exam.updateMany({
-    where: { id, groupId },
+  await withRetry(() => prisma.exam.update({
+    where: { id },
     data: {
       ...(title !== undefined ? { title: title.trim() } : {}),
       ...(formattedDesc !== undefined ? { description: formattedDesc } : {}),
@@ -206,65 +381,39 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
     },
   }));
 
-  // If publishing (or re-publishing), send/re-send launch announcement message to Telegram group
-  if (isPublished === true && updated.count > 0) {
-    const exam = await withRetry(() => prisma.exam.findFirst({ where: { id, groupId }, include: { group: true } }));
-    if (exam?.group) {
-      const qs = exam.questions as Array<Record<string, unknown>>;
-      const cleanDesc = parseExamConfig(exam.description).cleanDescription;
-      const msg = [
-        `📋 <b>${escapeHtml(exam.title)}</b>`,
-        cleanDesc ? `\n${escapeHtml(cleanDesc)}` : "",
-        `\n\n📊 <b>${qs.length} question${qs.length !== 1 ? "s" : ""}</b>`,
-        exam.timeLimit ? `\n⏱ <b>${Math.floor(exam.timeLimit / 60)} minute time limit</b>` : "",
-        `\n✅ <b>Passing score: ${exam.passingScore}%</b>`,
-        `\n\n👉 <i>Tap the button below to start the exam in your private chat.</i>`,
-      ].filter(Boolean).join("");
+  const updatedExam = await withRetry(() => prisma.exam.findFirst({
+    where: { id, groupId },
+    include: { group: true }
+  }));
 
-      const launchTopicId = exam.topicId ?? (topicId ? Number(topicId) : null);
+  let telegramUpdated = false;
+  if (updatedExam?.group) {
+    const launchTopicId = updatedExam.topicId ?? (topicId ? Number(topicId) : null);
+    // Sync to Telegram: edit announcement if message exists, or send new if first-time publish or relaunch requested
+    const syncRes = await syncTelegramExamAnnouncement({
+      exam: updatedExam,
+      chatId: updatedExam.group.chatId,
+      launchTopicId,
+      relaunch: Boolean(relaunch) || (isPublished === true && !existingExam.isPublished),
+    });
 
-      let botUsername = BOT_USERNAME;
-      if (!botUsername) {
-        try {
-          const me = await telegram.getMe();
-          if (me?.username) botUsername = me.username.replace(/^@/, "");
-        } catch {}
-      }
-
-      // Inline button: If bot username is known, use direct URL deep-link; otherwise fallback to callback_data
-      const startButton = botUsername
-        ? { text: "🚀 Start Exam", url: `https://t.me/${botUsername}?start=exam_${exam.id}` }
-        : { text: "🚀 Start Exam", callback_data: `exam_start:${exam.id}` };
-
-      try {
-        const ac = new AbortController();
-        const t = setTimeout(() => ac.abort(), 15_000);
-        const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: ac.signal,
-          body: JSON.stringify({
-            chat_id: exam.group.chatId,
-            ...(launchTopicId ? { message_thread_id: launchTopicId } : {}),
-            text: msg,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [[startButton]],
-            },
-          }),
-        });
-        clearTimeout(t);
-        const data = await res.json();
-        if (data.ok) {
-          await withRetry(() => prisma.exam.update({ where: { id }, data: { launchMsgId: data.result.message_id } }));
-        } else {
-          console.error("[exam launch] Telegram error:", data);
-        }
-      } catch (e) { console.error("[exam launch] fetch error:", e); }
+    telegramUpdated = syncRes.telegramUpdated;
+    if (syncRes.newLaunchMsgId) {
+      await withRetry(() => prisma.exam.update({
+        where: { id },
+        data: { launchMsgId: syncRes.newLaunchMsgId }
+      })).catch(() => {});
     }
   }
 
-  return NextResponse.json({ ok: true });
+  const finalCfg = parseExamConfig(updatedExam?.description);
+
+  return NextResponse.json({
+    ok: true,
+    telegramUpdated,
+    isPaused: finalCfg.isPaused,
+    isPublished: updatedExam?.isPublished,
+  });
 }
 
 // DELETE /api/groups/[groupId]/exams
