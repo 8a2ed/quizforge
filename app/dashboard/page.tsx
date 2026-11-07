@@ -197,6 +197,53 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Smart Wizard Announcement Banner */}
+      <div style={{
+        background: "linear-gradient(135deg, rgba(0, 212, 255, 0.08) 0%, rgba(99, 102, 241, 0.12) 100%)",
+        border: "1px solid rgba(0, 212, 255, 0.25)",
+        borderRadius: "var(--radius-lg)",
+        padding: "var(--space-4) var(--space-5)",
+        marginBottom: "var(--space-6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+        gap: "var(--space-3)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: "10px",
+            background: "rgba(0, 212, 255, 0.15)",
+            border: "1px solid rgba(0, 212, 255, 0.3)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "1.2rem"
+          }}>
+            ✨
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--clr-text-primary)" }}>
+              النسخة الجديدة: المعالج الذكي ونظام الإشعارات والحوار التفاعلي
+            </div>
+            <div style={{ fontSize: "0.8rem", color: "var(--clr-text-muted)" }}>
+              تم دمج معالج إنشاء الكويزات الذكي (Quiz Wizard) ونظام الإشعارات (Toast Stack) ومربعات الحوار التفاعلية (Modal).
+            </div>
+          </div>
+        </div>
+        {groups.length > 0 && (
+          <Link
+            href={`/dashboard/${groups[0].id}/wizard`}
+            className="btn btn-primary btn-sm"
+            style={{
+              background: "#00d4ff",
+              color: "#080b11",
+              fontWeight: 700,
+              boxShadow: "0 0 16px rgba(0,212,255,0.3)"
+            }}
+          >
+            جرب المعالج الذكي الآن ←
+          </Link>
+        )}
+      </div>
       {/* Groups grid */}
       {loading ? (
         <div className="group-grid">
@@ -273,6 +320,7 @@ export default function DashboardPage() {
                   <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>Quizzes sent</div>
                   {!manageMode && (
                     <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+                      <span onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/dashboard/${group.id}/wizard`); }} style={{ fontSize: "0.75rem", color: "#00d4ff", background: "rgba(0,212,255,0.12)", padding: "2px 8px", borderRadius: "4px", border: "1px solid rgba(0,212,255,0.25)", fontWeight: 600, cursor: "pointer" }}>✨ المعالج</span>
                       <span style={{ color: "var(--clr-brand)", fontSize: "0.8rem", fontWeight: 600 }}>Open dashboard</span>
                       <span className="flip-rtl" style={{ color: "var(--clr-brand)", fontSize: "0.85rem" }}>→</span>
                     </div>

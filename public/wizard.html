@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Step Form Wizard Component</title>
+  <style>
+    /* ==========================================================================
+       CSS Reset & Global Variables
+       ========================================================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-body: #0a0a0a;
+      --bg-card: #131316;
+      --border-card: rgba(255, 255, 255, 0.08);
+      --border-input: rgba(255, 255, 255, 0.1);
+      --bg-input: rgba(255, 255, 255, 0.04);
+      --bg-input-hover: rgba(255, 255, 255, 0.06);
+
+      --cyan-bright: #00d4ff;
+      --cyan-deep: #00a4d8;
+      --cyan-glow: rgba(0, 212, 255, 0.35);
+
+      --emerald-fill: #10b981;
+      --emerald-glow: rgba(16, 185, 129, 0.35);
+
+      --danger-color: #f87171;
+      --danger-bg: rgba(248, 113, 113, 0.12);
+
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-body);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      line-height: 1.5;
+      background-image:
+        radial-gradient(ellipse 60% 40% at 50% -10%, rgba(0, 212, 255, 0.09) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 30% at 85% 95%, rgba(16, 185, 129, 0.06) 0%, transparent 60%);
+    }
+
+    /* ==========================================================================
+       Wizard Card Shell
+       ========================================================================== */
+    .wizard-card {
+      position: relative;
+      width: 100%;
+      max-width: 580px;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 14px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Animated 2px Progress Bar */
+    .top-progress-track {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.05);
+      z-index: 10;
+    }
+
+    .top-progress-fill {
+      height: 100%;
+      width: 25%;
+      background: linear-gradient(90deg, var(--emerald-fill), var(--cyan-bright));
+      transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Stepper UI */
+    .stepper-header {
+      padding: 32px 28px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    .stepper-nav {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Connector line behind dots */
+    .stepper-connectors {
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 2px;
+      background: rgba(255, 255, 255, 0.08);
+      z-index: 1;
+    }
+
+    .stepper-connectors-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--emerald-fill), var(--cyan-bright));
+      transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Individual step dots */
+    .step-item {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      background: transparent;
+      border: none;
+      cursor: default;
+      outline: none;
+    }
+
+    .step-item.clickable {
+      cursor: pointer;
+    }
+
+    .step-dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 700;
+      background: #18181c;
+      color: var(--text-dim);
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .step-item:focus-visible .step-dot {
+      outline: 2px solid var(--cyan-bright);
+      outline-offset: 2px;
+    }
+
+    /* State: Active */
+    .step-item.active .step-dot {
+      border-color: var(--cyan-bright);
+      color: #000000;
+      background: var(--cyan-bright);
+      box-shadow: 0 0 18px var(--cyan-glow);
+      transform: scale(1.08);
+    }
+
+    /* State: Complete */
+    .step-item.complete .step-dot {
+      border-color: var(--emerald-fill);
+      background: var(--emerald-fill);
+      color: #000000;
+      box-shadow: 0 0 14px var(--emerald-glow);
+    }
+
+    .step-dot svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 3;
+    }
+
+    .step-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      transition: color 0.2s ease;
+    }
+
+    .step-item.active .step-label {
+      color: var(--cyan-bright);
+    }
+    .step-item.complete .step-label {
+      color: var(--text-muted);
+    }
+
+    /* ==========================================================================
+       Wizard Form Carousel Body
+       ========================================================================== */
+    .wizard-form {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .panels-viewport {
+      position: relative;
+      overflow: hidden;
+      min-height: 360px;
+      padding: 32px 32px 24px;
+    }
+
+    .step-panel {
+      position: absolute;
+      top: 32px;
+      left: 32px;
+      right: 32px;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(60px);
+      transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                  visibility 0.3s;
+      pointer-events: none;
+    }
+
+    .step-panel.active-panel {
+      position: relative;
+      top: 0;
+      left: 0;
+      right: 0;
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+
+    .step-panel.slide-out-left {
+      transform: translateX(-60px);
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .step-panel.slide-out-right {
+      transform: translateX(60px);
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    /* Headings */
+    .panel-header {
+      margin-bottom: 22px;
+    }
+
+    .panel-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-desc {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Form Fields */
+    .form-group {
+      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-label {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .req-star {
+      color: var(--cyan-bright);
+      margin-left: 2px;
+    }
+
+    .form-input, .form-textarea {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-input);
+      border-radius: 8px;
+      padding: 11px 14px;
+      font-size: 0.92rem;
+      color: var(--text-main);
+      font-family: inherit;
+      transition: all 0.18s ease;
+    }
+
+    .form-input:hover, .form-textarea:hover {
+      background: var(--bg-input-hover);
+    }
+
+    .form-input:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--cyan-bright);
+      box-shadow: 0 0 0 2px var(--cyan-glow);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .form-textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .char-counter {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-align: right;
+    }
+
+    .error-msg {
+      font-size: 0.78rem;
+      color: var(--danger-color);
+      min-height: 18px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Step 2: Radiogroup Cards */
+    .cards-radiogroup {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    @media (max-width: 440px) {
+      .cards-radiogroup {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .radio-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 16px 14px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-input);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+
+    .radio-card:hover {
+      background: var(--bg-input-hover);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .radio-card:focus-visible {
+      outline: 2px solid var(--cyan-bright);
+      outline-offset: 2px;
+    }
+
+    .radio-card[aria-checked="true"] {
+      border-color: var(--cyan-bright);
+      background: rgba(0, 212, 255, 0.06);
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+    }
+
+    .radio-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .radio-card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .radio-circle {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid var(--text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .radio-card[aria-checked="true"] .radio-circle {
+      border-color: var(--cyan-bright);
+      background: var(--cyan-bright);
+    }
+
+    .radio-circle::after {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #000;
+      opacity: 0;
+      transform: scale(0);
+      transition: all 0.15s ease;
+    }
+
+    .radio-card[aria-checked="true"] .radio-circle::after {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .radio-card-desc {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    /* Step 3: Checkbox Chips */
+    .chips-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .chip-label {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .chip-input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .chip-ui {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 15px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-input);
+      color: var(--text-muted);
+      transition: all 0.18s ease;
+    }
+
+    .chip-label:hover .chip-ui {
+      background: var(--bg-input-hover);
+      color: var(--text-main);
+    }
+
+    .chip-input:focus-visible + .chip-ui {
+      outline: 2px solid var(--cyan-bright);
+      outline-offset: 2px;
+    }
+
+    .chip-input:checked + .chip-ui {
+      background: rgba(0, 212, 255, 0.12);
+      border-color: var(--cyan-bright);
+      color: var(--cyan-bright);
+      box-shadow: 0 0 14px rgba(0, 212, 255, 0.18);
+    }
+
+    /* Step 4: Review Summary */
+    .review-table {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-card);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .review-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      gap: 16px;
+    }
+
+    .review-row:last-child {
+      border-bottom: none;
+    }
+
+    .review-field {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--text-dim);
+      letter-spacing: 0.05em;
+      min-width: 90px;
+    }
+
+    .review-val {
+      flex: 1;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-main);
+      word-break: break-word;
+    }
+
+    .review-edit-btn {
+      background: transparent;
+      border: none;
+      color: var(--cyan-bright);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+
+    .review-edit-btn:hover {
+      color: #9fe7ff;
+    }
+
+    .review-edit-btn:focus-visible {
+      outline: 2px solid var(--cyan-bright);
+      outline-offset: 2px;
+    }
+
+    /* Footer Navigation */
+    .wizard-footer {
+      padding: 20px 32px 24px;
+      border-top: 1px solid var(--border-card);
+      background: rgba(255, 255, 255, 0.015);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 22px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid var(--cyan-bright);
+      outline-offset: 2px;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--text-muted);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+    }
+
+    .btn-secondary:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--cyan-bright) 0%, var(--cyan-deep) 100%);
+      color: #050b14;
+      border: none;
+      box-shadow: 0 4px 18px rgba(0, 212, 255, 0.35);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(0, 212, 255, 0.45);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    /* Success Panel */
+    .success-panel {
+      padding: 48px 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 16px;
+    }
+
+    .success-icon-badge {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--emerald-fill);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid var(--emerald-fill);
+      box-shadow: 0 0 24px var(--emerald-glow);
+      animation: popIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes popIn {
+      0% { transform: scale(0.6); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .success-icon-badge svg {
+      width: 32px;
+      height: 32px;
+      stroke-width: 3;
+    }
+
+    .success-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .success-desc {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      max-width: 400px;
+    }
+
+    /* Accessibility: Reduced Motion */
+    @media (prefers-reduced-motion: reduce) {
+      .top-progress-fill,
+      .stepper-connectors-fill,
+      .step-dot,
+      .step-panel,
+      .btn,
+      .radio-card,
+      .chip-ui {
+        transition: none !important;
+        animation: none !important;
+      }
+      .step-panel {
+        transform: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Wizard Shell -->
+  <main class="wizard-card" aria-label="Project Creation Wizard">
+    <!-- Top Animated 2px Progress Bar -->
+    <div class="top-progress-track" aria-hidden="true">
+      <div class="top-progress-fill" id="top-progress-fill"></div>
+    </div>
+
+    <!-- Stepper Navigation -->
+    <header class="stepper-header">
+      <nav class="stepper-nav" aria-label="Wizard Steps">
+        <div class="stepper-connectors" aria-hidden="true">
+          <div class="stepper-connectors-fill" id="stepper-connectors-fill"></div>
+        </div>
+
+        <button type="button" class="step-item active" data-step-target="0" id="step-dot-0" aria-current="step">
+          <div class="step-dot">1</div>
+          <span class="step-label">Basics</span>
+        </button>
+
+        <button type="button" class="step-item" data-step-target="1" id="step-dot-1">
+          <div class="step-dot">2</div>
+          <span class="step-label">Team</span>
+        </button>
+
+        <button type="button" class="step-item" data-step-target="2" id="step-dot-2">
+          <div class="step-dot">3</div>
+          <span class="step-label">Stack</span>
+        </button>
+
+        <button type="button" class="step-item" data-step-target="3" id="step-dot-3">
+          <div class="step-dot">4</div>
+          <span class="step-label">Review</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Form Body -->
+    <form class="wizard-form" id="wizard-form" novalidate>
+      <div class="panels-viewport" id="panels-viewport">
+
+        <!-- ==================================================================
+             STEP 1: BASICS
+             ================================================================== -->
+        <section class="step-panel active-panel" id="panel-0" role="group" aria-labelledby="title-step-0">
+          <div class="panel-header">
+            <h2 class="panel-title" id="title-step-0">Project Basics</h2>
+            <p class="panel-desc">Set your project identifier and optional contextual details.</p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="project-name">
+              Project Name <span class="req-star" aria-hidden="true">*</span>
+            </label>
+            <input
+              type="text"
+              id="project-name"
+              name="projectName"
+              class="form-input"
+              placeholder="e.g. Acme Cloud Dashboard"
+              minlength="3"
+              maxlength="60"
+              required
+              autocomplete="off"
+            >
+            <div class="error-msg" id="err-project-name" aria-live="polite"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="project-desc">
+              Description <span style="font-weight: 400; color: var(--text-dim);">(Optional)</span>
+            </label>
+            <textarea
+              id="project-desc"
+              name="projectDesc"
+              class="form-textarea"
+              placeholder="Brief summary of project objectives, deployment targets, or team goals..."
+              maxlength="240"
+            ></textarea>
+            <div class="char-counter" id="desc-char-counter">0 / 240</div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 2: TEAM
+             ================================================================== -->
+        <section class="step-panel" id="panel-1" role="group" aria-labelledby="title-step-1">
+          <div class="panel-header">
+            <h2 class="panel-title" id="title-step-1">Team Architecture</h2>
+            <p class="panel-desc">Select the workspace scale and deployment tier that fits your team.</p>
+          </div>
+
+          <div class="cards-radiogroup" role="radiogroup" aria-labelledby="title-step-1" id="team-radiogroup">
+            <div class="radio-card" role="radio" aria-checked="false" tabindex="0" data-value="Solo">
+              <div class="radio-card-header">
+                <span class="radio-card-title">Solo</span>
+                <div class="radio-circle" aria-hidden="true"></div>
+              </div>
+              <span class="radio-card-desc">Individual developer with personal sandboxes.</span>
+            </div>
+
+            <div class="radio-card" role="radio" aria-checked="false" tabindex="-1" data-value="Small">
+              <div class="radio-card-header">
+                <span class="radio-card-title">Small</span>
+                <div class="radio-circle" aria-hidden="true"></div>
+              </div>
+              <span class="radio-card-desc">2–8 members with collaborative branch previews.</span>
+            </div>
+
+            <div class="radio-card" role="radio" aria-checked="false" tabindex="-1" data-value="Medium">
+              <div class="radio-card-header">
+                <span class="radio-card-title">Medium</span>
+                <div class="radio-circle" aria-hidden="true"></div>
+              </div>
+              <span class="radio-card-desc">9–30 members with automated test runners.</span>
+            </div>
+
+            <div class="radio-card" role="radio" aria-checked="false" tabindex="-1" data-value="Enterprise">
+              <div class="radio-card-header">
+                <span class="radio-card-title">Enterprise</span>
+                <div class="radio-circle" aria-hidden="true"></div>
+              </div>
+              <span class="radio-card-desc">Dedicated isolation, RBAC, SSO, and audit compliance.</span>
+            </div>
+          </div>
+          <div class="error-msg" id="err-team" aria-live="polite" style="margin-top: 8px;"></div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 3: STACK
+             ================================================================== -->
+        <section class="step-panel" id="panel-2" role="group" aria-labelledby="title-step-2">
+          <div class="panel-header">
+            <h2 class="panel-title" id="title-step-2">Technology Stack</h2>
+            <p class="panel-desc">Choose at least one technology powering your application.</p>
+          </div>
+
+          <div class="chips-grid" id="stack-chips-grid">
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="React" class="chip-input">
+              <span class="chip-ui">React</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Vue" class="chip-input">
+              <span class="chip-ui">Vue</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Svelte" class="chip-input">
+              <span class="chip-ui">Svelte</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Next.js" class="chip-input">
+              <span class="chip-ui">Next.js</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Astro" class="chip-input">
+              <span class="chip-ui">Astro</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Node.js" class="chip-input">
+              <span class="chip-ui">Node.js</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Python" class="chip-input">
+              <span class="chip-ui">Python</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Go" class="chip-input">
+              <span class="chip-ui">Go</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Rust" class="chip-input">
+              <span class="chip-ui">Rust</span>
+            </label>
+            <label class="chip-label">
+              <input type="checkbox" name="stack" value="Postgres" class="chip-input">
+              <span class="chip-ui">Postgres</span>
+            </label>
+          </div>
+          <div class="error-msg" id="err-stack" aria-live="polite" style="margin-top: 14px;"></div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 4: REVIEW
+             ================================================================== -->
+        <section class="step-panel" id="panel-3" role="group" aria-labelledby="title-step-3">
+          <div class="panel-header">
+            <h2 class="panel-title" id="title-step-3">Review & Confirmation</h2>
+            <p class="panel-desc">Verify your configuration settings before creating the project.</p>
+          </div>
+
+          <div class="review-table">
+            <div class="review-row">
+              <span class="review-field">Project</span>
+              <span class="review-val" id="review-name">—</span>
+              <button type="button" class="review-edit-btn" data-jump-step="0">Edit</button>
+            </div>
+            <div class="review-row">
+              <span class="review-field">Description</span>
+              <span class="review-val" id="review-desc">—</span>
+              <button type="button" class="review-edit-btn" data-jump-step="0">Edit</button>
+            </div>
+            <div class="review-row">
+              <span class="review-field">Team Tier</span>
+              <span class="review-val" id="review-team">—</span>
+              <button type="button" class="review-edit-btn" data-jump-step="1">Edit</button>
+            </div>
+            <div class="review-row">
+              <span class="review-field">Tech Stack</span>
+              <span class="review-val" id="review-stack">—</span>
+              <button type="button" class="review-edit-btn" data-jump-step="2">Edit</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- Footer Buttons -->
+      <footer class="wizard-footer">
+        <button type="button" class="btn btn-secondary" id="btn-back" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          Back
+        </button>
+
+        <button type="button" class="btn btn-primary" id="btn-next">
+          <span>Next</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </footer>
+    </form>
+  </main>
+
+  <!-- ==========================================================================
+       Vanilla JavaScript Wizard Implementation
+       ========================================================================== -->
+  <script>
+    (function() {
+      'use strict';
+
+      const STORAGE_KEY = 'wizard-state';
+      const TOTAL_STEPS = 4;
+
+      // State store
+      const state = {
+        currentStep: 0,
+        projectName: '',
+        projectDesc: '',
+        team: '',
+        stack: [],
+      };
+
+      // DOM Elements
+      const form = document.getElementById('wizard-form');
+      const panels = [
+        document.getElementById('panel-0'),
+        document.getElementById('panel-1'),
+        document.getElementById('panel-2'),
+        document.getElementById('panel-3'),
+      ];
+      const stepDots = [
+        document.getElementById('step-dot-0'),
+        document.getElementById('step-dot-1'),
+        document.getElementById('step-dot-2'),
+        document.getElementById('step-dot-3'),
+      ];
+      const topProgressFill = document.getElementById('top-progress-fill');
+      const connectorsFill = document.getElementById('stepper-connectors-fill');
+
+      const btnBack = document.getElementById('btn-back');
+      const btnNext = document.getElementById('btn-next');
+
+      const inputName = document.getElementById('project-name');
+      const inputDesc = document.getElementById('project-desc');
+      const charCounter = document.getElementById('desc-char-counter');
+      const errName = document.getElementById('err-project-name');
+      const errTeam = document.getElementById('err-team');
+      const errStack = document.getElementById('err-stack');
+
+      const teamCards = Array.from(document.querySelectorAll('#team-radiogroup .radio-card'));
+      const stackCheckboxes = Array.from(document.querySelectorAll('#stack-chips-grid .chip-input'));
+
+      const reviewName = document.getElementById('review-name');
+      const reviewDesc = document.getElementById('review-desc');
+      const reviewTeam = document.getElementById('review-team');
+      const reviewStack = document.getElementById('review-stack');
+
+      // Debounce utility
+      function debounce(fn, wait) {
+        let t;
+        return function(...args) {
+          clearTimeout(t);
+          t = setTimeout(() => fn.apply(this, args), wait);
+        };
+      }
+
+      // Check current step validity
+      function isStepValid(stepIdx) {
+        switch (stepIdx) {
+          case 0: {
+            const name = inputName.value.trim();
+            return name.length >= 3 && name.length <= 60;
+          }
+          case 1: {
+            return Boolean(state.team);
+          }
+          case 2: {
+            return state.stack.length > 0;
+          }
+          case 3:
+            return true;
+          default:
+            return false;
+        }
+      }
+
+      // Live update Next button disable state
+      function updateNextButtonState() {
+        const valid = isStepValid(state.currentStep);
+        btnNext.disabled = !valid;
+      }
+
+      // Save to sessionStorage
+      function saveState() {
+        state.projectName = inputName.value.trim();
+        state.projectDesc = inputDesc.value.trim();
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
+
+      // Load from sessionStorage
+      function loadState() {
+        try {
+          const raw = sessionStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            if (typeof parsed.projectName === 'string') {
+              state.projectName = parsed.projectName;
+              inputName.value = parsed.projectName;
+            }
+            if (typeof parsed.projectDesc === 'string') {
+              state.projectDesc = parsed.projectDesc;
+              inputDesc.value = parsed.projectDesc;
+              charCounter.textContent = `${parsed.projectDesc.length} / 240`;
+            }
+            if (typeof parsed.team === 'string' && parsed.team) {
+              state.team = parsed.team;
+              selectTeam(parsed.team);
+            }
+            if (Array.isArray(parsed.stack)) {
+              state.stack = parsed.stack;
+              stackCheckboxes.forEach(cb => {
+                cb.checked = state.stack.includes(cb.value);
+              });
+            }
+            if (typeof parsed.currentStep === 'number' && parsed.currentStep >= 0 && parsed.currentStep < TOTAL_STEPS) {
+              state.currentStep = parsed.currentStep;
+            }
+          }
+        } catch (e) {
+          console.warn('Could not load wizard state from sessionStorage:', e);
+        }
+      }
+
+      // Stepper UI update
+      function updateStepperUI(prevStep, nextStep) {
+        // Progress bar width
+        const pct = ((nextStep + 1) / TOTAL_STEPS) * 100;
+        topProgressFill.style.width = `${pct}%`;
+
+        // Connectors width
+        const connectorPct = (nextStep / (TOTAL_STEPS - 1)) * 100;
+        connectorsFill.style.width = `${connectorPct}%`;
+
+        // Dot states
+        stepDots.forEach((dot, idx) => {
+          dot.classList.remove('active', 'complete', 'clickable');
+          dot.removeAttribute('aria-current');
+
+          if (idx === nextStep) {
+            dot.classList.add('active');
+            dot.setAttribute('aria-current', 'step');
+          } else if (idx < nextStep) {
+            dot.classList.add('complete', 'clickable');
+            dot.querySelector('.step-dot').innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>';
+          } else {
+            dot.querySelector('.step-dot').textContent = String(idx + 1);
+          }
+        });
+      }
+
+      // Populate review step
+      function populateReview() {
+        reviewName.textContent = state.projectName || '—';
+        reviewDesc.textContent = state.projectDesc || '(None)';
+        reviewTeam.textContent = state.team || '—';
+        reviewStack.textContent = state.stack.length > 0 ? state.stack.join(', ') : '—';
+      }
+
+      // Transition to a step
+      function goToStep(targetStep, direction = 'forward') {
+        if (targetStep < 0 || targetStep >= TOTAL_STEPS) return;
+        const prevStep = state.currentStep;
+        state.currentStep = targetStep;
+        saveState();
+
+        // Animate panels
+        panels.forEach((p, idx) => {
+          p.classList.remove('active-panel', 'slide-out-left', 'slide-out-right');
+          if (idx === targetStep) {
+            p.classList.add('active-panel');
+          } else if (idx < targetStep) {
+            p.classList.add('slide-out-left');
+          } else {
+            p.classList.add('slide-out-right');
+          }
+        });
+
+        updateStepperUI(prevStep, targetStep);
+
+        // Buttons
+        btnBack.disabled = targetStep === 0;
+        if (targetStep === TOTAL_STEPS - 1) {
+          populateReview();
+          btnNext.innerHTML = '<span>Create Project</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+        } else {
+          btnNext.innerHTML = '<span>Next</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
+        }
+
+        updateNextButtonState();
+
+        // Accessible focus movement
+        const currentPanel = panels[targetStep];
+        const firstFocusable = currentPanel.querySelector('input:not([type="checkbox"]), [role="radio"][tabindex="0"], button');
+        if (firstFocusable) {
+          setTimeout(() => firstFocusable.focus(), 150);
+        }
+      }
+
+      // Radiogroup selection
+      function selectTeam(val) {
+        state.team = val;
+        teamCards.forEach(c => {
+          const match = c.getAttribute('data-value') === val;
+          c.setAttribute('aria-checked', match ? 'true' : 'false');
+          c.tabIndex = match ? 0 : -1;
+        });
+        errTeam.textContent = '';
+        saveState();
+        updateNextButtonState();
+      }
+
+      // Event: Radiogroup click & arrow keys
+      teamCards.forEach((card, idx) => {
+        card.addEventListener('click', () => {
+          selectTeam(card.getAttribute('data-value'));
+        });
+
+        card.addEventListener('keydown', (e) => {
+          let nextIdx = null;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            nextIdx = (idx + 1) % teamCards.length;
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            nextIdx = (idx - 1 + teamCards.length) % teamCards.length;
+          } else if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            selectTeam(card.getAttribute('data-value'));
+          }
+
+          if (nextIdx !== null) {
+            teamCards[nextIdx].focus();
+            selectTeam(teamCards[nextIdx].getAttribute('data-value'));
+          }
+        });
+      });
+
+      // Event: Checkbox chips
+      stackCheckboxes.forEach(cb => {
+        cb.addEventListener('change', () => {
+          state.stack = stackCheckboxes.filter(c => c.checked).map(c => c.value);
+          errStack.textContent = '';
+          saveState();
+          updateNextButtonState();
+        });
+      });
+
+      // Event: Inputs debounce & Enter key
+      const debouncedValidation = debounce(() => {
+        saveState();
+        const name = inputName.value.trim();
+        if (name && name.length < 3) {
+          errName.textContent = 'Project name must be at least 3 characters long.';
+        } else {
+          errName.textContent = '';
+        }
+        updateNextButtonState();
+      }, 100);
+
+      inputName.addEventListener('input', debouncedValidation);
+
+      inputDesc.addEventListener('input', () => {
+        charCounter.textContent = `${inputDesc.value.length} / 240`;
+        debouncedValidation();
+      });
+
+      inputName.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (isStepValid(0)) {
+            goToStep(1, 'forward');
+          }
+        }
+      });
+
+      // Next / Submit Handler
+      btnNext.addEventListener('click', () => {
+        if (state.currentStep === TOTAL_STEPS - 1) {
+          // Submit wizard
+          handleSubmit();
+        } else {
+          if (isStepValid(state.currentStep)) {
+            goToStep(state.currentStep + 1, 'forward');
+          }
+        }
+      });
+
+      // Back Handler
+      btnBack.addEventListener('click', () => {
+        if (state.currentStep > 0) {
+          goToStep(state.currentStep - 1, 'backward');
+        }
+      });
+
+      // Stepper Clickable Jump
+      stepDots.forEach(dot => {
+        dot.addEventListener('click', () => {
+          const target = Number(dot.getAttribute('data-step-target'));
+          if (dot.classList.contains('clickable')) {
+            goToStep(target, target > state.currentStep ? 'forward' : 'backward');
+          }
+        });
+      });
+
+      // Review "Edit" buttons
+      document.querySelectorAll('[data-jump-step]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = Number(btn.getAttribute('data-jump-step'));
+          goToStep(target, 'backward');
+        });
+      });
+
+      // Success Submission
+      function handleSubmit() {
+        sessionStorage.removeItem(STORAGE_KEY);
+
+        const card = document.querySelector('.wizard-card');
+        card.innerHTML = `
+          <div class="top-progress-track" aria-hidden="true">
+            <div class="top-progress-fill" style="width: 100%; background: var(--emerald-fill);"></div>
+          </div>
+          <div class="success-panel" role="status" aria-live="polite">
+            <div class="success-icon-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <h2 class="success-title">Project Created Successfully!</h2>
+            <p class="success-desc">
+              <strong>"${escapeHtml(state.projectName)}"</strong> has been configured with ${escapeHtml(state.team)} tier architecture and deployed with [${escapeHtml(state.stack.join(', '))}].
+            </p>
+            <button type="button" class="btn btn-primary" id="btn-restart" style="margin-top: 12px;">
+              Create Another Project
+            </button>
+          </div>
+        `;
+
+        document.getElementById('btn-restart').addEventListener('click', () => {
+          window.location.reload();
+        });
+      }
+
+      function escapeHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      // Initialize
+      loadState();
+      goToStep(state.currentStep);
+    })();
+  </script>
+</body>
+</html>

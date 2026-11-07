@@ -65,12 +65,14 @@ export default function GroupOverviewPage() {
   useEffect(() => { load(); }, [load]);
 
   const quickActions = [
+    { label: isRtl ? "المعالج الذكي" : "Smart Wizard", href: `/dashboard/${groupId}/wizard`, icon: "✨", desc: isRtl ? "معالج متعدد الخطوات لإنشاء الكويزات" : "Multi-step quiz & project builder", color: "#00d4ff" },
+    { label: isRtl ? "الامتحانات الشاملة" : "Exams", href: `/dashboard/${groupId}/exams`, icon: "📋", desc: isRtl ? "إدارة ونشر الاختبارات الموقوتة للطلاب" : "Manage & publish timed exams", color: "var(--clr-success)" },
     { label: isRtl ? "إنشاء كويز" : "Create Quiz", href: `/dashboard/${groupId}/quiz/new`, icon: "🎯", desc: isRtl ? "إرسال سؤال كويز أو تصويت جديد" : "Send a new quiz or poll", color: "var(--clr-brand)" },
     { label: isRtl ? "استيراد مجمع" : "Bulk Loader", href: `/dashboard/${groupId}/bulk`, icon: "📦", desc: isRtl ? "رفع وتحميل أسئلة متعددة مجمعة" : "Upload multiple quizzes", color: "var(--clr-accent)" },
-    { label: isRtl ? "سجل الكويزات" : "History", href: `/dashboard/${groupId}/history`, icon: "📋", desc: isRtl ? "تصفح والبحث في الأسئلة المرسلة" : "Browse all sent quizzes", color: "var(--clr-success)" },
+    { label: isRtl ? "سجل الكويزات" : "History", href: `/dashboard/${groupId}/history`, icon: "📁", desc: isRtl ? "تصفح والبحث في الأسئلة المرسلة" : "Browse all sent quizzes", color: "#38bdf8" },
     { label: isRtl ? "التحليلات" : "Analytics", href: `/dashboard/${groupId}/analytics`, icon: "📊", desc: isRtl ? "رؤى تفصيلية حول أداء الطلاب" : "Performance insights", color: "var(--clr-warning)" },
     { label: isRtl ? "المواضيع والتوبيكس" : "Topics", href: `/dashboard/${groupId}/topics`, icon: "💬", desc: isRtl ? "إدارة مواضيع المنتدى والمجموعات" : "Manage forum topics", color: "#a78bfa" },
-    { label: isRtl ? "المشرفين" : "Admins", href: `/dashboard/${groupId}/admins`, icon: "👥", desc: isRtl ? "التحكم في الصلاحيات والإشراف" : "Control who has access", color: "#38bdf8" },
+    { label: isRtl ? "المشرفين" : "Admins", href: `/dashboard/${groupId}/admins`, icon: "👥", desc: isRtl ? "التحكم في الصلاحيات والإشراف" : "Control who has access", color: "#f43f5e" },
   ];
 
   return (
@@ -87,9 +89,14 @@ export default function GroupOverviewPage() {
             {isRtl ? "نظرة عامة ومباشرة على نشاط الكويزات وتفاعل الطلاب" : "Your quiz activity at a glance"}
           </p>
         </div>
-        <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary" style={{ flexShrink: 0, alignSelf: "center" }}>
-          {isRtl ? "+ كويز جديد" : "+ New Quiz"}
-        </Link>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0, alignSelf: "center", flexWrap: "wrap" }}>
+          <Link href={`/dashboard/${groupId}/wizard`} className="btn btn-secondary" style={{ borderColor: "#00d4ff", color: "#00d4ff" }}>
+            {isRtl ? "✨ المعالج الذكي" : "✨ Wizard"}
+          </Link>
+          <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary">
+            {isRtl ? "+ كويز جديد" : "+ New Quiz"}
+          </Link>
+        </div>
       </div>
 
       {/* Stats */}
@@ -143,7 +150,7 @@ export default function GroupOverviewPage() {
         <h2 style={{ marginBottom: "var(--space-5)", fontSize: "1.05rem", color: "var(--clr-text-secondary)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
           {isRtl ? "إجراءات سريعة" : "Quick Actions"}
         </h2>
-        <div className="grid grid-cols-3 gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+        <div className="grid grid-cols-4 gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
           {quickActions.map((action) => (
             <Link
               key={action.href}
