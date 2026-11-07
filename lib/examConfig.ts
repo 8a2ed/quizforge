@@ -9,6 +9,7 @@ export interface StudentExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  imageUrl?: string;
   originalQIndex: number;
   originalOptionIndices: number[]; // maps studentOptionIndex -> masterOptionIndex
 }
@@ -18,6 +19,7 @@ export interface MasterExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  imageUrl?: string;
 }
 
 /**
@@ -107,6 +109,7 @@ export function prepareStudentExamQuestions(
         options: [...q.options],
         correctOptionId: q.correctOptionId,
         explanation: q.explanation,
+        imageUrl: q.imageUrl,
         originalQIndex,
         originalOptionIndices: q.options.map((_, i) => i),
       };
@@ -123,6 +126,7 @@ export function prepareStudentExamQuestions(
       options: shuffled.map(item => item.text),
       correctOptionId: newCorrectOptionId >= 0 ? newCorrectOptionId : q.correctOptionId,
       explanation: q.explanation,
+      imageUrl: q.imageUrl,
       originalQIndex,
       originalOptionIndices: shuffled.map(item => item.origIdx),
     };

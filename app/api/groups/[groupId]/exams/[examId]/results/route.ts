@@ -24,6 +24,7 @@ interface ExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  imageUrl?: string;
 }
 
 
@@ -108,6 +109,7 @@ export async function GET(
     options: Array.isArray(q?.options) ? q.options.map(String) : [],
     correctOptionId: Number(q?.correctOptionId) || 0,
     explanation: q?.explanation ? String(q.explanation) : undefined,
+    imageUrl: q?.imageUrl ? String(q.imageUrl) : undefined,
   }));
 
   const allResults = exam.results;
@@ -184,6 +186,7 @@ export async function GET(
       options: q.options,
       correctOptionId: q.correctOptionId,
       explanation: q.explanation || null,
+      imageUrl: q.imageUrl || null,
       totalAnswered: qTotalAnswered,
       correctCount: qCorrectCount,
       successRate,
@@ -216,6 +219,7 @@ export async function GET(
         isCorrect,
         isAnswered,
         explanation: q.explanation || null,
+        imageUrl: q.imageUrl || null,
       };
     });
 

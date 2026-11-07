@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useToast } from "@/lib/useToast";
 import { AccessibleModal } from "@/components/AccessibleModal";
 
-interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; }
+interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; imageUrl?: string; }
 interface Topic { message_thread_id: number; name: string; }
 
 interface Exam {
@@ -28,6 +28,7 @@ interface QuestionDetail {
   isCorrect: boolean;
   isAnswered: boolean;
   explanation: string | null;
+  imageUrl?: string | null;
 }
 
 interface Result {
@@ -50,6 +51,7 @@ interface QuestionAnalytic {
   options: string[];
   correctOptionId: number;
   explanation: string | null;
+  imageUrl?: string | null;
   totalAnswered: number;
   correctCount: number;
   successRate: number;
@@ -89,7 +91,7 @@ interface ViewResultsState {
   results: Result[];
 }
 
-const emptyQ = (): Question => ({ question: "", options: ["", "", "", ""], correctOptionId: 0 });
+const emptyQ = (): Question => ({ question: "", options: ["", "", "", ""], correctOptionId: 0, imageUrl: undefined });
 
 function timeAgo(iso: string) {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -97,6 +99,50 @@ function timeAgo(iso: string) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1200;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        try {
+          const dataUrl = canvas.toDataURL("image/webp", 0.82);
+          resolve(dataUrl);
+        } catch {
+          const fallbackUrl = canvas.toDataURL("image/jpeg", 0.82);
+          resolve(fallbackUrl);
+        }
+      };
+      img.onerror = () => reject(new Error("فشل تحميل ملف الصورة"));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error("تعذر قراءة الملف"));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function ExamsPage() {
@@ -135,6 +181,7 @@ export default function ExamsPage() {
   const [expandedStudentIds, setExpandedStudentIds] = useState<Set<string>>(new Set());
   const [savingQuestionIdx, setSavingQuestionIdx] = useState<number | null>(null);
   const [resettingResultId, setResettingResultId] = useState<string | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   // Form state
   const [title, setTitle] = useState("");
@@ -198,6 +245,7 @@ export default function ExamsPage() {
               options: cleanOpts,
               correctOptionId: safeCorrect,
               explanation: q.explanation ? String(q.explanation).trim() : undefined,
+              imageUrl: q.imageUrl ? String(q.imageUrl).trim() : undefined,
             };
           });
 
@@ -244,6 +292,7 @@ export default function ExamsPage() {
               options: cleanOpts,
               correctOptionId: safeCorrect,
               explanation: q.explanation ? String(q.explanation).trim() : undefined,
+              imageUrl: q.imageUrl ? String(q.imageUrl).trim() : undefined,
             };
           });
 
@@ -285,7 +334,7 @@ export default function ExamsPage() {
     setShuffleQuestions(exam.shuffleQuestions ?? true);
     setShuffleOptions(exam.shuffleOptions ?? true);
     setShowSolutionsImmediately(exam.showSolutionsImmediately ?? true);
-    setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options] })));
+    setQuestions((exam.questions as Question[]).map(q => ({ ...q, options: [...q.options], imageUrl: q.imageUrl })));
     setMode("edit");
   };
 
@@ -319,6 +368,7 @@ export default function ExamsPage() {
       options: q.options.map(o => o.trim()).filter(Boolean),
       correctOptionId: q.correctOptionId,
       explanation: q.explanation?.trim() || undefined,
+      imageUrl: q.imageUrl?.trim() || undefined,
     }));
 
     return { valid: cleaned };
@@ -641,6 +691,7 @@ export default function ExamsPage() {
     const headers = [
       "#",
       "السؤال (Question)",
+      "صورة السؤال (Image URL)",
       "الخيار A",
       "الخيار B",
       "الخيار C",
@@ -659,9 +710,11 @@ export default function ExamsPage() {
       const correctText = q.options[q.correctOptionId] ? `"${q.options[q.correctOptionId].replace(/"/g, '""')}"` : '""';
       const explanation = q.explanation ? `"${q.explanation.replace(/"/g, '""')}"` : '""';
 
+      const imgVal = q.imageUrl ? `"${q.imageUrl.replace(/"/g, '""')}"` : '""';
       return [
         idx + 1,
         `"${(q.question || "").replace(/"/g, '""')}"`,
+        imgVal,
         optA,
         optB,
         optC,
@@ -709,7 +762,7 @@ export default function ExamsPage() {
     toast.success("تم التصدير", "تم تصدير بنك الأسئلة كملف JSON احتياطي بنجاح ✓");
   };
 
-  const setQ = (i: number, field: keyof Question, val: string | string[] | number) =>
+  const setQ = (i: number, field: keyof Question, val: string | string[] | number | undefined) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
   const renderActionModal = () => (
@@ -1146,6 +1199,17 @@ export default function ExamsPage() {
                                   <div style={{ fontWeight: 600, fontSize: "0.88rem", flex: 1 }} dir="auto">
                                     <span style={{ color: "var(--clr-text-muted)", marginInlineEnd: 6 }}>Q{qIdx + 1}:</span>
                                     {item.question}
+                                    {item.imageUrl && (
+                                      <div style={{ marginTop: 6 }}>
+                                        <img
+                                          src={item.imageUrl}
+                                          alt="Question Graphic"
+                                          onClick={() => setLightboxImage(item.imageUrl || null)}
+                                          style={{ maxHeight: 120, maxWidth: "100%", borderRadius: 6, cursor: "pointer", objectFit: "contain", border: "1px solid var(--clr-border)" }}
+                                          title="انقر لتكبير الصورة"
+                                        />
+                                      </div>
+                                    )}
                                   </div>
                                   <span
                                     className={`badge ${!item.isAnswered ? "badge-muted" : item.isCorrect ? "badge-success" : "badge-danger"}`}
@@ -1235,9 +1299,20 @@ export default function ExamsPage() {
                     </div>
 
                     {/* Question Text */}
-                    <div style={{ fontWeight: 600, fontSize: "0.95rem", lineHeight: 1.45, marginBottom: 14 }}>
+                    <div style={{ fontWeight: 600, fontSize: "0.95rem", lineHeight: 1.45, marginBottom: 10 }}>
                       {q.question}
                     </div>
+                    {q.imageUrl && (
+                      <div style={{ marginBottom: 12 }}>
+                        <img
+                          src={q.imageUrl}
+                          alt="Question Graphic"
+                          onClick={() => setLightboxImage(q.imageUrl || null)}
+                          style={{ maxHeight: 180, maxWidth: "100%", borderRadius: 8, border: "1px solid var(--clr-border)", cursor: "pointer", objectFit: "contain" }}
+                          title="انقر لتكبير الصورة"
+                        />
+                      </div>
+                    )}
 
                     {/* Options Distribution Bars */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1508,6 +1583,88 @@ export default function ExamsPage() {
                 )}
               </div>
               <input className="input" style={{ fontSize: "0.8rem" }} placeholder="Explanation (optional — shown after answering)" value={q.explanation || ""} onChange={e => setQ(qi, "explanation", e.target.value)} />
+              {/* Question Image Attachment Section */}
+              <div style={{ margin: "10px 0", padding: "10px 12px", background: "rgba(0,0,0,0.18)", borderRadius: 8, border: "1px dashed var(--clr-border)" }}>
+                {q.imageUrl ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ position: "relative", cursor: "pointer" }} onClick={() => setLightboxImage(q.imageUrl || null)} title="انقر لتكبير الصورة">
+                      <img
+                        src={q.imageUrl}
+                        alt="Question Attachment"
+                        style={{ width: 80, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--clr-brand)" }}
+                      />
+                      <span style={{ position: "absolute", bottom: 2, right: 2, background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: "0.65rem", padding: "1px 4px", borderRadius: 3 }}>
+                        🔍 تكبير
+                      </span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--clr-success)", marginBottom: 4 }}>
+                        ✓ تم إرفاق صورة بالسؤال {q.imageUrl.startsWith("data:") ? "(مرفوعة ومضغوطة تلقائياً)" : "(رابط خارجي)"}
+                      </div>
+                      <input
+                        className="input"
+                        style={{ fontSize: "0.76rem", padding: "4px 8px" }}
+                        placeholder="رابط الصورة (URL)"
+                        value={q.imageUrl.startsWith("data:") ? "صورة مدمجة (Base64 WebP)" : q.imageUrl}
+                        onChange={e => setQ(qi, "imageUrl", e.target.value)}
+                        readOnly={q.imageUrl.startsWith("data:")}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ color: "var(--clr-danger)", border: "1px solid rgba(239,68,68,0.3)" }}
+                      onClick={() => setQ(qi, "imageUrl", undefined)}
+                      title="إزالة الصورة من هذا السؤال"
+                    >
+                      🗑️ حذف الصورة
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "0.78rem", color: "var(--clr-text-muted)" }}>🖼️ صورة السؤال (اختياري):</span>
+                    <label
+                      className="btn btn-ghost btn-sm"
+                      style={{ border: "1px solid var(--clr-border)", fontSize: "0.76rem", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+                    >
+                      📁 رفع من الجهاز (ضغط تلقائي ذكي)
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const compressed = await compressImage(file);
+                            setQ(qi, "imageUrl", compressed);
+                            toast.success("تم تجهيز الصورة", "تم ضغط الصورة وتجهيزها بنجاح ✓");
+                          } catch (err: any) {
+                            toast.error("خطأ في الصورة", err?.message || "فشل تحميل الصورة");
+                          }
+                        }}
+                      />
+                    </label>
+                    <span style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)" }}>أو</span>
+                    <input
+                      className="input"
+                      style={{ flex: 1, minWidth: 180, fontSize: "0.76rem", padding: "4px 8px" }}
+                      placeholder="ضع رابط صورة خارجي مباشر https://..."
+                      onBlur={e => {
+                        const val = e.target.value.trim();
+                        if (val) setQ(qi, "imageUrl", val);
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          const val = (e.target as HTMLInputElement).value.trim();
+                          if (val) setQ(qi, "imageUrl", val);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
             </div>
           ))}
         </div>
@@ -1607,6 +1764,39 @@ export default function ExamsPage() {
       )}
       {/* Universal Accessible Action Modal */}
       {renderActionModal()}
+      {/* Lightbox Modal for Question Images */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(0, 0, 0, 0.85)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", flexDirection: "column", alignItems: "center" }} onClick={e => e.stopPropagation()}>
+            <img
+              src={lightboxImage}
+              alt="Question Full Preview"
+              style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 12, gap: 6 }}
+              onClick={() => setLightboxImage(null)}
+            >
+              ✕ إغلاق المعاينة
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

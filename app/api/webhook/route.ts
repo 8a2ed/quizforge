@@ -49,6 +49,7 @@ interface ExamQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  imageUrl?: string;
   originalQIndex?: number;
   originalOptionIndices?: number[];
 }
@@ -175,6 +176,110 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   });
 }
 
+// ── Universal Photo & Message sender for Exam Questions & Reviews ────────────
+async function tgSendPhotoOrMessage(
+  chatId: number | string,
+  imageUrl: string | undefined | null,
+  text: string,
+  keyboard: Array<Array<{ text: string; callback_data: string }>>,
+  prevMsgId?: number | null
+): Promise<number | null> {
+  const reply_markup = { inline_keyboard: keyboard };
+  const hasImage = Boolean(imageUrl && String(imageUrl).trim());
+
+  if (hasImage) {
+    const cleanPhoto = String(imageUrl).trim();
+    // In Telegram, photo caption max length is 1024 characters
+    const caption = text.length <= 1020 ? text : text.slice(0, 1017) + "...";
+
+    // Delete previous message so chat stays clean and seamless
+    if (prevMsgId) {
+      await tgCall("deleteMessage", { chat_id: chatId, message_id: prevMsgId }).catch(() => {});
+    }
+
+    if (cleanPhoto.startsWith("data:")) {
+      try {
+        const [header, base64Data] = cleanPhoto.split(",");
+        const mime = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+        const buffer = Buffer.from(base64Data, "base64");
+        const ext = mime.split("/")[1] || "jpg";
+        const blob = new Blob([buffer], { type: mime });
+        const form = new FormData();
+        form.append("chat_id", String(chatId));
+        form.append("photo", blob, `question_image.${ext}`);
+        form.append("caption", caption);
+        form.append("parse_mode", "HTML");
+        form.append("reply_markup", JSON.stringify(reply_markup));
+
+        const ac = new AbortController();
+        const t = setTimeout(() => ac.abort(), 20_000);
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+            method: "POST",
+            body: form,
+            signal: ac.signal,
+          });
+          const data = await res.json();
+          if (data?.ok && data?.result?.message_id) {
+            return data.result.message_id;
+          }
+          console.warn("[tgSendPhotoOrMessage] base64 sendPhoto failed:", data);
+        } finally {
+          clearTimeout(t);
+        }
+      } catch (err) {
+        console.error("[tgSendPhotoOrMessage] base64 upload error:", err);
+      }
+    } else {
+      // Direct HTTP/HTTPS image URL
+      try {
+        const res = await tgCall("sendPhoto", {
+          chat_id: chatId,
+          photo: cleanPhoto,
+          caption,
+          parse_mode: "HTML",
+          reply_markup,
+        });
+        if (res?.ok && (res.result as any)?.message_id) {
+          return (res.result as any).message_id;
+        }
+        console.warn("[tgSendPhotoOrMessage] url sendPhoto failed:", res);
+      } catch (err) {
+        console.error("[tgSendPhotoOrMessage] url sendPhoto error:", err);
+      }
+    }
+  }
+
+  // Fallback or text-only question
+  if (prevMsgId) {
+    const editRes = await tgCall("editMessageText", {
+      chat_id: chatId,
+      message_id: prevMsgId,
+      text,
+      parse_mode: "HTML",
+      reply_markup,
+    }).catch(() => null);
+
+    if (editRes && (editRes as any).ok !== false) {
+      return prevMsgId;
+    }
+    // If edit failed (e.g. previous was a photo), delete previous and send fresh text message
+    await tgCall("deleteMessage", { chat_id: chatId, message_id: prevMsgId }).catch(() => {});
+  }
+
+  const sendRes = await tgCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    reply_markup,
+  }).catch(() => null);
+
+  if (sendRes?.result && typeof sendRes.result === "object" && "message_id" in sendRes.result) {
+    return (sendRes.result as { message_id: number }).message_id;
+  }
+  return null;
+}
+
 // ─── Send one question ────────────────────────────────────────────────────────
 async function sendQuestion(session: ExamSession, cbId?: string) {
   if (session.timeLimit) {
@@ -247,35 +352,15 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
 
   if (cbId) await ackCb(cbId);
 
-  try {
-    const res = await tgCall("editMessageText", {
-      chat_id: session.chatId,
-      message_id: session.msgId,
-      text,
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: keyboard },
-    });
-    if (!res || (res as any).ok === false) {
-      const sendRes = await tgCall("sendMessage", {
-        chat_id: session.chatId,
-        text,
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: keyboard },
-      });
-      if (sendRes?.result && typeof sendRes.result === "object" && "message_id" in sendRes.result) {
-        session.msgId = (sendRes.result as { message_id: number }).message_id;
-      }
-    }
-  } catch {
-    const sendRes = await tgCall("sendMessage", {
-      chat_id: session.chatId,
-      text,
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: keyboard },
-    }).catch(() => null);
-    if (sendRes?.result && typeof sendRes.result === "object" && "message_id" in sendRes.result) {
-      session.msgId = (sendRes.result as { message_id: number }).message_id;
-    }
+  const newMsgId = await tgSendPhotoOrMessage(
+    session.chatId,
+    q.imageUrl,
+    text,
+    keyboard,
+    session.msgId
+  );
+  if (newMsgId) {
+    session.msgId = newMsgId;
   }
 }
 
@@ -367,6 +452,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
       reply_markup: { inline_keyboard: reviewKeyboard },
     });
     if (!res || (res as any).ok === false) {
+      if (msgId) await tgCall("deleteMessage", { chat_id: chatId, message_id: msgId }).catch(() => {});
       await tgCall("sendMessage", {
         chat_id: chatId,
         text: header,
@@ -376,6 +462,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
     }
   } catch (err) {
     console.error("[exam] finishExam message send error:", err);
+    if (msgId) await tgCall("deleteMessage", { chat_id: chatId, message_id: msgId }).catch(() => {});
     await tgCall("sendMessage", {
       chat_id: chatId,
       text: header,
@@ -718,20 +805,13 @@ async function handleExamReview(cb: Record<string, unknown>, examId: string, qId
     await ackCb(cbId);
 
     if (msgId) {
-      await tgCall("editMessageText", {
-        chat_id: chatId,
-        message_id: msgId,
-        text: reviewText,
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: keyboard },
-      }).catch(async () => {
-        await tgCall("sendMessage", {
-          chat_id: chatId,
-          text: reviewText,
-          parse_mode: "HTML",
-          reply_markup: { inline_keyboard: keyboard },
-        });
-      });
+      await tgSendPhotoOrMessage(
+        chatId,
+        q.imageUrl,
+        reviewText,
+        keyboard,
+        msgId
+      );
     }
   } catch (err) {
     console.error("[exam] handleExamReview error:", err);
@@ -792,13 +872,23 @@ async function handleExamReviewSummary(cb: Record<string, unknown>, examId: stri
     await ackCb(cbId);
 
     if (msgId) {
-      await tgCall("editMessageText", {
+      const editRes = await tgCall("editMessageText", {
         chat_id: chatId,
         message_id: msgId,
         text,
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: keyboard },
-      }).catch(() => {});
+      }).catch(() => null);
+
+      if (!editRes || (editRes as any).ok === false) {
+        await tgCall("deleteMessage", { chat_id: chatId, message_id: msgId }).catch(() => {});
+        await tgCall("sendMessage", {
+          chat_id: chatId,
+          text,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.error("[exam] handleExamReviewSummary error:", err);

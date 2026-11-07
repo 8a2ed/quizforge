@@ -22,6 +22,7 @@ interface SanitizedQuestion {
   options: string[];
   correctOptionId: number;
   explanation?: string;
+  imageUrl?: string;
 }
 
 function sanitizeQuestions(raw: unknown): SanitizedQuestion[] | null {
@@ -46,7 +47,10 @@ function sanitizeQuestions(raw: unknown): SanitizedQuestion[] | null {
     if (isNaN(correctOptionId) || correctOptionId < 0 || correctOptionId >= options.length) return null;
 
     const explanation = item.explanation ? String(item.explanation).trim().slice(0, 500) : undefined;
-    cleaned.push({ question, options, correctOptionId, explanation });
+    const imageUrl = item.imageUrl && typeof item.imageUrl === "string" && item.imageUrl.trim().length > 0
+      ? item.imageUrl.trim()
+      : undefined;
+    cleaned.push({ question, options, correctOptionId, explanation, imageUrl });
   }
   return cleaned;
 }
