@@ -210,13 +210,8 @@ async function tgSendPhotoOrMessage(
 
   if (hasImage) {
     const cleanPhoto = String(imageUrl).trim();
-    // In Telegram, photo caption max length is 1024 characters
     const caption = text.length <= 1020 ? text : text.slice(0, 1017) + "...";
-
-    // Delete previous message so chat stays clean and seamless
-    if (prevMsgId) {
-      await tgCall("deleteMessage", { chat_id: chatId, message_id: prevMsgId }).catch(() => {});
-    }
+    let sentPhotoMsgId: number | null = null;
 
     if (cleanPhoto.startsWith("data:")) {
       try {
@@ -242,9 +237,10 @@ async function tgSendPhotoOrMessage(
           });
           const data = await res.json();
           if (data?.ok && data?.result?.message_id) {
-            return data.result.message_id;
+            sentPhotoMsgId = data.result.message_id;
+          } else {
+            console.warn("[tgSendPhotoOrMessage] base64 sendPhoto failed:", data);
           }
-          console.warn("[tgSendPhotoOrMessage] base64 sendPhoto failed:", data);
         } finally {
           clearTimeout(t);
         }
@@ -262,13 +258,23 @@ async function tgSendPhotoOrMessage(
           reply_markup,
         });
         if (res?.ok && (res.result as any)?.message_id) {
-          return (res.result as any).message_id;
+          sentPhotoMsgId = (res.result as any).message_id;
+        } else {
+          console.warn("[tgSendPhotoOrMessage] url sendPhoto failed:", res);
         }
-        console.warn("[tgSendPhotoOrMessage] url sendPhoto failed:", res);
       } catch (err) {
         console.error("[tgSendPhotoOrMessage] url sendPhoto error:", err);
       }
     }
+
+    // Only delete previous message AFTER successfully sending the photo
+    if (sentPhotoMsgId) {
+      if (prevMsgId) {
+        await tgCall("deleteMessage", { chat_id: chatId, message_id: prevMsgId }).catch(() => {});
+      }
+      return sentPhotoMsgId;
+    }
+    // If photo send failed, proceed to fallback text edit below so user is NEVER left stranded
   }
 
   // Fallback or text-only question
@@ -284,6 +290,13 @@ async function tgSendPhotoOrMessage(
     if (editRes && (editRes as any).ok !== false) {
       return prevMsgId;
     }
+
+    // If description contains "message is not modified", content is already current!
+    const desc = String((editRes as any)?.description || "").toLowerCase();
+    if (desc.includes("message is not modified")) {
+      return prevMsgId;
+    }
+
     // If edit failed (e.g. previous was a photo), delete previous and send fresh text message
     await tgCall("deleteMessage", { chat_id: chatId, message_id: prevMsgId }).catch(() => {});
   }
@@ -728,108 +741,145 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
   }
 }
 
+// Active in-flight answer locks to completely eliminate race conditions from rapid taps
+const answerInFlight = new Set<string>();
+
 // exam_answer:{examId}:{qIdx}:{optId}
 async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIndex: number, optionId: number) {
   const user       = cb.from as Record<string, unknown>;
   const telegramId = String((user as { id: number }).id);
   const cbId       = cb.id as string;
   const key        = sessionKey(telegramId, examId);
-  let session      = examSessions.get(key);
 
-  // Recovery from database if memory was cleared or serverless cold start
-  if (!session) {
-    try {
-      let inProgress = await withRetry(() => prisma.examResult.findFirst({
-        where: { examId, telegramId, score: -1 },
-        include: { exam: true },
-      }));
-      if (!inProgress) {
-        const stripped = examId.replace(/^exam[_-]/i, "");
-        inProgress = await withRetry(() => prisma.examResult.findFirst({
-          where: { examId: stripped, telegramId, score: -1 },
-          include: { exam: true },
-        }));
-      }
-      if (inProgress && inProgress.exam) {
-        const data = (inProgress.answers as Record<string, unknown>) || {};
-        const savedAnswers = (data.answers as Record<number, number>) || {};
-        const maxAnsweredIdx = Object.keys(savedAnswers).reduce((max, k) => {
-          const n = Number(k);
-          return isNaN(n) ? max : Math.max(max, n);
-        }, -1);
-        const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
-
-        session = {
-          examId: inProgress.examId,
-          examTitle: inProgress.exam.title,
-          chatId: (cb.message as { chat: { id: number } }).chat.id,
-          msgId: (cb.message as { message_id: number }).message_id,
-          name: inProgress.name, telegramId,
-          questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
-          answers: savedAnswers,
-          currentQ,
-          startedAt: Number(data.startedAt) || Date.now(),
-          timeLimit: inProgress.exam.timeLimit,
-          passingScore: inProgress.exam.passingScore,
-        };
-        examSessions.set(key, session);
-      }
-    } catch (e) {
-      console.error("[exam] session recovery error:", e);
-    }
-  }
-
-  if (!session) return ackCb(cbId, "انتهت صلاحية الجلسة. يرجى بدء الامتحان من جديد.", true);
-
-  // Time limit check BEFORE accepting answer
-  if (session.timeLimit) {
-    const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
-    if (elapsed > session.timeLimit) {
-      await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
-      await finishExam(session, true);
-      return;
-    }
-  }
-
-  // Double-click protection: silently ignore clicks on already answered questions
-  if (qIndex < session.currentQ) {
+  // Concurrency lock: immediately drop simultaneous taps from the same student
+  if (answerInFlight.has(key)) {
     return ackCb(cbId);
   }
+  answerInFlight.add(key);
 
-  // Record answer and advance currentQ safely without desync traps
-  session.answers[qIndex] = optionId;
-  session.currentQ = Math.max(session.currentQ + 1, qIndex + 1);
-  session.lastActiveAt = Date.now();
-  session.warnedAt = null;
+  try {
+    let session = examSessions.get(key);
 
-  if (session.currentQ >= session.questions.length) {
+    // Recovery from database if memory was cleared or serverless cold start
+    if (!session) {
+      try {
+        let inProgress = await withRetry(() => prisma.examResult.findFirst({
+          where: { examId, telegramId, score: -1 },
+          include: { exam: true },
+        }));
+        if (!inProgress) {
+          const stripped = examId.replace(/^exam[_-]/i, "");
+          inProgress = await withRetry(() => prisma.examResult.findFirst({
+            where: { examId: stripped, telegramId, score: -1 },
+            include: { exam: true },
+          }));
+        }
+        if (inProgress && inProgress.exam) {
+          const data = (inProgress.answers as Record<string, unknown>) || {};
+          const savedAnswers = (data.answers as Record<number, number>) || {};
+          const maxAnsweredIdx = Object.keys(savedAnswers).reduce((max, k) => {
+            const n = Number(k);
+            return isNaN(n) ? max : Math.max(max, n);
+          }, -1);
+          const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
+
+          session = {
+            examId: inProgress.examId,
+            examTitle: inProgress.exam.title,
+            chatId: (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id,
+            msgId: (cb.message as { message_id?: number })?.message_id || 0,
+            name: inProgress.name, telegramId,
+            questions: (data.questions as unknown as ExamQuestion[]) || (inProgress.exam.questions as unknown as ExamQuestion[]),
+            answers: savedAnswers,
+            currentQ,
+            startedAt: Number(data.startedAt) || Date.now(),
+            timeLimit: inProgress.exam.timeLimit,
+            passingScore: inProgress.exam.passingScore,
+          };
+          examSessions.set(key, session);
+        }
+      } catch (e) {
+        console.error("[exam] session recovery error:", e);
+      }
+    }
+
+    if (!session) {
+      // Check if student already completed this exam
+      const finished = await withRetry(() => prisma.examResult.findFirst({
+        where: {
+          OR: [
+            { examId, telegramId, score: { gte: 0 } },
+            { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: { gte: 0 } },
+          ],
+        },
+      })).catch(() => null);
+
+      if (finished) {
+        return ackCb(cbId, `لقد أكملت هذا الاختبار بالفعل بنتيجة ${finished.score}%! 🎯`, true);
+      }
+      return ackCb(cbId, "انتهت صلاحية الجلسة. يرجى بدء الامتحان من جديد.", true);
+    }
+
+    // Time limit check BEFORE accepting answer
+    if (session.timeLimit) {
+      const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
+      if (elapsed > session.timeLimit) {
+        await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
+        await finishExam(session, true);
+        return;
+      }
+    }
+
+    // Double-click protection & Out-of-Sync Auto-Recovery:
+    // If student taps an outdated question button, IMMEDIATELY re-sync and advance them to the current question!
+    if (qIndex < session.currentQ) {
+      await ackCb(cbId, "تم تسجيل إجابتك، جارٍ نقلك للسؤال التالي...", false);
+      if (session.currentQ < session.questions.length) {
+        await sendQuestion(session);
+      } else {
+        await finishExam(session);
+      }
+      return;
+    }
+
+    // Instant callback acknowledgment so Telegram button loading spinner vanishes in <50ms!
     await ackCb(cbId);
-    await finishExam(session);
-  } else {
-    // Save in-progress progress ONLY while exam is active to prevent race with finishExam
-    // ALWAYS await updateMany to ensure state is committed before serverless freeze
-    await withRetry(() => prisma.examResult.updateMany({
-      where: {
-        OR: [
-          { examId: session!.examId, telegramId, score: -1 },
-          { examId: session!.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
-        ]
-      },
-      data: {
-        answers: {
-          answers: session!.answers,
-          questions: session!.questions,
-          currentQ: session!.currentQ,
-          startedAt: session!.startedAt,
-          lastActiveAt: session!.lastActiveAt,
-          warnedAt: null,
-          msgId: session!.msgId,
-          chatId: session!.chatId,
-        } as unknown as Prisma.InputJsonValue,
-      },
-    })).catch(e => console.error("[exam] save progress error:", e));
 
-    await sendQuestion(session, cbId);
+    // Record answer and advance currentQ safely
+    session.answers[qIndex] = optionId;
+    session.currentQ = Math.max(session.currentQ + 1, qIndex + 1);
+    session.lastActiveAt = Date.now();
+    session.warnedAt = null;
+
+    if (session.currentQ >= session.questions.length) {
+      await finishExam(session);
+    } else {
+      // Save in-progress progress in database
+      await withRetry(() => prisma.examResult.updateMany({
+        where: {
+          OR: [
+            { examId: session!.examId, telegramId, score: -1 },
+            { examId: session!.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
+          ]
+        },
+        data: {
+          answers: {
+            answers: session!.answers,
+            questions: session!.questions,
+            currentQ: session!.currentQ,
+            startedAt: session!.startedAt,
+            lastActiveAt: session!.lastActiveAt,
+            warnedAt: null,
+            msgId: session!.msgId,
+            chatId: session!.chatId,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      })).catch(e => console.error("[exam] save progress error:", e));
+
+      await sendQuestion(session);
+    }
+  } finally {
+    answerInFlight.delete(key);
   }
 }
 
