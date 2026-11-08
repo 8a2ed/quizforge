@@ -965,12 +965,27 @@ export default function ExamsPage() {
         {/* Top Header */}
         <div className="section-header animate-fade-up">
           <div>
-            <h1>{exam.title} — Results & Analytics</h1>
-            <p style={{ marginTop: 4 }}>
-              {exam.totalResults} completed submission{exam.totalResults !== 1 ? "s" : ""}
-              {inProgressCount > 0 && ` · ${inProgressCount} in progress`}
-              {` · Passing score: ${exam.passingScore}%`}
-              {exam.timeLimit ? ` · Time limit: ${Math.floor(exam.timeLimit / 60)}m` : " · No time limit"}
+            <h1>
+              <span dir="auto">{exam.title}</span>
+              {" — "}
+              <span>{isRtl ? "النتائج والتحليلات" : "Results & Analytics"}</span>
+            </h1>
+            <p style={{ marginTop: 4, direction: isRtl ? "rtl" : "ltr" }}>
+              {isRtl ? (
+                <>
+                  <span>{exam.totalResults} مشاركة مكتملة</span>
+                  {inProgressCount > 0 && <span> · {inProgressCount} جارٍ أداؤهم الآن</span>}
+                  <span> · درجة النجاح: {exam.passingScore}%</span>
+                  {exam.timeLimit ? <span> · مدة الاختبار: {Math.floor(exam.timeLimit / 60)} دقيقة</span> : <span> · بدون وقت محدد</span>}
+                </>
+              ) : (
+                <>
+                  <span>{exam.totalResults} completed submission{exam.totalResults !== 1 ? "s" : ""}</span>
+                  {inProgressCount > 0 && <span> · {inProgressCount} in progress</span>}
+                  <span> · Passing score: {exam.passingScore}%</span>
+                  <span>{exam.timeLimit ? ` · Time limit: ${Math.floor(exam.timeLimit / 60)}m` : " · No time limit"}</span>
+                </>
+              )}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1009,7 +1024,7 @@ export default function ExamsPage() {
               style={{ gap: 6 }}
             >
               <span className="flip-rtl">←</span>
-              <span>Back to Exams</span>
+              <span>{isRtl ? "العودة للاختبارات" : "Back to Exams"}</span>
             </button>
           </div>
         </div>
@@ -1019,7 +1034,7 @@ export default function ExamsPage() {
           {/* Card 1: Submissions */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>👥 Submissions</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>👥 {isRtl ? "إجمالي المشاركين" : "Submissions"}</span>
               {inProgressCount > 0 && (
                 <span className="badge badge-accent" style={{ fontSize: "0.68rem" }}>
                   +{inProgressCount} in progress
@@ -1030,13 +1045,13 @@ export default function ExamsPage() {
               {exam.totalResults}
             </div>
             <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
-              {viewResults.results.length} total participants
+              {viewResults.results.length} {isRtl ? "إجمالي الطلاب" : "total participants"}
             </div>
           </div>
 
           {/* Card 2: Pass Rate */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🏆 Pass Rate</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🏆 {isRtl ? "نسبة النجاح" : "Pass Rate"}</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: exam.passRate >= 70 ? "var(--clr-success)" : exam.passRate >= 50 ? "var(--clr-warning)" : "var(--clr-danger)", marginTop: 4 }}>
               {exam.passRate}%
             </div>
@@ -1047,7 +1062,7 @@ export default function ExamsPage() {
 
           {/* Card 3: Average Score */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🎯 Average Score</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>🎯 {isRtl ? "متوسط الدرجات" : "Average Score"}</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-warning)", marginTop: 4 }}>
               {exam.avgScore}%
             </div>
@@ -1058,7 +1073,7 @@ export default function ExamsPage() {
 
           {/* Card 4: Average Duration */}
           <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
-            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>⏱ Avg Time Taken</div>
+            <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>⏱ {isRtl ? "متوسط الوقت" : "Avg Time Taken"}</div>
             <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--clr-accent)", marginTop: 4 }}>
               {exam.avgDuration ? `${Math.floor(exam.avgDuration / 60)}m ${exam.avgDuration % 60}s` : "—"}
             </div>
@@ -1082,7 +1097,7 @@ export default function ExamsPage() {
               borderRadius: 0,
             }}
           >
-            👥 Student Submissions ({viewResults.results.length})
+            👥 {isRtl ? "درجات ومشاركات الطلاب" : "Student Submissions"} ({viewResults.results.length})
           </button>
           <button
             onClick={() => setResultsTab("questions")}
@@ -1094,7 +1109,7 @@ export default function ExamsPage() {
               borderRadius: 0,
             }}
           >
-            📊 Question Performance & Item Analysis ({viewResults.questionAnalytics.length})
+            📊 {isRtl ? "تحليل صعوبة وأداء الأسئلة" : "Question Performance & Item Analysis"} ({viewResults.questionAnalytics.length})
           </button>
           <button
             onClick={() => setResultsTab("feedbacks")}
@@ -1120,7 +1135,7 @@ export default function ExamsPage() {
                 <div style={{ position: "relative", flex: "1 1 200px" }}>
                   <input
                     className="input"
-                    placeholder="Search students by name or @username…"
+                    placeholder={isRtl ? "بحث عن طالب بالاسم أو المعرف..." : "Search students by name or @username…"}
                     value={studentSearch}
                     onChange={e => setStudentSearch(e.target.value)}
                     style={{ width: "100%", fontSize: "0.84rem" }}
@@ -1631,6 +1646,200 @@ export default function ExamsPage() {
                   </div>
                 );
               })
+            )}
+          </div>
+        )}
+
+        {/* ── TAB 3: Feedbacks & Suggestions ── */}
+        {resultsTab === "feedbacks" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* KPI Cards for Feedbacks */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+              {/* Average Rating */}
+              <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+                <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>
+                  ⭐ {isRtl ? "متوسط التقييم العام" : "Average Rating"}
+                </div>
+                <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "#f59e0b", marginTop: 4, display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span>
+                    {viewResults.feedbackSummary?.averageRating !== null && viewResults.feedbackSummary?.averageRating !== undefined
+                      ? viewResults.feedbackSummary.averageRating
+                      : "—"}
+                  </span>
+                  <span style={{ fontSize: "1rem", color: "var(--clr-text-muted)", fontWeight: 500 }}>/ 10</span>
+                </div>
+                <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+                  {viewResults.feedbackSummary?.averageRating
+                    ? "⭐".repeat(Math.round(viewResults.feedbackSummary.averageRating))
+                    : isRtl ? "في انتظار أول تقييم" : "Awaiting first rating"}
+                </div>
+              </div>
+
+              {/* Total Reviews */}
+              <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+                <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>
+                  👥 {isRtl ? "إجمالي الطلاب المقيمين" : "Total Reviews"}
+                </div>
+                <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "var(--clr-brand)", marginTop: 4 }}>
+                  {viewResults.feedbacks?.length || 0}
+                </div>
+                <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+                  {viewResults.results.length > 0
+                    ? `${Math.round(((viewResults.feedbacks?.length || 0) / viewResults.results.length) * 100)}% ${isRtl ? "من إجمالي الممتحنين" : "of participants"}`
+                    : isRtl ? "طالب شارك بالتقييم" : "participants rated"}
+                </div>
+              </div>
+
+              {/* Suggestions Count */}
+              <div className="card" style={{ padding: "var(--space-3) var(--space-4)" }}>
+                <div style={{ fontSize: "0.76rem", color: "var(--clr-text-muted)", fontWeight: 600 }}>
+                  💡 {isRtl ? "الاقتراحات المكتوبة" : "Written Suggestions"}
+                </div>
+                <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "var(--clr-success)", marginTop: 4 }}>
+                  {viewResults.feedbackSummary?.suggestionsCount || 0}
+                </div>
+                <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+                  {isRtl ? "ملاحظات وأفكار لتطوير البوت" : "student suggestions & feedback"}
+                </div>
+              </div>
+            </div>
+
+            {/* Feedbacks List */}
+            {(!viewResults.feedbacks || viewResults.feedbacks.length === 0) ? (
+              <div className="empty-state" style={{ padding: "40px 20px" }}>
+                <div className="empty-state-icon" style={{ fontSize: "2.5rem" }}>⭐</div>
+                <h3 style={{ marginTop: 8 }}>{isRtl ? "لا توجد تقييمات حتى الآن" : "No ratings or suggestions yet"}</h3>
+                <p style={{ maxWidth: 460, margin: "6px auto 0", fontSize: "0.85rem", color: "var(--clr-text-muted)" }}>
+                  {isRtl
+                    ? "عندما ينهي الطالب الاختبار، يظهر له خيار اختياري لتقييم التجربة من 1 إلى 10 وكتابة اقتراح لتطوير البوت. ستظهر جميع التقييمات هنا فوراً."
+                    : "When students complete the exam, they can optionally rate from 1 to 10 and suggest improvements. Their feedback will appear here in real time."}
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {viewResults.feedbacks.map((fb, fbIdx) => {
+                  const ratingColor =
+                    fb.rating >= 9 ? "var(--clr-success)" : fb.rating >= 7 ? "var(--clr-brand)" : fb.rating >= 5 ? "var(--clr-warning)" : "var(--clr-danger)";
+
+                  return (
+                    <div
+                      key={fb.id || fbIdx}
+                      className="card"
+                      style={{
+                        padding: "16px 20px",
+                        border: "1px solid var(--clr-border)",
+                        background: "var(--clr-bg-card)",
+                        borderRadius: "var(--radius-md)",
+                      }}
+                    >
+                      {/* Top Row: Student info + Rating Badge + Date */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: fb.suggestion ? 12 : 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          {/* Student Avatar / Initials */}
+                          <div
+                            style={{
+                              width: 38,
+                              height: 38,
+                              borderRadius: "50%",
+                              background: "rgba(99, 102, 241, 0.15)",
+                              border: "1px solid rgba(99, 102, 241, 0.3)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontWeight: 700,
+                              fontSize: "0.9rem",
+                              color: "var(--clr-brand)",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {(fb.name || "ط")[0]}
+                          </div>
+
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{fb.name || "طالب"}</span>
+                              {fb.username && (
+                                <a
+                                  href={`https://t.me/${fb.username}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    fontSize: "0.78rem",
+                                    color: "var(--clr-brand)",
+                                    direction: "ltr",
+                                    display: "inline-block",
+                                  }}
+                                  title="فتح محادثة الطالب في تليجرام"
+                                >
+                                  @{fb.username}
+                                </a>
+                              )}
+                            </div>
+                            <div style={{ fontSize: "0.72rem", color: "var(--clr-text-muted)", marginTop: 2 }}>
+                              ID: <code style={{ fontSize: "0.7rem", color: "var(--clr-text-muted)" }}>{fb.telegramId}</code> · {new Date(fb.createdAt).toLocaleDateString(isRtl ? "ar-EG" : "en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Rating Badge */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span
+                            className="badge"
+                            style={{
+                              background: `${ratingColor}22`,
+                              color: ratingColor,
+                              border: `${ratingColor}55`,
+                              fontSize: "0.88rem",
+                              fontWeight: 800,
+                              padding: "4px 12px",
+                              borderRadius: "var(--radius-full)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                            }}
+                          >
+                            <span>⭐</span>
+                            <span>{fb.rating} / 10</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Suggestion Text Box (if student provided one) */}
+                      {fb.suggestion ? (
+                        <div
+                          style={{
+                            background: "rgba(99, 102, 241, 0.06)",
+                            border: "1px solid rgba(99, 102, 241, 0.2)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: "12px 16px",
+                            marginTop: 6,
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.76rem", color: "var(--clr-brand)", fontWeight: 700, marginBottom: 4 }}>
+                            <span>💡</span>
+                            <span>{isRtl ? "اقتراح الطالب وملاحظته لتطوير البوت:" : "Student Suggestion:"}</span>
+                          </div>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: "0.9rem",
+                              lineHeight: 1.6,
+                              color: "var(--clr-text-primary)",
+                              fontStyle: "normal",
+                            }}
+                          >
+                            "{fb.suggestion}"
+                          </p>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: "0.74rem", color: "var(--clr-text-muted)", fontStyle: "italic", marginTop: 4 }}>
+                          {isRtl ? "📌 تقييم رقمي فقط مسجل في الداشبورد." : "📌 Numeric rating only."}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}

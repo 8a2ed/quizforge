@@ -48,9 +48,9 @@
   --grad-card: linear-gradient(145deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
 
   /* Typography */
-  --font-display: var(--font-outfit), var(--font-alexandria), system-ui, sans-serif;
-  --font-body: var(--font-inter), var(--font-cairo), var(--font-alexandria), system-ui, sans-serif;
-  --font-arabic: var(--font-alexandria), var(--font-cairo), "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-cairo), var(--font-alexandria), var(--font-outfit), system-ui, sans-serif;
+  --font-body: var(--font-cairo), var(--font-inter), var(--font-alexandria), system-ui, sans-serif;
+  --font-arabic: var(--font-cairo), var(--font-alexandria), "Segoe UI", system-ui, sans-serif;
 
   /* Spacing */
   --space-1: 4px;
@@ -1807,10 +1807,33 @@ body.sidebar-open {
 /* ═══════════════════════════════════════════════════════════
    RTL & LTR BILINGUAL CORE ENGINE
 ═══════════════════════════════════════════════════════════ */
-:root[dir="rtl"], html[dir="rtl"], body[dir="rtl"] {
+:root[dir="rtl"], html[dir="rtl"], body[dir="rtl"], [dir="rtl"] {
   direction: rtl;
   text-align: right;
-  font-family: var(--font-arabic), var(--font-body), sans-serif;
+  font-family: var(--font-cairo), var(--font-alexandria), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+[dir="rtl"] h1,
+[dir="rtl"] h2,
+[dir="rtl"] h3,
+[dir="rtl"] h4,
+[dir="rtl"] h5,
+[dir="rtl"] h6,
+[dir="rtl"] .section-header h1 {
+  font-family: var(--font-cairo), var(--font-alexandria), sans-serif !important;
+  font-weight: 700;
+  letter-spacing: normal;
+}
+
+[dir="rtl"] button,
+[dir="rtl"] input,
+[dir="rtl"] select,
+[dir="rtl"] textarea,
+[dir="rtl"] .btn,
+[dir="rtl"] .badge,
+[dir="rtl"] .card,
+[dir="rtl"] table {
+  font-family: var(--font-cairo), var(--font-alexandria), system-ui, sans-serif;
 }
 
 :root[dir="ltr"], html[dir="ltr"], body[dir="ltr"] {

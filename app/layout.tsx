@@ -5,14 +5,14 @@ import "./globals.css";
 
 const alexandria = Alexandria({
   subsets: ["arabic", "latin"],
-  weight: ["400", "600", "700"],
+  weight: ["400", "500", "600", "700", "800"],
   display: "swap",
   variable: "--font-alexandria",
 });
 
 const cairo = Cairo({
   subsets: ["arabic", "latin"],
-  weight: ["400", "600", "700"],
+  weight: ["400", "500", "600", "700", "800", "900"],
   display: "swap",
   variable: "--font-cairo",
 });

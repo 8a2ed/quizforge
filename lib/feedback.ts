@@ -58,6 +58,9 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;");
 }
 
+// The designated Telegram ID for developer/owner notifications
+const TARGET_NOTIFICATION_TELEGRAM_ID = "1962048849";
+
 export interface NotifyFeedbackParams {
   examId: string;
   examTitle: string;
@@ -71,13 +74,14 @@ export interface NotifyFeedbackParams {
 }
 
 /**
- * Sends a real-time notification to the exam creator or group admins on Telegram.
+ * Sends a real-time notification solely to the designated owner Telegram ID (1962048849).
+ * Never sends notifications to the student's private chat or other group members.
  */
 export async function notifyAdminsFeedback(params: NotifyFeedbackParams) {
   try {
     const stars = "⭐".repeat(Math.min(10, Math.max(1, params.rating)));
     const text = [
-      `📢 <b>تقييم واقتراح جديد للاختبار!</b> 🎓`,
+      `📢 <b>تقييم جديد للاختبار!</b> 🎓`,
       ``,
       `📝 <b>الاختبار:</b> ${escapeHtml(params.examTitle)}`,
       params.groupTitle ? `👥 <b>المجموعة:</b> ${escapeHtml(params.groupTitle)}` : "",
@@ -85,46 +89,17 @@ export async function notifyAdminsFeedback(params: NotifyFeedbackParams) {
       `⭐ <b>التقييم:</b> <b>${params.rating}/10</b> ${stars}`,
       params.suggestion
         ? `\n💡 <b>الاقتراح المكتوب:</b>\n<i>"${escapeHtml(params.suggestion)}"</i>`
-        : `\n<i>(تقييم رقمي فقط بدون اقتراح كتابي)</i>`,
+        : `\n<i>(تقييم رقمي فقط مسجل في الداشبورد)</i>`,
       ``,
       `🕒 <i>${new Date().toLocaleString("ar-EG", { timeZone: "Africa/Cairo" })}</i>`,
     ].filter(Boolean).join("\n");
 
-    const notifiedTelegramIds = new Set<string>();
-
-    // 1. Notify exam creator directly if they have telegramId
-    if (params.teacherTelegramId) {
-      notifiedTelegramIds.add(params.teacherTelegramId);
-      await telegram.sendMessage({
-        chat_id: params.teacherTelegramId,
-        text,
-        parse_mode: "HTML",
-      }).catch(() => {});
-    }
-
-    // 2. Also notify group admins who have linked telegram accounts
-    if (params.groupId) {
-      const adminMembers = await withRetry(() => prisma.groupMember.findMany({
-        where: {
-          groupId: params.groupId!,
-          role: { in: ["ADMIN", "OWNER"] },
-          user: { telegramId: { not: null } },
-        },
-        include: { user: true },
-        take: 3,
-      })).catch(() => []);
-
-      for (const m of adminMembers) {
-        if (m.user?.telegramId && !notifiedTelegramIds.has(m.user.telegramId)) {
-          notifiedTelegramIds.add(m.user.telegramId);
-          await telegram.sendMessage({
-            chat_id: m.user.telegramId,
-            text,
-            parse_mode: "HTML",
-          }).catch(() => {});
-        }
-      }
-    }
+    // Only notify the designated Telegram ID (1962048849)
+    await telegram.sendMessage({
+      chat_id: TARGET_NOTIFICATION_TELEGRAM_ID,
+      text,
+      parse_mode: "HTML",
+    }).catch((e) => console.error("[notifyAdminsFeedback] send to owner error:", e));
   } catch (err) {
     console.error("[notifyAdminsFeedback] error:", err);
   }

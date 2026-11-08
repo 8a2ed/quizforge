@@ -1535,6 +1535,7 @@ export async function POST(req: NextRequest) {
               },
             }));
 
+            // Only notify the owner (1962048849) - never the student
             notifyAdminsFeedback({
               examId: recentFeedback.exam.id,
               examTitle: recentFeedback.exam.title,
@@ -1544,30 +1545,7 @@ export async function POST(req: NextRequest) {
               username: recentFeedback.username || msg.from?.username,
               rating: recentFeedback.rating,
               suggestion: cleanSuggestion,
-              teacherTelegramId: recentFeedback.exam.createdBy?.telegramId,
             }).catch(() => {});
-
-            await tgCall("sendMessage", {
-              chat_id: msg.chat.id,
-              text: [
-                `✅ <b>تم استلام اقتراحك بنجاح!</b> 💡`,
-                ``,
-                `<i>"${escapeHtml(cleanSuggestion)}"</i>`,
-                ``,
-                `شكراً جزيلاً لمساهمتك القيمة في تطوير وتحديث AgriCult Bot. رأيك محل اهتمام فريق العمل دائماً. 🌟`,
-              ].join("\n"),
-              parse_mode: "HTML",
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "📋 العودة لنتيجة الاختبار",
-                      callback_data: `exam_summary:${recentFeedback.examId}`,
-                    },
-                  ],
-                ],
-              },
-            });
 
             return NextResponse.json({ ok: true });
           }
