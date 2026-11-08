@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
+import { ensureFeedbackTable } from "@/lib/feedback";
 import { mapStudentAnswersToMaster, parseExamConfig, type StudentExamQuestion } from "@/lib/examConfig";
 
 const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
@@ -90,6 +91,8 @@ export async function GET(
   const { groupId, examId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await ensureFeedbackTable();
 
   // Sweep and finalize overdue or inactive sessions for this specific exam
   await checkAndExpireExamSessions(examId).catch((e) => console.error("[results/GET] checkAndExpire error:", e));
@@ -197,7 +200,27 @@ export async function GET(
   });
 
   // â”€â”€ Enriched Student Submissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // ── Build attempt numbering per student ─────────────────────────
+  
+  const feedbacks = await withRetry(() => prisma.examFeedback.findMany({
+    where: {
+      OR: [
+        { examId },
+        { examId: exam.id },
+        { examId: `exam_${exam.id}` },
+        { examId: exam.id.replace(/^exam[_-]/i, "") },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+  })).catch(() => []);
+
+  const feedbackMap = new Map<string, { rating: number; suggestion: string | null }>();
+  feedbacks.forEach(f => {
+    if (f.telegramId) {
+      feedbackMap.set(f.telegramId, { rating: f.rating, suggestion: f.suggestion });
+    }
+  });
+
+  // ── Build attempt numbering per student ─────────────────────────
   const studentSubmissionsMap: Record<string, typeof allResults> = {};
   for (const r of allResults) {
     const key = r.telegramId || r.name;
@@ -260,6 +283,7 @@ export async function GET(
       attemptNumber: attemptNumberMap[r.id] || 1,
       totalStudentAttempts: studentSubmissionsMap[r.telegramId || r.name]?.length || 1,
       details,
+      feedback: r.telegramId ? feedbackMap.get(r.telegramId) || null : null,
     };
   });
 
@@ -286,6 +310,22 @@ export async function GET(
     },
     questionAnalytics,
     results: studentResults,
+    feedbacks: feedbacks.map(f => ({
+      id: f.id,
+      name: f.name || "طالب",
+      username: f.username || null,
+      telegramId: f.telegramId,
+      rating: f.rating,
+      suggestion: f.suggestion || null,
+      createdAt: f.createdAt.toISOString(),
+    })),
+    feedbackSummary: {
+      total: feedbacks.length,
+      averageRating: feedbacks.length > 0
+        ? Number((feedbacks.reduce((sum, f) => sum + f.rating, 0) / feedbacks.length).toFixed(1))
+        : null,
+      suggestionsCount: feedbacks.filter(f => f.suggestion && f.suggestion.trim().length > 0).length,
+    },
   });
 }
 

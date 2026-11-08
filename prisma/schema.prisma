@@ -72,6 +72,7 @@ model Group {
   topics      Topic[]
   botConfig   BotConfig?
   exams       Exam[]
+  feedbacks   ExamFeedback[]
 
   @@map("groups")
 }
@@ -226,6 +227,7 @@ model Exam {
   group     Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
   createdBy User         @relation(fields: [createdById], references: [id])
   results   ExamResult[]
+  feedbacks ExamFeedback[]
 
   @@index([groupId])
   @@index([createdAt])
@@ -251,4 +253,28 @@ model ExamResult {
   @@index([telegramId])
   @@index([score])
   @@map("exam_results")
+}
+
+model ExamFeedback {
+  id          String   @id @default(cuid())
+  examId      String
+  groupId     String?
+  telegramId  String
+  name        String?
+  username    String?
+  rating      Int      // 1 to 10
+  suggestion  String?  // optional text suggestion
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  exam        Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  group       Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@unique([examId, telegramId])
+  @@index([examId])
+  @@index([telegramId])
+  @@index([groupId])
+  @@index([createdAt])
+  @@index([rating])
+  @@map("exam_feedbacks")
 }

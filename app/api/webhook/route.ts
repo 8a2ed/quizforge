@@ -1,3 +1,4 @@
+import { ensureFeedbackTable, notifyAdminsFeedback } from "@/lib/feedback";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
@@ -493,6 +494,31 @@ async function finishExam(session: ExamSession, timedOut = false) {
     ]);
   }
 
+  // ⭐ Optional Feedback / Rating Button
+  let rateBtnText = "⭐ تقييم التجربة ومشاركة اقتراح (اختياري)";
+  try {
+    await ensureFeedbackTable();
+    const existingFeedback = await withRetry(() => prisma.examFeedback.findFirst({
+      where: {
+        OR: [
+          { examId, telegramId },
+          { examId: examId.replace(/^exam[_-]/i, ""), telegramId },
+        ],
+      },
+      select: { rating: true },
+    })).catch(() => null);
+    if (existingFeedback) {
+      rateBtnText = `⭐ تقييمك: ${existingFeedback.rating}/10 (تعديل)`;
+    }
+  } catch {}
+
+  reviewKeyboard.push([
+    {
+      text: rateBtnText,
+      callback_data: `exam_rate_open:${examId}`,
+    },
+  ]);
+
   try {
     const res = await tgCall("editMessageText", {
       chat_id: chatId,
@@ -973,6 +999,31 @@ async function handleExamReviewSummary(cb: Record<string, unknown>, examId: stri
         ]
       : [];
 
+    // ⭐ Optional Feedback Button in Summary
+    let rateBtnText = "⭐ تقييم التجربة ومشاركة اقتراح (اختياري)";
+    try {
+      await ensureFeedbackTable();
+      const existingFeedback = await withRetry(() => prisma.examFeedback.findFirst({
+        where: {
+          OR: [
+            { examId: exam.id, telegramId },
+            { examId: exam.id.replace(/^exam[_-]/i, ""), telegramId },
+          ],
+        },
+        select: { rating: true },
+      })).catch(() => null);
+      if (existingFeedback) {
+        rateBtnText = `⭐ تقييمك: ${existingFeedback.rating}/10 (تعديل)`;
+      }
+    } catch {}
+
+    keyboard.push([
+      {
+        text: rateBtnText,
+        callback_data: `exam_rate_open:${exam.id}`,
+      },
+    ]);
+
     await ackCb(cbId);
 
     if (msgId) {
@@ -997,6 +1048,209 @@ async function handleExamReviewSummary(cb: Record<string, unknown>, examId: stri
   } catch (err) {
     console.error("[exam] handleExamReviewSummary error:", err);
     await ackCb(cbId, "تعذر عرض الملخص.", true);
+  }
+}
+
+
+// ─── Exam Rating & Feedback Handlers ─────────────────────────────────────────
+
+// exam_rate_open:{examId} — Open rating scale (1..10)
+async function handleExamRateOpen(cb: Record<string, unknown>, examId: string) {
+  const user = cb.from as Record<string, unknown>;
+  const telegramId = String((user as { id: number }).id);
+  const cbId = cb.id as string;
+  const chatId = (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id;
+  const msgId = (cb.message as { message_id?: number })?.message_id;
+
+  try {
+    await ensureFeedbackTable();
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+    }
+    if (!exam) return ackCb(cbId, "الاختبار غير موجود.", true);
+
+    const existingFeedback = await withRetry(() => prisma.examFeedback.findFirst({
+      where: {
+        OR: [
+          { examId: exam!.id, telegramId },
+          { examId: exam!.id.replace(/^exam[_-]/i, ""), telegramId },
+        ],
+      },
+      select: { rating: true },
+    })).catch(() => null);
+
+    const ratingNote = existingFeedback
+      ? `\n📌 <i>تقييمك الحالي المسجل: <b>${existingFeedback.rating}/10</b> ⭐</i>\n`
+      : "";
+
+    const text = [
+      `⭐ <b>تقييم تجربة الاختبار وتطوير البوت</b>`,
+      ``,
+      `📋 <b>الاختبار:</b> ${escapeHtml(exam.title)}`,
+      ratingNote,
+      `رأيك مهم جداً بالنسبة لنا لتطوير النظام وتحسين جودة الأسئلة والسرعة.`,
+      `يرجى اختيار تقييمك العام من <b>1 إلى 10</b>:`,
+    ].join("\n");
+
+    const row1 = [1, 2, 3, 4, 5].map(n => ({
+      text: `${n} ⭐`,
+      callback_data: `exam_rate_pick:${exam!.id}:${n}`,
+    }));
+    const row2 = [6, 7, 8, 9].map(n => ({
+      text: `${n} ⭐`,
+      callback_data: `exam_rate_pick:${exam!.id}:${n}`,
+    }));
+    row2.push({
+      text: `10 🌟`,
+      callback_data: `exam_rate_pick:${exam!.id}:10`,
+    });
+
+    const keyboard = [
+      row1,
+      row2,
+      [
+        {
+          text: "🔙 إلغاء والعودة لنتيجة الاختبار",
+          callback_data: `exam_summary:${exam!.id}`,
+        },
+      ],
+    ];
+
+    await ackCb(cbId);
+
+    if (msgId) {
+      await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      }).catch(async () => {
+        await tgCall("sendMessage", {
+          chat_id: chatId,
+          text,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      });
+    }
+  } catch (err) {
+    console.error("[exam] handleExamRateOpen error:", err);
+    await ackCb(cbId, "حدث خطأ ما، يرجى المحاولة لاحقاً.", true);
+  }
+}
+
+// exam_rate_pick:{examId}:{rating} — Save rating, prompt for optional suggestion
+async function handleExamRatePick(cb: Record<string, unknown>, examId: string, rating: number) {
+  const user = cb.from as Record<string, unknown>;
+  const telegramId = String((user as { id: number }).id);
+  const cbId = cb.id as string;
+  const chatId = (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id;
+  const msgId = (cb.message as { message_id?: number })?.message_id;
+
+  const firstName = String((user as { first_name?: string }).first_name || "طالب");
+  const lastName = String((user as { last_name?: string }).last_name || "");
+  const name = [firstName, lastName].filter(Boolean).join(" ");
+  const username = (user as { username?: string }).username || null;
+
+  try {
+    await ensureFeedbackTable();
+    let exam = await withRetry(() => prisma.exam.findUnique({
+      where: { id: examId },
+      include: { group: true, createdBy: true },
+    })).catch(() => null);
+
+    if (!exam) {
+      exam = await withRetry(() => prisma.exam.findUnique({
+        where: { id: examId.replace(/^exam[_-]/i, "") },
+        include: { group: true, createdBy: true },
+      })).catch(() => null);
+    }
+
+    if (!exam) return ackCb(cbId, "الاختبار غير موجود.", true);
+
+    const safeRating = Math.min(10, Math.max(1, rating));
+
+    // Upsert feedback
+    await withRetry(() => prisma.examFeedback.upsert({
+      where: {
+        examId_telegramId: {
+          examId: exam!.id,
+          telegramId,
+        },
+      },
+      update: {
+        rating: safeRating,
+        name,
+        username,
+        groupId: exam!.groupId,
+        updatedAt: new Date(),
+      },
+      create: {
+        examId: exam!.id,
+        groupId: exam!.groupId,
+        telegramId,
+        name,
+        username,
+        rating: safeRating,
+      },
+    }));
+
+    // Notify admins / teacher
+    notifyAdminsFeedback({
+      examId: exam.id,
+      examTitle: exam.title,
+      groupTitle: exam.group?.title,
+      groupId: exam.groupId,
+      studentName: name,
+      username,
+      rating: safeRating,
+      teacherTelegramId: exam.createdBy?.telegramId,
+    }).catch(() => {});
+
+    await ackCb(cbId, `تم تسجيل تقييمك (${safeRating}/10) ⭐ شكراً لك!`);
+
+    const stars = "⭐".repeat(Math.min(10, safeRating));
+    const text = [
+      `🌟 <b>شكراً جزيلاً لتقييمك! (${safeRating}/10) ${stars}</b>`,
+      ``,
+      `تم حفظ تقييمك بنجاح.`,
+      ``,
+      `💡 <b>هل لديك أي اقتراح أو فكرة لتطوير البوت أو تحسين تجربة الاختبارات؟</b>`,
+      `أرسل اقتراحك الآن في <b>رسالة نصية مباشرة</b> وسيقوم المشرفون بمراجعته والعمل به فوراً 🚀`,
+      ``,
+      `<i>(هذه الخطوة اختيارية تماماً — يمكنك الضغط على «تخطي» للعودة لنتيجة الامتحان فوراً)</i>`,
+    ].join("\n");
+
+    const keyboard = [
+      [
+        {
+          text: "⏭️ تخطي والعودة لنتيجة الامتحان",
+          callback_data: `exam_summary:${exam.id}`,
+        },
+      ],
+    ];
+
+    if (msgId) {
+      await tgCall("editMessageText", {
+        chat_id: chatId,
+        message_id: msgId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      }).catch(async () => {
+        await tgCall("sendMessage", {
+          chat_id: chatId,
+          text,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      });
+    }
+  } catch (err) {
+    console.error("[exam] handleExamRatePick error:", err);
+    await ackCb(cbId, "حدث خطأ أثناء حفظ التقييم.", true);
   }
 }
 
@@ -1250,6 +1504,77 @@ export async function POST(req: NextRequest) {
       const msg    = update.message;
       const chatId = String(msg.chat?.id);
       const text   = (msg.text || "") as string;
+
+            // Check if student recently submitted a rating (within last 30 minutes) and is sending an optional text suggestion
+      if (msg.chat?.type === "private" && text && text.trim() && !text.trim().startsWith("/") && !["ابدأ", "بداية", "مساعدة", "إلغاء"].includes(text.trim())) {
+        try {
+          await ensureFeedbackTable();
+          const cleanSuggestion = text.trim();
+          const recentFeedback = await withRetry(() => prisma.examFeedback.findFirst({
+            where: {
+              telegramId: String(msg.from?.id),
+              updatedAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
+            },
+            include: {
+              exam: {
+                include: {
+                  group: true,
+                  createdBy: true,
+                },
+              },
+            },
+            orderBy: { updatedAt: "desc" },
+          }));
+
+          if (recentFeedback && recentFeedback.exam) {
+            await withRetry(() => prisma.examFeedback.update({
+              where: { id: recentFeedback.id },
+              data: {
+                suggestion: cleanSuggestion,
+                updatedAt: new Date(),
+              },
+            }));
+
+            notifyAdminsFeedback({
+              examId: recentFeedback.exam.id,
+              examTitle: recentFeedback.exam.title,
+              groupTitle: recentFeedback.exam.group?.title,
+              groupId: recentFeedback.exam.groupId,
+              studentName: recentFeedback.name || msg.from?.first_name || "طالب",
+              username: recentFeedback.username || msg.from?.username,
+              rating: recentFeedback.rating,
+              suggestion: cleanSuggestion,
+              teacherTelegramId: recentFeedback.exam.createdBy?.telegramId,
+            }).catch(() => {});
+
+            await tgCall("sendMessage", {
+              chat_id: msg.chat.id,
+              text: [
+                `✅ <b>تم استلام اقتراحك بنجاح!</b> 💡`,
+                ``,
+                `<i>"${escapeHtml(cleanSuggestion)}"</i>`,
+                ``,
+                `شكراً جزيلاً لمساهمتك القيمة في تطوير وتحديث AgriCult Bot. رأيك محل اهتمام فريق العمل دائماً. 🌟`,
+              ].join("\n"),
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "📋 العودة لنتيجة الاختبار",
+                      callback_data: `exam_summary:${recentFeedback.examId}`,
+                    },
+                  ],
+                ],
+              },
+            });
+
+            return NextResponse.json({ ok: true });
+          }
+        } catch (err) {
+          console.error("[feedback/text-handler] error:", err);
+        }
+      }
 
       // 1. /start in private chat (supports /start exam_{id}, /start {id}, or plain /start)
       if (msg.chat?.type === "private" && (text.trim().startsWith("/start") || text.trim() === "ابدأ" || text.trim() === "بداية")) {

@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useToast } from "@/lib/useToast";
 import { AccessibleModal } from "@/components/AccessibleModal";
 import { useDebounce } from "@/lib/useDebounce";
+import { useDirection } from "@/lib/useDirection";
 
 interface Question { question: string; options: string[]; correctOptionId: number; explanation?: string; imageUrl?: string; }
 interface Topic { message_thread_id: number; name: string; }
@@ -46,6 +47,10 @@ interface Result {
   attemptNumber?: number;
   totalStudentAttempts?: number;
   details: QuestionDetail[];
+  feedback?: {
+    rating: number;
+    suggestion: string | null;
+  } | null;
 }
 
 interface QuestionAnalytic {
@@ -89,10 +94,28 @@ interface ExamStats {
   maxAttempts?: number;
 }
 
+interface ExamFeedbackItem {
+  id: string;
+  name: string;
+  username: string | null;
+  telegramId: string;
+  rating: number;
+  suggestion: string | null;
+  createdAt: string;
+}
+
+interface FeedbackSummary {
+  total: number;
+  averageRating: number | null;
+  suggestionsCount: number;
+}
+
 interface ViewResultsState {
   exam: Exam & ExamStats;
   questionAnalytics: QuestionAnalytic[];
   results: Result[];
+  feedbacks?: ExamFeedbackItem[];
+  feedbackSummary?: FeedbackSummary;
 }
 
 const emptyQ = (): Question => ({ question: "", options: ["", "", "", ""], correctOptionId: 0, imageUrl: undefined });
@@ -151,6 +174,7 @@ function compressImage(file: File): Promise<string> {
 
 export default function ExamsPage() {
   const { groupId } = useParams() as { groupId: string };
+  const { isRtl } = useDirection();
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
   const toast = useToast();
@@ -178,7 +202,7 @@ export default function ExamsPage() {
   const [checkingSessions, setCheckingSessions] = useState(false);
 
   // Results interactive filters
-  const [resultsTab, setResultsTab] = useState<"students" | "questions">("students");
+  const [resultsTab, setResultsTab] = useState<"students" | "questions" | "feedbacks">("students");
   const [studentSearch, setStudentSearch] = useState("");
   const debouncedStudentSearch = useDebounce(studentSearch, 250);
   const [resultsPage, setResultsPage] = useState(1);
@@ -600,6 +624,8 @@ export default function ExamsPage() {
           exam: { ...exam, ...data.exam },
           questionAnalytics: data.questionAnalytics || [],
           results: data.results || [],
+          feedbacks: data.feedbacks || [],
+          feedbackSummary: data.feedbackSummary || { total: 0, averageRating: null, suggestionsCount: 0 },
         });
         setResultsTab("students");
         setStudentSearch("");
@@ -860,6 +886,7 @@ export default function ExamsPage() {
           >
             {modalLoading ? "جارٍ التنفيذ..." : actionModal.confirmText}
           </button>
+
         </div>
       }
     />
@@ -1069,6 +1096,18 @@ export default function ExamsPage() {
           >
             📊 Question Performance & Item Analysis ({viewResults.questionAnalytics.length})
           </button>
+          <button
+            onClick={() => setResultsTab("feedbacks")}
+            className="btn btn-ghost btn-sm"
+            style={{
+              borderBottom: resultsTab === "feedbacks" ? "2px solid var(--clr-brand)" : "none",
+              color: resultsTab === "feedbacks" ? "var(--clr-brand)" : "var(--clr-text-muted)",
+              fontWeight: 600,
+              borderRadius: 0,
+            }}
+          >
+            ⭐ {isRtl ? "التقييمات والاقتراحات" : "Feedbacks & Ratings"} ({viewResults.feedbacks?.length || 0})
+          </button>
         </div>
 
         {/* ── TAB 1: Student Submissions ── */}
@@ -1202,7 +1241,26 @@ export default function ExamsPage() {
                         {/* Student Info */}
                         <div style={{ flex: 1, minWidth: 160 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</span>
+                                                        <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{r.name}</span>
+                            {r.feedback && (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: "rgba(234,179,8,0.14)",
+                                  color: "#f59e0b",
+                                  border: "1px solid rgba(234,179,8,0.35)",
+                                  fontSize: "0.72rem",
+                                  padding: "1px 7px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                }}
+                                title={r.feedback.suggestion ? `اقتراح: "${r.feedback.suggestion}"` : `تقييم: ${r.feedback.rating}/10`}
+                              >
+                                ⭐ {r.feedback.rating}/10
+                                {r.feedback.suggestion && <span title="يوجد اقتراح مكتوب">💡</span>}
+                              </span>
+                            )}
                             {r.attemptNumber && (r.totalStudentAttempts || 1) > 1 && (
                               <span className="badge badge-accent" style={{ fontSize: "0.68rem", padding: "1px 6px" }}>
                                 محاولة #{r.attemptNumber}
@@ -1219,6 +1277,23 @@ export default function ExamsPage() {
                           </div>
                         </div>
 
+                        {r.feedback?.suggestion && (
+                          <div
+                            style={{
+                              width: "100%",
+                              margin: "6px 0 2px 0",
+                              padding: "6px 12px",
+                              background: "rgba(234,179,8,0.06)",
+                              borderInlineStart: "3px solid #f59e0b",
+                              borderRadius: "var(--radius-sm)",
+                              fontSize: "0.8rem",
+                              color: "var(--clr-text)",
+                            }}
+                          >
+                            <span style={{ fontWeight: 700, color: "#f59e0b", marginInlineEnd: 6 }}>💡 اقتراح الطالب:</span>
+                            <i>"{r.feedback.suggestion}"</i>
+                          </div>
+                        )}
                         {/* Metrics: Score + Duration */}
                         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                           {!inProgress && (
