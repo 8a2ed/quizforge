@@ -1921,6 +1921,16 @@ export async function POST(req: NextRequest) {
 
       } else if (data === "exam_cancel") {
         await ackCb(cb.id as string, "تم الإلغاء.", false);
+
+      } else if (data.startsWith("exam_rate_open:")) {
+        await handleExamRateOpen(cb, data.slice("exam_rate_open:".length));
+
+      } else if (data.startsWith("exam_rate_pick:")) {
+        const parts = data.split(":");  // ["exam_rate_pick", examId, rating]
+        if (parts.length === 3) await handleExamRatePick(cb, parts[1], Number(parts[2]));
+
+      } else if (data.startsWith("exam_rate_skip")) {
+        await ackCb(cb.id as string, "تم التخطي! شكراً على وقتك 😊", false);
       }
     }
 
