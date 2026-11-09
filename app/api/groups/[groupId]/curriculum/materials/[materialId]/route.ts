@@ -1,19 +1,6 @@
+import { getApprovedGroupMember } from "@/lib/groupAuth";
 import { NextRequest, NextResponse } from "next/server";
-import { jwtVerify } from "jose";
 import { getMaterialById, updateMaterial, deleteMaterial } from "@/lib/aiStorage";
-
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
-
-async function checkAuth(req: NextRequest) {
-  const token = req.cookies.get("qf_session")?.value;
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
-    return (payload as { sub: string }).sub;
-  } catch {
-    return null;
-  }
-}
 
 // GET /api/groups/[groupId]/curriculum/materials/[materialId]
 export async function GET(
@@ -21,8 +8,8 @@ export async function GET(
   { params }: { params: Promise<{ groupId: string; materialId: string }> }
 ) {
   const { groupId, materialId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const membership = await getApprovedGroupMember(req, groupId);
+  if (!membership) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -40,9 +27,12 @@ export async function PUT(
   { params }: { params: Promise<{ groupId: string; materialId: string }> }
 ) {
   const { groupId, materialId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const membership = await getApprovedGroupMember(req, groupId);
+  if (!membership) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   try {
@@ -101,9 +91,12 @@ export async function DELETE(
   { params }: { params: Promise<{ groupId: string; materialId: string }> }
 ) {
   const { groupId, materialId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const membership = await getApprovedGroupMember(req, groupId);
+  if (!membership) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const success = await deleteMaterial(groupId, materialId);

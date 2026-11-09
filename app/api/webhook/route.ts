@@ -2,6 +2,8 @@ import { ensureFeedbackTable, notifyAdminsFeedback } from "@/lib/feedback";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { safeSecretEquals } from "@/lib/crypto";
+import { isRecord } from "@/lib/http";
 import { telegram } from "@/lib/telegram";
 import {
   parseExamConfig,
@@ -55,6 +57,7 @@ interface ExamQuestion {
   originalOptionIndices?: number[];
 }
 interface ExamSession {
+  resultId?: string;
   examId: string;
   examTitle: string;
   chatId: number;
@@ -69,6 +72,35 @@ interface ExamSession {
   warnedAt?: number | null;
   timeLimit: number | null;
   passingScore: number;
+}
+
+interface TelegramWebhookMessage {
+  message_id: number;
+  chat: { id: number; type: string; title?: string };
+  from?: { id: number; first_name?: string; last_name?: string; username?: string };
+  text?: string;
+  message_thread_id?: number;
+  forum_topic_created?: { name: string; icon_color?: number; icon_custom_emoji_id?: string };
+  forum_topic_edited?: { name?: string; icon_custom_emoji_id?: string };
+  forum_topic_closed?: Record<string, unknown>;
+  forum_topic_reopened?: Record<string, unknown>;
+}
+
+interface TelegramWebhookUpdate {
+  poll_answer?: {
+    poll_id: string;
+    user: { id: number; first_name?: string; username?: string };
+    option_ids: number[];
+  };
+  poll?: {
+    id: string;
+    is_closed?: boolean;
+    is_anonymous?: boolean;
+    options?: Array<{ text: string; voter_count?: number }>;
+    total_voter_count?: number;
+  };
+  message?: TelegramWebhookMessage;
+  callback_query?: Record<string, unknown>;
 }
 
 // ─── Telegram helpers ───────────────────────────────────────────────────────
@@ -257,8 +289,9 @@ async function tgSendPhotoOrMessage(
           parse_mode: "HTML",
           reply_markup,
         });
-        if (res?.ok && (res.result as any)?.message_id) {
-          sentPhotoMsgId = (res.result as any).message_id;
+        const result = isRecord(res.result) ? res.result : null;
+        if (res.ok && typeof result?.message_id === "number") {
+          sentPhotoMsgId = result.message_id;
         } else {
           console.warn("[tgSendPhotoOrMessage] url sendPhoto failed:", res);
         }
@@ -287,12 +320,12 @@ async function tgSendPhotoOrMessage(
       reply_markup,
     }).catch(() => null);
 
-    if (editRes && (editRes as any).ok !== false) {
+    if (editRes && editRes.ok !== false) {
       return prevMsgId;
     }
 
     // If description contains "message is not modified", content is already current!
-    const desc = String((editRes as any)?.description || "").toLowerCase();
+    const desc = isRecord(editRes) && typeof editRes.description === "string" ? editRes.description.toLowerCase() : "";
     if (desc.includes("message is not modified")) {
       return prevMsgId;
     }
@@ -357,6 +390,8 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
     `<b>س${qNum}: ${escapeHtml(q.question)}</b>`,
     "",
     optionsList,
+    "",
+    "اضغط على زر الإجابة لتسجيل اختيارك؛ ينتقل الاختبار للسؤال التالي بعد حفظ الإجابة.",
   ].join("\n");
 
   // Format buttons: if all options are short (<= 25 chars), show full option; else 2x2 letter grid
@@ -398,10 +433,45 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
   }
 }
 
+async function persistExamProgress(session: ExamSession): Promise<void> {
+  let resultId = session.resultId;
+  if (!resultId) {
+    const existing = await withRetry(() => prisma.examResult.findFirst({
+      where: {
+        OR: [
+          { examId: session.examId, telegramId: session.telegramId, score: -1 },
+          { examId: session.examId.replace(/^exam[_-]/i, ""), telegramId: session.telegramId, score: -1 },
+        ],
+      },
+      select: { id: true },
+    }));
+    if (!existing) throw new Error("No in-progress exam result exists for this session.");
+    resultId = existing.id;
+    session.resultId = resultId;
+  }
+
+  const result = await withRetry(() => prisma.examResult.updateMany({
+    where: { id: resultId, score: -1 },
+    data: {
+      answers: {
+        answers: session.answers,
+        questions: session.questions,
+        currentQ: session.currentQ,
+        startedAt: session.startedAt,
+        lastActiveAt: session.lastActiveAt ?? Date.now(),
+        warnedAt: session.warnedAt ?? null,
+        msgId: session.msgId,
+        chatId: session.chatId,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  }));
+
+  if (result.count !== 1) throw new Error("The in-progress exam result was not updated.");
+}
+
 // ─── Finish exam ─────────────────────────────────────────────────────────────
-async function finishExam(session: ExamSession, timedOut = false) {
+async function finishExam(session: ExamSession, timedOut = false, callbackId?: string): Promise<boolean> {
   const { questions, answers, examId, passingScore, name, telegramId, chatId, msgId, startedAt, examTitle } = session;
-  examSessions.delete(sessionKey(telegramId, examId));
 
   let correct = 0;
   const breakdown: string[] = [];
@@ -427,27 +497,56 @@ async function finishExam(session: ExamSession, timedOut = false) {
   const masterAnswers = mapStudentAnswersToMaster(questions as unknown as StudentExamQuestion[], answers);
 
   try {
-    const existingInProgress = await withRetry(() => prisma.examResult.findFirst({
-      where: {
-        OR: [
-          { examId, telegramId, score: -1 },
-          { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
-        ]
-      }
-    }));
-    if (existingInProgress) {
-      await withRetry(() => prisma.examResult.update({
-        where: { id: existingInProgress.id },
+    let resultId = session.resultId;
+    if (!resultId) {
+      const existingInProgress = await withRetry(() => prisma.examResult.findFirst({
+        where: {
+          OR: [
+            { examId, telegramId, score: -1 },
+            { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 },
+          ],
+        },
+        select: { id: true },
+      }));
+      resultId = existingInProgress?.id;
+    }
+
+    if (resultId) {
+      const updated = await withRetry(() => prisma.examResult.updateMany({
+        where: { id: resultId, score: -1 },
         data: { name, answers: masterAnswers, score, passed, duration, completedAt: new Date() },
       }));
+      if (updated.count !== 1) {
+        const existing = await withRetry(() => prisma.examResult.findUnique({
+          where: { id: resultId },
+          select: { score: true },
+        }));
+        if (!existing || existing.score < 0) throw new Error("The final exam result was not saved.");
+      }
     } else {
-      await withRetry(() => prisma.examResult.create({
+      const created = await withRetry(() => prisma.examResult.create({
         data: { examId, name, telegramId, answers: masterAnswers, score, passed, duration, completedAt: new Date() },
+        select: { id: true },
       }));
+      resultId = created.id;
     }
-  } catch (e) {
-    console.error("[exam] save result error:", e);
+
+    session.resultId = resultId;
+  } catch (error) {
+    console.error("[exam] save result error:", error);
+    if (callbackId) {
+      await ackCb(callbackId, "تعذّر حفظ إجابتك الآن. لم ننهِ المحاولة؛ اضغط الإجابة مرة أخرى.", true).catch(() => {});
+    } else {
+      await tgCall("sendMessage", {
+        chat_id: chatId,
+        text: "تعذّر حفظ نتيجة الاختبار مؤقتاً. بقيت محاولتك مفتوحة؛ أعد المحاولة أو تواصل مع المشرف.",
+      }).catch(() => {});
+    }
+    return false;
   }
+
+  examSessions.delete(sessionKey(telegramId, examId));
+  if (callbackId) await ackCb(callbackId, "تم حفظ إجابتك، جارٍ تجهيز نتيجتك.");
 
   // Check exam config for solutions review and max attempts
   let allowSolutions = true;
@@ -540,7 +639,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: reviewKeyboard },
     });
-    if (!res || (res as any).ok === false) {
+    if (!res || res.ok === false) {
       if (msgId) await tgCall("deleteMessage", { chat_id: chatId, message_id: msgId }).catch(() => {});
       await tgCall("sendMessage", {
         chat_id: chatId,
@@ -559,6 +658,7 @@ async function finishExam(session: ExamSession, timedOut = false) {
       reply_markup: { inline_keyboard: reviewKeyboard },
     }).catch(() => {});
   }
+  return true;
 }
 
 // ─── Callback handlers ────────────────────────────────────────────────────────
@@ -660,6 +760,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
       const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
 
       session = {
+        resultId: inProgress.id,
         examId: exam.id,
         examTitle: exam.title,
         chatId, msgId, name, telegramId,
@@ -713,7 +814,7 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
         passingScore: exam.passingScore,
       };
 
-      await withRetry(() => prisma.examResult.create({
+      const createdResult = await withRetry(() => prisma.examResult.create({
         data: {
           examId: exam.id, name, telegramId,
           answers: {
@@ -730,7 +831,9 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
           passed: false,
           duration: null,
         },
+        select: { id: true },
       }));
+      session.resultId = createdResult.id;
     }
 
     examSessions.set(sessionKey(telegramId, exam.id), session);
@@ -784,6 +887,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
           const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
 
           session = {
+            resultId: inProgress.id,
             examId: inProgress.examId,
             examTitle: inProgress.exam.title,
             chatId: (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id,
@@ -820,64 +924,69 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
       return ackCb(cbId, "انتهت صلاحية الجلسة. يرجى بدء الامتحان من جديد.", true);
     }
 
-    // Time limit check BEFORE accepting answer
+    if (!Number.isInteger(qIndex) || qIndex < 0 || qIndex >= session.questions.length ||
+        !Number.isInteger(optionId) || optionId < 0 || optionId >= (session.questions[qIndex]?.options.length ?? 0)) {
+      return ackCb(cbId, "إجابة غير صالحة. أعد اختيار إجابة من السؤال الحالي.", true);
+    }
+
+    // A duplicate tap for an already accepted question only re-synchronizes the student's screen.
+    if (qIndex < session.currentQ) {
+      await ackCb(cbId, "تم حفظ إجابتك؛ جارٍ مزامنة السؤال الحالي...", false);
+      if (session.currentQ < session.questions.length) await sendQuestion(session);
+      else await finishExam(session);
+      return;
+    }
+    if (qIndex > session.currentQ) {
+      await ackCb(cbId, "وصلنا إلى سؤال أحدث. أعد اختيار الإجابة الظاهرة أمامك.", true);
+      await sendQuestion(session);
+      return;
+    }
+
     if (session.timeLimit) {
       const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
       if (elapsed > session.timeLimit) {
-        await ackCb(cbId, "⏰ انتهى الوقت المحدد!", true);
-        await finishExam(session, true);
+        await finishExam(session, true, cbId);
         return;
       }
     }
 
-    // Double-click protection & Out-of-Sync Auto-Recovery:
-    // If student taps an outdated question button, IMMEDIATELY re-sync and advance them to the current question!
-    if (qIndex < session.currentQ) {
-      await ackCb(cbId, "تم تسجيل إجابتك، جارٍ نقلك للسؤال التالي...", false);
-      if (session.currentQ < session.questions.length) {
-        await sendQuestion(session);
-      } else {
-        await finishExam(session);
-      }
-      return;
-    }
-
-    // Instant callback acknowledgment so Telegram button loading spinner vanishes in <50ms!
-    await ackCb(cbId);
-
-    // Record answer and advance currentQ safely
+    const previousAnswer = session.answers[qIndex];
+    const previousCurrentQ = session.currentQ;
+    const previousLastActiveAt = session.lastActiveAt;
+    const previousWarnedAt = session.warnedAt;
     session.answers[qIndex] = optionId;
-    session.currentQ = Math.max(session.currentQ + 1, qIndex + 1);
+    session.currentQ = qIndex + 1;
     session.lastActiveAt = Date.now();
     session.warnedAt = null;
 
     if (session.currentQ >= session.questions.length) {
-      await finishExam(session);
-    } else {
-      // Save in-progress progress in database
-      await withRetry(() => prisma.examResult.updateMany({
-        where: {
-          OR: [
-            { examId: session!.examId, telegramId, score: -1 },
-            { examId: session!.examId.replace(/^exam[_-]/i, ""), telegramId, score: -1 }
-          ]
-        },
-        data: {
-          answers: {
-            answers: session!.answers,
-            questions: session!.questions,
-            currentQ: session!.currentQ,
-            startedAt: session!.startedAt,
-            lastActiveAt: session!.lastActiveAt,
-            warnedAt: null,
-            msgId: session!.msgId,
-            chatId: session!.chatId,
-          } as unknown as Prisma.InputJsonValue,
-        },
-      })).catch(e => console.error("[exam] save progress error:", e));
-
-      await sendQuestion(session);
+      const finished = await finishExam(session, false, cbId);
+      if (!finished) {
+        if (previousAnswer === undefined) delete session.answers[qIndex];
+        else session.answers[qIndex] = previousAnswer;
+        session.currentQ = previousCurrentQ;
+        session.lastActiveAt = previousLastActiveAt;
+        session.warnedAt = previousWarnedAt;
+        await sendQuestion(session);
+      }
+      return;
     }
+
+    try {
+      await persistExamProgress(session);
+    } catch (error) {
+      if (previousAnswer === undefined) delete session.answers[qIndex];
+      else session.answers[qIndex] = previousAnswer;
+      session.currentQ = previousCurrentQ;
+      session.lastActiveAt = previousLastActiveAt;
+      session.warnedAt = previousWarnedAt;
+      console.error("[exam] answer persistence failed:", error);
+      await ackCb(cbId, "تعذّر حفظ الإجابة مؤقتاً. بقي السؤال كما هو؛ اضغط الإجابة مرة أخرى.", true);
+      return;
+    }
+
+    await ackCb(cbId, "تم حفظ إجابتك، جارٍ فتح السؤال التالي.");
+    await sendQuestion(session);
   } finally {
     answerInFlight.delete(key);
   }
@@ -919,7 +1028,7 @@ async function handleExamReview(cb: Record<string, unknown>, examId: string, qId
     const safeQIdx = Math.max(0, Math.min(totalQ - 1, qIdx));
     const q = rawQuestions[safeQIdx] as unknown as MasterExamQuestion;
 
-    const masterAnswers = extractStudentMasterAnswers(result.answers, rawQuestions as any);
+    const masterAnswers = extractStudentMasterAnswers(result.answers);
     const studentChoice = masterAnswers[String(safeQIdx)] ?? masterAnswers[safeQIdx];
     const isAnswered = studentChoice !== undefined && studentChoice !== null && !isNaN(Number(studentChoice));
     const isCorrect = isAnswered && Number(studentChoice) === q.correctOptionId;
@@ -1085,7 +1194,7 @@ async function handleExamReviewSummary(cb: Record<string, unknown>, examId: stri
         reply_markup: { inline_keyboard: keyboard },
       }).catch(() => null);
 
-      if (!editRes || (editRes as any).ok === false) {
+      if (!editRes || editRes.ok === false) {
         await tgCall("deleteMessage", { chat_id: chatId, message_id: msgId }).catch(() => {});
         await tgCall("sendMessage", {
           chat_id: chatId,
@@ -1336,6 +1445,7 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
         const currentQ = Math.max(Number(data.currentQ) || 0, maxAnsweredIdx + 1);
 
         session = {
+          resultId: inProgress.id,
           examId: inProgress.examId,
           examTitle: inProgress.exam.title,
           chatId: Number(data.chatId) || (cb.message as { chat?: { id: number } })?.chat?.id || (user as { id: number }).id,
@@ -1446,39 +1556,29 @@ async function handleExamCancel(cb: Record<string, unknown>, examId: string) {
 
 // ─── Diagnostic GET Endpoint ──────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  const wantsSync = url.searchParams.get("sync") === "1" || url.searchParams.get("setup") === "1";
+  if (!wantsSync) return NextResponse.json({ ok: true, service: "QuizForge Telegram Webhook" });
+
+  const adminToken = /^Bearer\s+(\S+)$/i.exec(req.headers.get("authorization") || "")?.[1];
+  if (!safeSecretEquals(adminToken, WEBHOOK_SECRET)) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const baseUrl = process.env.WEBHOOK_BASE_URL || process.env.NEXTAUTH_URL;
+  if (!baseUrl) return NextResponse.json({ ok: false, error: "Webhook base URL is not configured" }, { status: 503 });
+
   try {
-    const url = new URL(req.url);
-    const host = req.headers.get("host") || "";
-    const protocol = req.headers.get("x-forwarded-proto") || "https";
-    const currentBaseUrl = `${protocol}://${host}`;
-    const webhookUrl = `${currentBaseUrl}/api/webhook`;
-
-    if (url.searchParams.get("sync") === "1" || url.searchParams.get("setup") === "1") {
-      const secret = process.env.WEBHOOK_SECRET || "";
-      const setRes = await telegram.setWebhook(webhookUrl, secret || undefined);
-      const info = await telegram.getWebhookInfo();
-      return NextResponse.json({
-        ok: true,
-        message: "Webhook updated successfully",
-        webhookUrl,
-        setResult: setRes,
-        telegramInfo: info,
-      });
+    const parsedBaseUrl = new URL(baseUrl);
+    if (parsedBaseUrl.username || parsedBaseUrl.password || (process.env.NODE_ENV === "production" && parsedBaseUrl.protocol !== "https:")) {
+      return NextResponse.json({ ok: false, error: "Invalid webhook base URL" }, { status: 500 });
     }
-
-    const info = await telegram.getWebhookInfo().catch((err: any) => ({ error: err?.message || String(err) }));
-    const botUser = await getBotUsername();
-
-    return NextResponse.json({
-      ok: true,
-      service: "QuizForge Telegram Webhook",
-      botUsername: botUser,
-      currentUrl: webhookUrl,
-      telegramWebhookInfo: info,
-      hint: "To re-register this webhook URL directly with Telegram, open this URL with ?sync=1",
-    });
-  } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err?.message }, { status: 500 });
+    const webhookUrl = new URL("/api/webhook", parsedBaseUrl).toString();
+    const setResult = await telegram.setWebhook(webhookUrl, WEBHOOK_SECRET);
+    return NextResponse.json({ ok: true, setResult });
+  } catch (error) {
+    console.error("[webhook] Webhook registration failed:", error);
+    return NextResponse.json({ ok: false, error: "Webhook registration failed" }, { status: 502 });
   }
 }
 
@@ -1487,19 +1587,31 @@ export async function POST(req: NextRequest) {
   try {
     // ── Secret token verification ───────────────────────────────────────────
     const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
-    if (WEBHOOK_SECRET && secretHeader && secretHeader !== WEBHOOK_SECRET) {
-      // Check if it matches any group botConfig webhookSecret in DB before rejecting
+    if (!secretHeader) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    if (!safeSecretEquals(secretHeader, WEBHOOK_SECRET)) {
       const matchingConfig = await prisma.botConfig.findFirst({
         where: { webhookSecret: secretHeader },
+        select: { id: true },
       }).catch(() => null);
 
-      if (!matchingConfig) {
-        console.warn("[webhook] Secret token mismatch:", secretHeader);
-        return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-      }
+      if (!matchingConfig) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    const update = await req.json();
+    const contentLength = Number(req.headers.get("content-length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 1024 * 1024) {
+      return NextResponse.json({ ok: false, error: "Payload too large" }, { status: 413 });
+    }
+
+    let parsedUpdate: unknown;
+    try {
+      parsedUpdate = await req.json();
+    } catch {
+      return NextResponse.json({ ok: false, error: "Invalid JSON payload" }, { status: 400 });
+    }
+    if (!parsedUpdate || typeof parsedUpdate !== "object" || Array.isArray(parsedUpdate)) {
+      return NextResponse.json({ ok: false, error: "Invalid webhook payload" }, { status: 400 });
+    }
+    const update = parsedUpdate as TelegramWebhookUpdate;
 
     // ── Poll answer (for non-anonymous polls) ────────────────────────────────
     if (update.poll_answer) {
@@ -1755,7 +1867,7 @@ export async function POST(req: NextRequest) {
           // 4. Try finding group that has uploaded curriculum materials in DB
           if (!grp) {
             try {
-              const matRows = await prisma.$queryRawUnsafe<any[]>(
+              const matRows = await prisma.$queryRawUnsafe<Array<{ group_id: string }>>(
                 `SELECT group_id FROM ai_curriculum_materials ORDER BY updated_at DESC LIMIT 1`
               );
               if (matRows?.[0]?.group_id) {

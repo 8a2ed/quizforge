@@ -1,8 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getUser(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
@@ -63,7 +65,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Maximum 10 options allowed." }, { status: 400 });
   }
 
-  const cleanOptions: string[] = options.map((o: any) => String(o || "").trim());
+  const cleanOptions: string[] = options.map((o: unknown) => String(o || "").trim());
   if (cleanOptions.some(o => !o)) {
     return NextResponse.json({ error: "Options cannot be empty." }, { status: 400 });
   }
@@ -108,7 +110,7 @@ export async function PATCH(
 
   const sanitizedTags = Array.isArray(tags)
     ? tags
-        .map((t: any) => String(t || "").trim())
+        .map((t: unknown) => String(t || "").trim())
         .filter(Boolean)
         .slice(0, 20)
     : [];
@@ -120,7 +122,7 @@ export async function PATCH(
   const validatedTopicId = topicId !== undefined ? (topicId ? Number(topicId) : null) : undefined;
   const validatedTopicName = topicName !== undefined ? (topicName ? String(topicName).trim() : null) : undefined;
 
-  const updateData: any = {
+  const updateData: Prisma.QuizUpdateManyMutationInput = {
     question: cleanQuestion,
     options: cleanOptions,
     type: normalizedType,
@@ -150,7 +152,7 @@ export async function PATCH(
 
   // Update collections if collectionIds is provided
   if (Array.isArray(collectionIds)) {
-    const validCollectionIds = collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0);
+    const validCollectionIds = collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0);
     await withRetry(() =>
       prisma.collectionQuiz.deleteMany({
         where: { quizId: id },

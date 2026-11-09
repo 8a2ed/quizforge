@@ -1,9 +1,11 @@
+import { getErrorMessage } from "@/lib/errors";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { ensureFeedbackTable } from "@/lib/feedback";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function authorize(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -13,8 +15,9 @@ async function authorize(req: NextRequest, groupId: string) {
     const userId = (payload as { sub: string }).sub;
     const m = await withRetry(() => prisma.groupMember.findUnique({
       where: { userId_groupId: { userId, groupId } },
+      select: { approved: true, role: true },
     }));
-    return m?.approved ? { userId } : null;
+    return m?.approved && (m.role === "OWNER" || m.role === "ADMIN") ? { userId } : null;
   } catch { return null; }
 }
 
@@ -95,8 +98,8 @@ export async function GET(
         updatedAt: f.updatedAt.toISOString(),
       })),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[feedback/GET] error:", error);
-    return NextResponse.json({ error: error?.message || "Internal error" }, { status: 500 });
+    return NextResponse.json({ error: getErrorMessage(error, "Internal error") }, { status: 500 });
   }
 }

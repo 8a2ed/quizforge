@@ -1,9 +1,11 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import bcrypt from "bcryptjs";
+import { readJsonObject } from "@/lib/http";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function requireOwner(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
@@ -41,17 +43,35 @@ export async function POST(req: NextRequest) {
   const userId = await requireOwner(req);
   if (!userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const { username, password, firstName, groupId } = await req.json();
+  const body = await readJsonObject(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const firstName = typeof body.firstName === "string" ? body.firstName.trim() : "";
+  const groupId = typeof body.groupId === "string" ? body.groupId : undefined;
 
   if (!username || !password || !firstName) {
     return NextResponse.json({ error: "username, password, and firstName are required" }, { status: 400 });
+  }
+  if (username.length > 50 || firstName.length > 100 || password.length > 128) {
+    return NextResponse.json({ error: "One or more fields exceed the allowed length" }, { status: 400 });
   }
   if (password.length < 6) {
     return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
   }
 
+  if (groupId) {
+    const groupOwnership = await prisma.groupMember.findUnique({
+      where: { userId_groupId: { userId, groupId } },
+      select: { role: true, approved: true },
+    });
+    if (!groupOwnership?.approved || groupOwnership.role !== "OWNER") {
+      return NextResponse.json({ error: "Only an approved group owner can assign an instructor to this group" }, { status: 403 });
+    }
+  }
+
   const existing = await prisma.instructorCredential.findUnique({
-    where: { username: username.trim().toLowerCase() },
+      where: { username },
   });
   if (existing) {
     return NextResponse.json({ error: "Username already taken" }, { status: 409 });
@@ -68,7 +88,7 @@ export async function POST(req: NextRequest) {
           telegramId: null,
           credential: {
             create: {
-              username: username.trim().toLowerCase(),
+              username,
               passwordHash,
             },
           },
@@ -88,7 +108,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    user: { id: result.id, firstName: result.firstName, username: username.trim().toLowerCase() },
+    user: { id: result.id, firstName: result.firstName, username },
   });
 }
 
@@ -97,8 +117,11 @@ export async function DELETE(req: NextRequest) {
   const userId = await requireOwner(req);
   if (!userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const { instructorUserId } = await req.json();
-  if (!instructorUserId) return NextResponse.json({ error: "instructorUserId required" }, { status: 400 });
+  const body = await readJsonObject(req);
+  const instructorUserId = body?.instructorUserId;
+  if (typeof instructorUserId !== "string" || !instructorUserId) {
+    return NextResponse.json({ error: "instructorUserId required" }, { status: 400 });
+  }
 
   await withRetry(() => prisma.user.delete({ where: { id: instructorUserId } }));
   return NextResponse.json({ ok: true });
@@ -109,12 +132,14 @@ export async function PATCH(req: NextRequest) {
   const userId = await requireOwner(req);
   if (!userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const { instructorUserId, newPassword } = await req.json();
-  if (!instructorUserId || !newPassword) {
+  const body = await readJsonObject(req);
+  const instructorUserId = body?.instructorUserId;
+  const newPassword = body?.newPassword;
+  if (typeof instructorUserId !== "string" || typeof newPassword !== "string" || !instructorUserId || !newPassword) {
     return NextResponse.json({ error: "instructorUserId and newPassword required" }, { status: 400 });
   }
-  if (newPassword.length < 6) {
-    return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
+  if (newPassword.length < 6 || newPassword.length > 128) {
+    return NextResponse.json({ error: "Password must be between 6 and 128 characters" }, { status: 400 });
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 12);

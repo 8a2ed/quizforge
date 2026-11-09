@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { getAIAnalytics } from "@/lib/aiStorage";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 export async function GET(
   req: NextRequest,
@@ -18,8 +19,11 @@ export async function GET(
     const userId = (payload as { sub: string }).sub;
     const membership = await withRetry(() => prisma.groupMember.findUnique({
       where: { userId_groupId: { userId, groupId } },
+      select: { approved: true, role: true },
     }));
-    if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const { searchParams } = req.nextUrl;
     const rangeDays = parseInt(searchParams.get("days") || "30");

@@ -184,62 +184,114 @@ export function mapStudentAnswersToMaster(
 }
 
 
-/**
- * Universal extractor for student answers that handles:
- * 1. Flat master maps: { "0": 1, "1": 3 }
- * 2. Session objects: { answers: { ... }, questions: [...] }
- * 3. Array formats: [1, 3, 0]
- */
-export function extractStudentMasterAnswers(
-  rawAnswers: unknown,
-  masterQuestions?: Array<{ question: string; options: string[]; correctOptionId: number; explanation?: string }>
-): Record<string, number> {
-  if (!rawAnswers) return {};
+function isAnswerRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-  let parsed: any = rawAnswers;
-  if (typeof rawAnswers === "string") {
-    try { parsed = JSON.parse(rawAnswers); } catch { return {}; }
-  }
+function parseNonNegativeInteger(value: unknown): number | null {
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : null;
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 
-  if (typeof parsed !== "object" || parsed === null) return {};
-
-  // Case A: Session format { answers: { ... }, questions: [...] }
-  if (parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
-    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-      try {
-        const mapped = mapStudentAnswersToMaster(parsed.questions as StudentExamQuestion[], parsed.answers);
-        const res: Record<string, number> = {};
-        for (const [k, v] of Object.entries(mapped)) {
-          res[String(k)] = Number(v);
-        }
-        return res;
-      } catch {
-        // fallback
-      }
+function normalizeAnswerMap(value: unknown): Record<number, number> {
+  if (!isAnswerRecord(value)) return {};
+  const normalized: Record<number, number> = {};
+  for (const [rawQuestionIndex, rawOptionIndex] of Object.entries(value)) {
+    const questionIndex = parseNonNegativeInteger(rawQuestionIndex);
+    const optionIndex = parseNonNegativeInteger(rawOptionIndex);
+    if (questionIndex !== null && optionIndex !== null) {
+      normalized[questionIndex] = optionIndex;
     }
-    const res: Record<string, number> = {};
-    for (const [k, v] of Object.entries(parsed.answers)) {
-      res[String(k)] = Number(v);
-    }
-    return res;
   }
+  return normalized;
+}
 
-  // Case B: Array format [1, 0, 2]
-  if (Array.isArray(parsed)) {
-    const res: Record<string, number> = {};
-    parsed.forEach((val, idx) => {
-      if (typeof val === "number") res[String(idx)] = val;
-      else if (val && typeof val.chosenOptionId === "number") res[String(idx)] = val.chosenOptionId;
+function normalizeStudentQuestions(value: unknown): StudentExamQuestion[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const normalized: StudentExamQuestion[] = [];
+
+  for (const [studentIndex, rawQuestion] of value.entries()) {
+    if (!isAnswerRecord(rawQuestion) || !Array.isArray(rawQuestion.options)) return null;
+    if (!rawQuestion.options.every((option) => typeof option === "string")) return null;
+    const options = rawQuestion.options as string[];
+    const originalOptionIndices = Array.isArray(rawQuestion.originalOptionIndices) &&
+      rawQuestion.originalOptionIndices.length === options.length &&
+      rawQuestion.originalOptionIndices.every((index) => typeof index === "number" && Number.isInteger(index) && index >= 0)
+      ? rawQuestion.originalOptionIndices as number[]
+      : options.map((_, index) => index);
+    const originalQIndex = typeof rawQuestion.originalQIndex === "number" &&
+      Number.isInteger(rawQuestion.originalQIndex) && rawQuestion.originalQIndex >= 0
+      ? rawQuestion.originalQIndex
+      : studentIndex;
+
+    normalized.push({
+      question: typeof rawQuestion.question === "string" ? rawQuestion.question : "",
+      options,
+      correctOptionId: typeof rawQuestion.correctOptionId === "number" && Number.isInteger(rawQuestion.correctOptionId)
+        ? rawQuestion.correctOptionId
+        : 0,
+      explanation: typeof rawQuestion.explanation === "string" ? rawQuestion.explanation : undefined,
+      imageUrl: typeof rawQuestion.imageUrl === "string" ? rawQuestion.imageUrl : undefined,
+      originalQIndex,
+      originalOptionIndices,
     });
-    return res;
   }
 
-  // Case C: Flat object { "0": 1, "1": 0 }
-  const res: Record<string, number> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    if (v !== undefined && v !== null && !isNaN(Number(v))) {
-      res[String(k)] = Number(v);
+  return normalized;
+}
+
+/** Normalize flat results, legacy arrays, and in-progress session snapshots. */
+export function extractStudentMasterAnswers(rawAnswers: unknown): Record<string, number> {
+  let parsed: unknown = rawAnswers;
+  if (typeof rawAnswers === "string") {
+    try {
+      parsed = JSON.parse(rawAnswers) as unknown;
+    } catch {
+      return {};
     }
   }
-  return res;
+
+  if (Array.isArray(parsed)) {
+    const answers: Record<string, number> = {};
+    parsed.forEach((value, questionIndex) => {
+      if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+        answers[String(questionIndex)] = value;
+      } else if (isAnswerRecord(value)) {
+        const optionIndex = value.chosenOptionId ?? value.optionIndex ?? value.optionId;
+        if (typeof optionIndex === "number" && Number.isInteger(optionIndex) && optionIndex >= 0) {
+          answers[String(questionIndex)] = optionIndex;
+        }
+      }
+    });
+    return answers;
+  }
+
+  if (!isAnswerRecord(parsed)) return {};
+  if (isAnswerRecord(parsed.answers)) {
+    const studentAnswers = normalizeAnswerMap(parsed.answers);
+    const studentQuestions = normalizeStudentQuestions(parsed.questions);
+    if (studentQuestions) {
+      const mapped = mapStudentAnswersToMaster(studentQuestions, studentAnswers);
+      const answers: Record<string, number> = {};
+      for (const [questionIndex, optionIndex] of Object.entries(mapped)) {
+        answers[String(questionIndex)] = optionIndex;
+      }
+      return answers;
+    }
+
+    const answers: Record<string, number> = {};
+    for (const [questionIndex, optionIndex] of Object.entries(studentAnswers)) {
+      answers[String(questionIndex)] = optionIndex;
+    }
+    return answers;
+  }
+
+  const flatAnswers = normalizeAnswerMap(parsed);
+  const answers: Record<string, number> = {};
+  for (const [questionIndex, optionIndex] of Object.entries(flatAnswers)) {
+    answers[String(questionIndex)] = optionIndex;
+  }
+  return answers;
 }

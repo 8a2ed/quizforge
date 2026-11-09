@@ -1,22 +1,30 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { SignJWT } from "jose";
+import { readJsonObject } from "@/lib/http";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password } = await req.json();
+    const body = await readJsonObject(req);
+    if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
 
     if (!username || !password) {
       return NextResponse.json({ error: "Username and password are required" }, { status: 400 });
+    }
+    if (username.length > 50 || password.length > 128) {
+      return NextResponse.json({ error: "Invalid username or password" }, { status: 401 });
     }
 
     // Find credential
     const credential = await withRetry(() =>
       prisma.instructorCredential.findUnique({
-        where: { username: username.trim().toLowerCase() },
+        where: { username },
         include: { user: true },
       })
     );

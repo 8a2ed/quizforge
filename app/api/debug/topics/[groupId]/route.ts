@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
-import { telegram, type TelegramForumTopic } from "@/lib/telegram";
+import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 // GET /api/debug/topics/[id]
 // id can be: DB group ID (cuid), Telegram chat ID (+/- prefix), or "all"
@@ -11,12 +12,19 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ groupId: string }> }
 ) {
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const { groupId: rawId } = await params;
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return NextResponse.json({ error: "Unauthorized — log in first" }, { status: 401 });
 
+  let userId: string;
   try {
-    await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    if (typeof payload.sub !== "string") throw new Error("Missing subject");
+    userId = payload.sub;
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -31,7 +39,7 @@ export async function GET(
     rawId.replace(/^-100/, "").replace(/^-/, ""),
   ];
 
-  let group = await prisma.group.findFirst({
+  const group = await prisma.group.findFirst({
     where: {
       OR: [
         { id: rawId },
@@ -42,22 +50,29 @@ export async function GET(
 
   // If "all" — show all groups summary
   if (rawId === "all") {
-    const allGroups = await prisma.group.findMany();
-    return NextResponse.json({ groups: allGroups.map(g => ({ id: g.id, chatId: g.chatId, title: g.title, isForum: g.isForum })) });
+    const memberships = await prisma.groupMember.findMany({
+      where: { userId, approved: true, role: { in: ["OWNER", "ADMIN"] } },
+      include: { group: { select: { id: true, chatId: true, title: true, isForum: true } } },
+    });
+    return NextResponse.json({ groups: memberships.map(({ group }) => group) });
   }
 
   if (!group) {
-    const allGroups = await prisma.group.findMany({ select: { id: true, chatId: true, title: true } });
     return NextResponse.json({
       error: `Group not found for id="${rawId}"`,
-      hint: "Use one of the group IDs or chatIds below in the URL",
-      availableGroups: allGroups,
     }, { status: 404 });
+  }
+
+  const membership = await prisma.groupMember.findUnique({
+    where: { userId_groupId: { userId, groupId: group.id } },
+    select: { role: true, approved: true },
+  });
+  if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const results: Record<string, unknown> = {
     group: { id: group.id, chatId: group.chatId, title: group.title, isForum: group.isForum },
-    botToken: process.env.TELEGRAM_BOT_TOKEN ? `SET (ends in ...${process.env.TELEGRAM_BOT_TOKEN.slice(-6)})` : "⚠ MISSING",
   };
 
   // Test 1: getMe

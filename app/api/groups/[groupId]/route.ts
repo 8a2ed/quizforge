@@ -1,8 +1,9 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function authorize(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -10,10 +11,11 @@ async function authorize(req: NextRequest, groupId: string) {
   const { payload } = await jwtVerify(token, JWT_SECRET).catch(() => ({ payload: null }));
   if (!payload) return null;
   const userId = (payload as { sub: string }).sub;
-  return withRetry(() => prisma.groupMember.findUnique({
+  const membership = await withRetry(() => prisma.groupMember.findUnique({
     where: { userId_groupId: { userId, groupId } },
     include: { group: true },
   }));
+  return membership?.approved ? membership : null;
 }
 
 // GET /api/groups/[groupId] — get group details
@@ -29,7 +31,15 @@ export async function GET(
     where: { id: groupId },
     include: {
       _count: { select: { quizzes: true, members: true } },
-      botConfig: true,
+      botConfig: {
+        select: {
+          id: true,
+          defaultAnonymous: true,
+          allowMultiple: true,
+          defaultType: true,
+          defaultOpenPeriod: true,
+        },
+      },
     },
   }));
 
@@ -54,7 +64,7 @@ export async function DELETE(
     where: { userId_groupId: { userId, groupId } },
     include: { group: true },
   }));
-  if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 });
+  if (!membership?.approved) return NextResponse.json({ error: "Not an approved member" }, { status: 403 });
 
   const body = await req.json().catch(() => ({})) as { deleteGroup?: boolean };
 

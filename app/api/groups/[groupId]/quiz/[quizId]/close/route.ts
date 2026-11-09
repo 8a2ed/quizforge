@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // POST /api/groups/[groupId]/quiz/[quizId]/close
@@ -30,7 +31,7 @@ export async function POST(
         include: { group: true },
       })
     );
-    if (!membership || !membership.approved)
+    if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN"))
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const quiz = await withRetry(() =>

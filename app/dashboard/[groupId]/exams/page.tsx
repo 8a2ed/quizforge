@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useToast } from "@/lib/useToast";
 import { AccessibleModal } from "@/components/AccessibleModal";
 import { useDebounce } from "@/lib/useDebounce";
@@ -174,11 +174,12 @@ function compressImage(file: File): Promise<string> {
 
 export default function ExamsPage() {
   const { groupId } = useParams() as { groupId: string };
+  const searchParams = useSearchParams();
   const { isRtl } = useDirection();
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
   const toast = useToast();
-  const [mode, setMode] = useState<"list" | "create" | "edit" | "results">("list");
+  const [mode, setMode] = useState<"list" | "create" | "edit" | "results">(() => searchParams.get("mode") === "create" ? "create" : "list");
   const [viewResults, setViewResults] = useState<ViewResultsState | null>(null);
   const [editingExam, setEditingExam] = useState<Exam | null>(null);
 
@@ -586,7 +587,7 @@ export default function ExamsPage() {
   const handleSyncAndCheckSessions = async () => {
     setCheckingSessions(true);
     try {
-      const res = await fetch("/api/cron/check-exams");
+      const res = await fetch(`/api/cron/check-exams?groupId=${encodeURIComponent(groupId)}`);
       const data = await res.json();
       if (res.ok && data.stats) {
         if (data.stats.expiredCount > 0 || data.stats.warnedCount > 0) {

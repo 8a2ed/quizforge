@@ -1,9 +1,14 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { formatExamDescription } from "@/lib/examConfig";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 async function checkAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -18,7 +23,7 @@ async function checkAuth(req: NextRequest, groupId: string) {
       })
     );
     if (!m || !m.approved) return null;
-    return { userId, group: m.group };
+    return { userId, group: m.group, role: m.role };
   } catch {
     return null;
   }
@@ -33,6 +38,9 @@ export async function POST(
   const auth = await checkAuth(req, groupId);
   if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (auth.role !== "OWNER" && auth.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const body = await req.json();
@@ -56,14 +64,27 @@ export async function POST(
     return NextResponse.json({ error: "يجب اختيار سؤال واحد على الأقل لإنشاء الاختبار" }, { status: 400 });
   }
 
-  const sanitizedQuestions = questions.map((q: any) => ({
-    question: String(q.question || "").trim(),
-    options: Array.isArray(q.options)
-      ? q.options.map((o: unknown) => String(o).trim()).filter(Boolean)
-      : [],
-    correctOptionId: Number(q.correctOptionId) || 0,
-    explanation: q.explanation ? String(q.explanation).trim() : undefined,
-  }));
+  const sanitizedQuestions = questions.map((rawQuestion: unknown) => {
+    if (!isRecord(rawQuestion)) return null;
+    const question = typeof rawQuestion.question === "string" ? rawQuestion.question.trim() : "";
+    const options = Array.isArray(rawQuestion.options)
+      ? rawQuestion.options.filter((option): option is string => typeof option === "string").map((option) => option.trim()).filter(Boolean)
+      : [];
+    const correctOptionId = rawQuestion.correctOptionId;
+    if (
+      !question || question.length > 300 || options.length < 2 || options.length > 10 ||
+      options.some((option) => option.length > 100) || typeof correctOptionId !== "number" ||
+      !Number.isInteger(correctOptionId) || correctOptionId < 0 || correctOptionId >= options.length
+    ) {
+      return null;
+    }
+    const explanation = typeof rawQuestion.explanation === "string" ? rawQuestion.explanation.trim() : undefined;
+    return { question, options, correctOptionId, explanation: explanation || undefined };
+  });
+  if (sanitizedQuestions.some((question) => question === null)) {
+    return NextResponse.json({ error: "One or more questions are invalid" }, { status: 400 });
+  }
+  const validQuestions = sanitizedQuestions.filter((question): question is NonNullable<typeof question> => question !== null);
 
   try {
     const encodedDescription = formatExamDescription(description.trim(), {
@@ -78,7 +99,7 @@ export async function POST(
           createdById: auth.userId,
           title: title.trim(),
           description: encodedDescription || null,
-          questions: sanitizedQuestions,
+          questions: validQuestions,
           timeLimit: timeLimit ? Number(timeLimit) : null,
           passingScore: Number(passingScore) || 60,
           isPublished: true,

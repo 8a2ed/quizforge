@@ -1,4 +1,5 @@
 "use client";
+import { sanitizeTelegramHtmlPreview } from "@/lib/htmlPreview";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
@@ -85,7 +86,10 @@ export default function MessagesPage() {
   );
 
   const toggle = (id: string) => setSelected(prev => {
-    const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s;
+    const s = new Set(prev);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
+    return s;
   });
   const selectAll = () => setSelected(new Set(filtered.map(c => c.telegramId)));
   const selectNone = () => setSelected(new Set());
@@ -132,12 +136,7 @@ export default function MessagesPage() {
     }
   };
 
-  const previewHtml = text
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/&lt;b&gt;(.*?)&lt;\/b&gt;/g, "<b>$1</b>")
-    .replace(/&lt;i&gt;(.*?)&lt;\/i&gt;/g, "<i>$1</i>")
-    .replace(/&lt;code&gt;(.*?)&lt;\/code&gt;/g, "<code>$1</code>")
-    .replace(/\n/g, "<br/>");
+  const previewHtml = sanitizeTelegramHtmlPreview(text);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>

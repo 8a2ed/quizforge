@@ -44,7 +44,7 @@ export const INACTIVITY_GRACE_PERIOD_MS = 5 * 60 * 1000;
  * 2. If user is inactive >= INACTIVITY_SILENCE_MS (1 hour), sends a warning message with an interactive resume button.
  * 3. If user remains inactive after warning for >= INACTIVITY_GRACE_PERIOD_MS (5 minutes), marks as failed with partial score.
  */
-export async function checkAndExpireExamSessions(targetExamId?: string): Promise<ExamExpiryStats> {
+export async function checkAndExpireExamSessions(targetExamId?: string, targetGroupId?: string): Promise<ExamExpiryStats> {
   const stats: ExamExpiryStats = {
     checkedCount: 0,
     expiredCount: 0,
@@ -59,6 +59,7 @@ export async function checkAndExpireExamSessions(targetExamId?: string): Promise
         where: {
           score: -1,
           ...(targetExamId ? { examId: targetExamId } : {}),
+          ...(targetGroupId ? { exam: { groupId: targetGroupId } } : {}),
         },
         include: { exam: true },
       })

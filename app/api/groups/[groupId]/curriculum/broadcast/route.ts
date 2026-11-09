@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function checkAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -18,7 +19,7 @@ async function checkAuth(req: NextRequest, groupId: string) {
       })
     );
     if (!m || !m.approved) return null;
-    return { userId, group: m.group, botConfig: m.group.botConfig };
+    return { userId, group: m.group, botConfig: m.group.botConfig, role: m.role };
   } catch {
     return null;
   }
@@ -33,6 +34,9 @@ export async function POST(
   const auth = await checkAuth(req, groupId);
   if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (auth.role !== "OWNER" && auth.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const body = await req.json();

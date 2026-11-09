@@ -6,7 +6,7 @@ import Link from "next/link";
 
 interface BotConfig {
   id: string;
-  webhookSecret: string;
+  webhookSecretConfigured?: boolean;
   defaultAnonymous: boolean;
   defaultOpenPeriod: number;
   defaultType: string;
@@ -21,6 +21,7 @@ interface BotInfo {
 
 interface AISettingsData {
   geminiApiKey?: string;
+  hasApiKey?: boolean;
   defaultModel: string;
   defaultDifficulty: "mixed" | "easy" | "medium" | "hard";
   defaultCount: number;
@@ -189,7 +190,7 @@ export default function SettingsPage() {
           <div style={{ marginTop: "var(--space-4)", padding: "var(--space-3)", background: "var(--clr-bg-elevated)", borderRadius: "var(--radius-md)", fontSize: "0.8rem" }}>
             <span style={{ color: "var(--clr-text-muted)" }}>Webhook Secret: </span>
             <code style={{ color: "var(--clr-brand)", fontSize: "0.75rem" }}>
-              {config?.webhookSecret?.slice(0, 16)}…
+              {config?.webhookSecretConfigured ? "Configured" : "Not configured"}
             </code>
           </div>
         </div>
@@ -301,7 +302,7 @@ export default function SettingsPage() {
                 onChange={(e) => setAiSettings({ ...aiSettings, geminiApiKey: e.target.value })}
               />
               <div style={{ fontSize: "0.75rem", color: "var(--clr-text-muted)", marginTop: 4 }}>
-                {aiSettings.geminiApiKey ? "✅ مفتاح التوليد مضبوط ويعمل للنظام وتليجرام" : "⚠️ لم يتم إدخال مفتاح Gemini بعد"}
+                {aiSettings.geminiApiKey || aiSettings.hasApiKey ? "✅ مفتاح التوليد مضبوط ويعمل للنظام وتليجرام" : "⚠️ لم يتم إدخال مفتاح Gemini بعد"}
               </div>
             </div>
 
@@ -325,7 +326,7 @@ export default function SettingsPage() {
                 <select
                   className="select"
                   value={aiSettings.defaultDifficulty || "mixed"}
-                  onChange={(e) => setAiSettings({ ...aiSettings, defaultDifficulty: e.target.value as any })}
+                  onChange={(e) => setAiSettings({ ...aiSettings, defaultDifficulty: e.target.value as AISettingsData["defaultDifficulty"] })}
                 >
                   <option value="mixed">متوازن ومتدرج (Mixed)</option>
                   <option value="easy">سهل ومباشر (Easy)</option>

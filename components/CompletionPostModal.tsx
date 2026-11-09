@@ -1,4 +1,6 @@
 "use client";
+import { getErrorMessage } from "@/lib/errors";
+import { sanitizeTelegramHtmlPreview } from "@/lib/htmlPreview";
 
 import React, { useState, useEffect, useRef } from "react";
 import {
@@ -10,7 +12,6 @@ import {
   Trash2,
   ExternalLink,
   Sparkles,
-  HelpCircle,
   RotateCcw,
   Save,
   Check,
@@ -377,10 +378,10 @@ export default function CompletionPostModal({
         });
         showToast("error", data.error || "فشل إرسال البوست التجريبي");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setTestResult({
         ok: false,
-        msg: err.message || "خطأ أثناء محاولة الإرسال",
+        msg: getErrorMessage(err, "خطأ أثناء محاولة الإرسال"),
       });
       showToast("error", "خطأ في الشبكة أثناء إرسال البوست التجريبي");
     } finally {
@@ -1506,7 +1507,7 @@ export default function CompletionPostModal({
                       {draft.parseMode === "HTML" ? (
                         <div
                           dangerouslySetInnerHTML={{
-                            __html: previewText.replace(/\n/g, "<br/>"),
+                            __html: sanitizeTelegramHtmlPreview(previewText),
                           }}
                         />
                       ) : (

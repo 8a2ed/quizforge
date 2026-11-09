@@ -1,9 +1,11 @@
+import { getErrorMessage } from "@/lib/errors";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getAuthorizedUser(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -34,6 +36,9 @@ export async function POST(
   const { groupId } = await params;
   const auth = await getAuthorizedUser(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   try {
     const body = await req.json();
@@ -47,7 +52,7 @@ export async function POST(
     const errors: string[] = [];
 
     const globalCollectionIds: string[] = Array.isArray(body.collectionIds)
-      ? body.collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+      ? body.collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0)
       : body.collectionId && typeof body.collectionId === "string" && body.collectionId.trim().length > 0
       ? [body.collectionId.trim()]
       : [];
@@ -74,7 +79,7 @@ export async function POST(
           : [];
 
         const itemCollectionIds: string[] = Array.isArray(q.collectionIds) && q.collectionIds.length > 0
-          ? q.collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+          ? q.collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0)
           : q.collectionId && typeof q.collectionId === "string" && q.collectionId.trim().length > 0
           ? [q.collectionId.trim()]
           : globalCollectionIds;
@@ -255,8 +260,8 @@ export async function POST(
 
           try {
             message = await telegram.sendPoll(basePollPayload);
-          } catch (pollErr: any) {
-            if (basePollPayload.explanation_parse_mode && String(pollErr?.message || "").includes("parse entities")) {
+          } catch (pollErr: unknown) {
+            if (basePollPayload.explanation_parse_mode && getErrorMessage(pollErr, "").includes("parse entities")) {
               const fallbackPayload = { ...basePollPayload };
               delete fallbackPayload.explanation_parse_mode;
               message = await telegram.sendPoll(fallbackPayload);

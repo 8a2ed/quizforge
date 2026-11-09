@@ -1,3 +1,5 @@
+import { getAuthSecret } from "@/lib/auth";
+import { getApprovedGroupMember } from "@/lib/groupAuth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
@@ -17,7 +19,7 @@ export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getAuthorizedUser(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -33,10 +35,11 @@ async function getAuthorizedUser(req: NextRequest, groupId: string) {
         where: { userId_groupId: { userId, groupId } },
         include: { user: true },
       });
-      if (member && member.approved) {
-        userObj = member.user;
-      }
-    } catch {}
+      if (!member?.approved) return null;
+      userObj = member.user;
+    } catch {
+      return null;
+    }
 
     if (!userObj) {
       userObj = {
@@ -59,6 +62,11 @@ export async function POST(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
+  const membership = await getApprovedGroupMember(req, groupId);
+  if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const auth = await getAuthorizedUser(req, groupId);
   if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -71,8 +79,6 @@ export async function POST(
       customText,
       sectionId,
       topic,
-      questionCount = 5,
-      difficulty = "mixed",
       customInstructions,
     } = body;
 
@@ -94,7 +100,7 @@ export async function POST(
       materialTitle = material.title;
 
       if (sectionId && material.sections) {
-        const sec = material.sections.find((s: any) => s.id === sectionId);
+        const sec = material.sections.find((s: { id?: unknown }) => s.id === sectionId);
         if (sec) {
           textExcerpt = sec.content;
           materialTitle = `${material.title} (${sec.title})`;

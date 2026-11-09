@@ -1,3 +1,4 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
@@ -8,7 +9,7 @@ export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function checkAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -21,14 +22,15 @@ async function checkAuth(req: NextRequest, groupId: string) {
     try {
       const membership = await prisma.groupMember.findUnique({
         where: { userId_groupId: { userId, groupId } },
+        select: { approved: true, role: true },
       });
-      if (membership && membership.approved) {
+      if (membership?.approved && (membership.role === "OWNER" || membership.role === "ADMIN")) {
         return userId;
       }
     } catch {
-      // In offline / transient DB dev mode, fallback to payload sub
+      return null;
     }
-    return userId;
+    return null;
   } catch {
     return null;
   }
@@ -50,7 +52,7 @@ export async function POST(
     const { pages, startPage = 1, endPage = 1, apiKey: clientApiKey, documentTitle } = body;
 
     const validPages = (Array.isArray(pages) ? pages : []).filter(
-      (p: any) => typeof p === "string" && p.trim().length > 0
+      (p: unknown) => typeof p === "string" && p.trim().length > 0
     );
 
     if (validPages.length === 0) {
@@ -100,7 +102,7 @@ export async function POST(
       sections: result.sections,
       modelUsed: result.modelUsed,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[OCR Chunk Error]:", err);
     const msg = err instanceof Error ? err.message : String(err);
     const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");

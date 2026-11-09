@@ -77,7 +77,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           label: isRtl ? "لوحة التحكم" : "Dashboard",
           items: [
             { href: `/dashboard/${groupId}`,          icon: ICONS.home,     label: isRtl ? "نظرة عامة" : "Overview" },
-            { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,     label: isRtl ? "إنشاء كويز" : "Create Quiz" },
+            { href: `/dashboard/${groupId}/wizard`, icon: ICONS.quiz,     label: isRtl ? "إنشاء كويز" : "Create" },
             { href: `/dashboard/${groupId}/bulk`,     icon: ICONS.bulk,     label: isRtl ? "استيراد مجمع" : "Bulk Import" },
           ],
         },
@@ -85,7 +85,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           label: isRtl ? "التقييمات والمحتوى" : "Assessments & Content",
           items: [
             { href: `/dashboard/${groupId}/curriculum`, icon: ICONS.sparkles, label: isRtl ? "توليد المناهج بالذكاء الاصطناعي" : "AI Curriculum" },
-            { href: `/dashboard/${groupId}/wizard`,     icon: ICONS.sparkles, label: isRtl ? "المعالج الذكي" : "Quiz Wizard" },
             { href: `/dashboard/${groupId}/exams`,     icon: ICONS.exams,     label: isRtl ? "الاختبارات" : "Exams" },
             { href: `/dashboard/${groupId}/library`,   icon: ICONS.library,   label: isRtl ? "بنك الأسئلة" : "Library" },
             { href: `/dashboard/${groupId}/history`,   icon: ICONS.history,   label: isRtl ? "سجل الكويزات" : "History" },
@@ -117,8 +116,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const bottomTabs = groupId
     ? [
         { href: `/dashboard/${groupId}`,          icon: ICONS.home,    label: isRtl ? "الرئيسية" : "Overview" },
-        { href: `/dashboard/${groupId}/quiz/new`, icon: ICONS.quiz,    label: isRtl ? "إنشاء" : "Create"   },
-        { href: `/dashboard/${groupId}/wizard`,   icon: ICONS.sparkles, label: isRtl ? "المعالج" : "Wizard" },
+        { href: `/dashboard/${groupId}/wizard`, icon: ICONS.quiz,    label: isRtl ? "إنشاء" : "Create"   },
         { href: `/dashboard/${groupId}/exams`,    icon: ICONS.exams,   label: isRtl ? "اختبارات" : "Exams"    },
         { href: `/dashboard/${groupId}/library`,  icon: ICONS.library, label: isRtl ? "المكتبة" : "Library"  },
         { href: `/dashboard/${groupId}/history`,  icon: ICONS.history, label: isRtl ? "السجل" : "History"  },
@@ -186,7 +184,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`nav-item ${pathname === item.href ? "active" : ""}`}
+                    className={`nav-item ${(pathname === item.href || (item.href.endsWith("/wizard") && pathname.endsWith("/quiz/new"))) ? "active" : ""}`}
                     onClick={() => setMobileOpen(false)}
                   >
                     <Icon path={item.icon} />
@@ -285,11 +283,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </button>
 
               {groupId && (
-                <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-primary btn-sm">
+                <Link href={`/dashboard/${groupId}/wizard`} className="btn btn-primary btn-sm">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M12 5v14M5 12h14"/>
                   </svg>
-                  <span>{isRtl ? "كويز جديد" : "New Quiz"}</span>
+                  <span>{isRtl ? "كويز جديد" : "Create"}</span>
                 </Link>
               )}
               {user && (
@@ -316,7 +314,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Link
               key={tab.href}
               href={tab.href}
-              className={`bottom-tab-item ${pathname === tab.href ? "active" : ""}`}
+              className={`bottom-tab-item ${(pathname === tab.href || (tab.href.endsWith("/wizard") && pathname.endsWith("/quiz/new"))) ? "active" : ""}`}
             >
               <Icon path={tab.icon} />
               <span>{tab.label}</span>

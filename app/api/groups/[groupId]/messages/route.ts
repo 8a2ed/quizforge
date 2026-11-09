@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getUser(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
@@ -24,9 +25,14 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const membership = await withRetry(() =>
-    prisma.groupMember.findUnique({ where: { userId_groupId: { userId: user.sub, groupId } } })
+    prisma.groupMember.findUnique({
+      where: { userId_groupId: { userId: user.sub, groupId } },
+      select: { approved: true, role: true },
+    })
   );
-  if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   // Get users who have answered polls in this group (have a telegramId)
   const answerers = await withRetry(() =>
@@ -92,9 +98,14 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const membership = await withRetry(() =>
-    prisma.groupMember.findUnique({ where: { userId_groupId: { userId: user.sub, groupId } } })
+    prisma.groupMember.findUnique({
+      where: { userId_groupId: { userId: user.sub, groupId } },
+      select: { approved: true, role: true },
+    })
   );
-  if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json() as {
     recipients: string[];       // telegramIds

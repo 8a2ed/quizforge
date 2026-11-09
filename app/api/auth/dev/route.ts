@@ -1,8 +1,9 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { SignJWT } from "jose";
 import { prisma } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 // POST /api/auth/dev
 // Bypasses the Telegram Widget entirely (Localhost only)

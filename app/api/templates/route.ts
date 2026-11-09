@@ -1,8 +1,9 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getUser(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
@@ -73,15 +74,25 @@ export async function GET(req: NextRequest) {
     })
   );
 
-  let sentTemplateIds: string[] = [];
+  const sentTemplateIds: string[] = [];
   // Map from templateId -> { sentAt, count } for rich UI display
-  let sentInfo: Record<string, { sentAt: string; count: number }> = {};
+  const sentInfo: Record<string, { sentAt: string; count: number }> = {};
   const queryGroupId = req.nextUrl.searchParams.get("groupId");
 
   // Normalize text for robust matching: lowercase + collapse whitespace
   const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
   if (queryGroupId) {
+    const membership = await withRetry(() =>
+      prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId: user.sub, groupId: queryGroupId } },
+        select: { approved: true, role: true },
+      })
+    );
+    if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const sentQuizzes = await withRetry(() =>
       prisma.quiz.findMany({
         where: { groupId: queryGroupId, sentAt: { not: null }, deletedAt: null },
@@ -165,7 +176,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Maximum 10 options allowed." }, { status: 400 });
   }
 
-  const cleanOptions: string[] = options.map((o: any) => String(o || "").trim());
+  const cleanOptions: string[] = options.map((o: unknown) => String(o || "").trim());
   if (cleanOptions.some(o => !o)) {
     return NextResponse.json({ error: "Options cannot be empty." }, { status: 400 });
   }
@@ -211,7 +222,7 @@ export async function POST(req: NextRequest) {
 
   const sanitizedTags = Array.isArray(tags)
     ? tags
-        .map((t: any) => String(t || "").trim())
+        .map((t: unknown) => String(t || "").trim())
         .filter(Boolean)
         .slice(0, 20)
     : [];
@@ -245,7 +256,7 @@ export async function POST(req: NextRequest) {
 
   const savedCollectionIds: string[] = [];
   if (Array.isArray(collectionIds)) {
-    const validCids = collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0);
+    const validCids = collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0);
     if (validCids.length > 0) {
       await withRetry(() =>
         prisma.collectionQuiz.createMany({
@@ -287,7 +298,7 @@ export async function DELETE(req: NextRequest) {
     try {
       const body = await req.json();
       if (Array.isArray(body?.ids)) {
-        ids = body.ids.filter((id: any) => typeof id === "string" && id.trim().length > 0);
+        ids = body.ids.filter((id: unknown) => typeof id === "string" && id.trim().length > 0);
       }
     } catch {
       // Body might be empty or not JSON

@@ -12,25 +12,29 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
+if [ -z "$2" ]; then
+  echo "CRON_SECRET is required."
+  exit 1
+fi
+
 APP_URL=$1
 CRON_SECRET=$2
-CRON_ENDPOINT="$APP_URL/api/cron?secret=$CRON_SECRET"
+CRON_ENDPOINT="$APP_URL/api/cron"
 
 echo "Testing endpoint connection..."
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$CRON_ENDPOINT")
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $CRON_SECRET" "$CRON_ENDPOINT")
 
-if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ]; then
-  echo "✔ Endpoint reachable."
+if [ "$HTTP_STATUS" -eq 200 ]; then
+  echo "Endpoint reachable."
 else
-  echo "⚠️ Warning: Endpoint returned status $HTTP_STATUS"
+  echo "Endpoint returned status $HTTP_STATUS. Check APP_URL and CRON_SECRET."
+  exit 1
 fi
 
 # Add the cron job (Runs every minute)
-CRON_CMD="* * * * * curl -s \"$CRON_ENDPOINT\" > /dev/null 2>&1"
+CRON_CMD="* * * * * curl -s -H \"Authorization: Bearer $CRON_SECRET\" \"$CRON_ENDPOINT\" > /dev/null 2>&1"
 
 (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
 
 echo "✔ Cron job successfully installed!"
 echo "Your scheduled quizzes will now trigger exactly on time."
-echo "Active Command:"
-echo "$CRON_CMD"

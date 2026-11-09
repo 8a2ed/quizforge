@@ -1,10 +1,11 @@
-import { NextResponse, NextRequest } from "next/server";
+import { getAuthSecret } from "@/lib/auth";
+import { NextResponse } from "next/server";
 import { SignJWT } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   if (process.env.NODE_ENV !== "development") {
     return NextResponse.json({ error: "Only available in dev" }, { status: 403 });
   }
@@ -92,12 +93,12 @@ export async function GET(req: NextRequest) {
     });
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Dev Redirect Login error:", error);
     return new NextResponse(
       `<html><body style="background:#0f1420;color:#f87171;font-family:sans-serif;padding:2rem">
         <h2>Login Error</h2>
-        <p>${error.message}</p>
+        <p>Unable to create the local development session. Check the server logs.</p>
         <p>This usually means the database is waking up. <a href="/api/auth/dev-redirect" style="color:#4f7fff">Try again</a></p>
       </body></html>`,
       { status: 500, headers: { "Content-Type": "text/html" } }
