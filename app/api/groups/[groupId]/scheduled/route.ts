@@ -1,9 +1,11 @@
+import { getErrorMessage } from "@/lib/errors";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function authorize(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -28,6 +30,9 @@ export async function GET(
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const quizzes = await withRetry(() => prisma.quiz.findMany({
     where: { groupId, sentAt: null, scheduledAt: { not: null } },
@@ -62,6 +67,9 @@ export async function PATCH(
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id, scheduledAt, recurrence, topicId, topicName } = await req.json();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
@@ -87,6 +95,9 @@ export async function DELETE(
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id } = await req.json();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
@@ -106,6 +117,9 @@ export async function POST(
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json();
   const id = body?.id || body?.quizId;
@@ -193,8 +207,8 @@ export async function POST(
   try {
     try {
       tgMessage = await telegram.sendPoll(basePollPayload);
-    } catch (pollErr: any) {
-      if (basePollPayload.explanation_parse_mode && String(pollErr?.message || "").includes("parse entities")) {
+    } catch (pollErr: unknown) {
+      if (basePollPayload.explanation_parse_mode && getErrorMessage(pollErr, "").includes("parse entities")) {
         const fallbackPayload = { ...basePollPayload };
         delete fallbackPayload.explanation_parse_mode;
         tgMessage = await telegram.sendPoll(fallbackPayload);
@@ -202,7 +216,7 @@ export async function POST(
         throw pollErr;
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Revert sentAt lock on failure so it can be retried or sent by cron
     await withRetry(() => prisma.quiz.update({
       where: { id: quiz.id },

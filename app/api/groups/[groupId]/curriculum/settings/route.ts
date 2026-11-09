@@ -1,18 +1,25 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
+import { prisma } from "@/lib/db";
 import { getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate } from "@/lib/aiStorage";
 import { DEFAULT_GEMINI_MODEL, normalizeModelName } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
-async function checkAuth(req: NextRequest) {
+async function checkAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return (payload as { sub: string }).sub;
+    if (typeof payload.sub !== "string") return null;
+    const membership = await prisma.groupMember.findUnique({
+      where: { userId_groupId: { userId: payload.sub, groupId } },
+      select: { role: true, approved: true },
+    });
+    return membership?.approved ? { userId: payload.sub, role: membership.role } : null;
   } catch {
     return null;
   }
@@ -24,21 +31,19 @@ export async function GET(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const auth = await checkAuth(req, groupId);
+  if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const settings = await getGroupAISettings(groupId);
-  const rawKey = settings.geminiApiKey || "";
+  const { geminiApiKey, ...publicSettings } = settings;
 
   return NextResponse.json({
     settings: {
-      ...settings,
-      geminiApiKey: rawKey,
+      ...publicSettings,
       defaultModel: settings.defaultModel || DEFAULT_GEMINI_MODEL,
-      hasApiKey: !!rawKey,
-      maskedApiKey: rawKey,
+      hasApiKey: Boolean(geminiApiKey),
     },
   });
 }
@@ -49,9 +54,12 @@ export async function PATCH(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const auth = await checkAuth(req, groupId);
+  if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (auth.role !== "OWNER" && auth.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const body = await req.json();
@@ -71,16 +79,14 @@ export async function PATCH(
   if (body.systemInstruction !== undefined) updates.systemInstruction = String(body.systemInstruction);
 
   const updated = await updateGroupAISettings(groupId, updates);
-  const rawKey = updated.geminiApiKey || "";
+  const { geminiApiKey, ...publicSettings } = updated;
 
   return NextResponse.json({
     success: true,
     message: "تم حفظ إعدادات الذكاء الاصطناعي بنجاح!",
     settings: {
-      ...updated,
-      geminiApiKey: rawKey,
-      hasApiKey: !!rawKey,
-      maskedApiKey: rawKey,
+      ...publicSettings,
+      hasApiKey: Boolean(geminiApiKey),
     },
   });
 }

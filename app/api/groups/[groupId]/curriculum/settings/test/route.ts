@@ -1,20 +1,8 @@
+import { getApprovedGroupMember } from "@/lib/groupAuth";
 import { NextRequest, NextResponse } from "next/server";
-import { jwtVerify } from "jose";
 import { getGroupAISettings, updateGroupAISettings, isValidApiKeyCandidate } from "@/lib/aiStorage";
 import { testGeminiConnection, DEFAULT_GEMINI_MODEL } from "@/lib/gemini";
-
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
-
-async function checkAuth(req: NextRequest) {
-  const token = req.cookies.get("qf_session")?.value;
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
-    return (payload as { sub: string }).sub;
-  } catch {
-    return null;
-  }
-}
+import { readJsonObject } from "@/lib/http";
 
 // POST /api/groups/[groupId]/curriculum/settings/test
 export async function POST(
@@ -22,14 +10,19 @@ export async function POST(
   { params }: { params: Promise<{ groupId: string }> }
 ) {
   const { groupId } = await params;
-  const userId = await checkAuth(req);
-  if (!userId) {
+  const membership = await getApprovedGroupMember(req, groupId);
+  if (!membership) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
-  const body = await req.json().catch(() => ({}));
-  let apiKey = body.apiKey ? String(body.apiKey).trim() : "";
-  const model = body.model ? String(body.model).trim() : DEFAULT_GEMINI_MODEL;
+  const body = await readJsonObject(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const model = typeof body.model === "string" ? body.model.trim() : DEFAULT_GEMINI_MODEL;
+  if (model.length > 120) return NextResponse.json({ error: "Invalid model name" }, { status: 400 });
 
   // If user passed placeholder or invalid candidate, read from saved group settings
   if (!isValidApiKeyCandidate(apiKey)) {
@@ -49,7 +42,7 @@ export async function POST(
     );
   }
 
-  const autoSave = Boolean(body.autoSave);
+  const autoSave = body.autoSave === true;
   const result = await testGeminiConnection(apiKey, model);
 
   // If connection succeeded and either autoSave was requested (e.g. from Auto-detect Models)

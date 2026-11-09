@@ -1,3 +1,4 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
@@ -6,7 +7,7 @@ import { telegram } from "@/lib/telegram";
 import { parseExamConfig, formatExamDescription } from "@/lib/examConfig";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_USERNAME = (process.env.NEXT_PUBLIC_BOT_USERNAME || "").replace(/^@/, "");
 
@@ -75,6 +76,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ grou
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   // Sweep and finalize any overdue or inactive sessions before listing
   await checkAndExpireExamSessions().catch((e) => console.error("[exams/GET] checkAndExpire error:", e));
@@ -106,6 +110,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ gro
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json();
   const { title, description, questions, timeLimit, passingScore, topicId, topicName, shuffleQuestions, shuffleOptions, showSolutionsImmediately, maxAttempts } = body;
@@ -308,6 +315,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ gr
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json();
   const {
@@ -421,6 +431,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ g
   const { groupId } = await params;
   const auth = await authorize(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id } = await req.json();
   await withRetry(() => prisma.exam.deleteMany({ where: { id, groupId } }));

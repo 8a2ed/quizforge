@@ -3,16 +3,9 @@ import { prisma, dbPing } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
+import { safeSecretEquals } from "@/lib/crypto";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-async function tgCall(method: string, body: Record<string, unknown>) {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
 
 /**
  * GET /api/cron
@@ -22,19 +15,17 @@ async function tgCall(method: string, body: Record<string, unknown>) {
  * 3. Detects quizzes deleted from Telegram (stopPoll → message not found → mark deletedAt)
  */
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("Authorization");
-  const urlParams = new URL(req.url).searchParams;
-  const cronSecret = process.env.CRON_SECRET || "changeme";
-  const token = authHeader?.split("Bearer ")[1] || urlParams.get("secret");
-  if (token !== cronSecret) {
+  const cronSecret = process.env.CRON_SECRET;
+  const token = /^Bearer\s+(\S+)$/i.exec(req.headers.get("authorization") || "")?.[1];
+  if (!safeSecretEquals(token, cronSecret)) {
     // ── 3. Check and expire overdue/inactive exam sessions ───────────────────
-    try {
-      await checkAndExpireExamSessions();
-    } catch (e) {
-      console.error("[Cron] checkAndExpireExamSessions error:", e);
-    }
-
     return NextResponse.json({ error: "Unauthorized / Missing CRON_SECRET" }, { status: 401 });
+  }
+
+  try {
+    await checkAndExpireExamSessions();
+  } catch (error) {
+    console.error("[Cron] checkAndExpireExamSessions error:", error);
   }
 
   await dbPing().catch(() => {});

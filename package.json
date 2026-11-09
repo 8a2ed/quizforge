@@ -8,6 +8,7 @@
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "eslint",
+    "test:exam-answer-flow": "tsx scripts/test-exam-answer-flow.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",

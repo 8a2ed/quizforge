@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useDirection } from "@/lib/useDirection";
 import {
@@ -175,6 +175,7 @@ function saveUserMaterialsToStorage(gid: string, mats: CurriculumMaterial[]) {
 export default function CurriculumPage() {
   const { groupId } = useParams<{ groupId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isRtl } = useDirection();
 
   // Active Tab: "generate" | "materials" | "analytics" | "settings"
@@ -190,6 +191,7 @@ export default function CurriculumPage() {
 
   // ── Generation Tab State ──
   const [sourceMode, setSourceMode] = useState<"material" | "direct">("material");
+  const [creationOutput, setCreationOutput] = useState<"quiz" | "exam">(() => searchParams.get("output") === "exam" ? "exam" : "quiz");
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>("");
   const [selectedSectionId, setSelectedSectionId] = useState<string>("");
   const [directText, setDirectText] = useState<string>("");
@@ -408,16 +410,12 @@ export default function CurriculumPage() {
         if (d.settings?.defaultDifficulty) setGenDifficulty(d.settings.defaultDifficulty);
 
         const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-        const serverKey = d.settings?.geminiApiKey;
-
-        const validServerKey = isValidApiKey(serverKey) ? serverKey!.trim() : null;
         const validLocalKey = isValidApiKey(localKey) ? localKey!.trim() : null;
-        const activeKey = validServerKey || validLocalKey;
+        try { localStorage.removeItem("gemini_api_key"); } catch {}
 
-        if (activeKey) {
-          setApiKeyInput(activeKey);
-          try { localStorage.setItem("gemini_api_key", activeKey); } catch {}
-          if (!d.settings?.hasApiKey && validLocalKey) {
+        if (validLocalKey) {
+          setApiKeyInput(validLocalKey);
+          if (!d.settings?.hasApiKey) {
             fetch(`/api/groups/${groupId}/curriculum/settings`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
@@ -525,8 +523,7 @@ export default function CurriculumPage() {
         model: settings?.defaultModel || "gemini-3.8-flash",
       };
 
-      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
+      const keyToSend = isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null;
       if (keyToSend) {
         payload.apiKey = keyToSend;
       }
@@ -806,14 +803,27 @@ export default function CurriculumPage() {
       if (!res.ok) throw new Error(data?.error || "Failed to broadcast");
 
       setShowBroadcastModal(false);
-      showToast(
-        "success",
-        data?.message || (
+      const sentCount = Number(data?.successCount) || 0;
+      const failedCount = Math.max(0, selectedQuestions.length - sentCount);
+      if (failedCount > 0) {
+        const firstFailure = Array.isArray(data?.results)
+          ? data.results.find((item: { success?: boolean }) => item.success === false)
+          : null;
+        const detail = typeof firstFailure?.error === "string" ? " " + firstFailure.error : "";
+        showToast(
+          sentCount > 0 ? "info" : "error",
           isRtl
-            ? `تمت معالجة ${data?.successCount || selectedQuestions.length} سؤال بنجاح!`
-            : `Processed ${data?.successCount || selectedQuestions.length} questions successfully!`
-        )
-      );
+            ? "تم إرسال " + sentCount + " من " + selectedQuestions.length + " سؤال. تعذر إرسال " + failedCount + "." + detail
+            : "Sent " + sentCount + " of " + selectedQuestions.length + " questions. " + failedCount + " failed." + detail
+        );
+      } else {
+        showToast(
+          "success",
+          isRtl
+            ? "تم إرسال " + sentCount + " سؤال إلى Telegram بنجاح."
+            : "Sent " + sentCount + " questions to Telegram successfully."
+        );
+      }
     } catch (e: any) {
       showToast("error", e.message || "Failed to broadcast");
     } finally {
@@ -879,8 +889,7 @@ export default function CurriculumPage() {
     }
 
     const sizeMb = (activeFile.size / (1024 * 1024)).toFixed(1);
-    const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-    const keyToSend = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : null);
+    const keyToSend = isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null;
 
     // Architectural solution for Vercel 4.5MB Serverless Function payload limit:
     // Extract clean text & chapters directly in the browser using native Web APIs.
@@ -1602,9 +1611,6 @@ export default function CurriculumPage() {
 
       if (isCandidateValid) {
         payload.geminiApiKey = trimmedKey;
-        try {
-          localStorage.setItem("gemini_api_key", trimmedKey);
-        } catch {}
       }
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings`, {
@@ -1619,10 +1625,7 @@ export default function CurriculumPage() {
       if (!res.ok) throw new Error(data?.error || (isRtl ? `فشل حفظ الإعدادات (${res.status})` : "Failed to save settings"));
 
       setSettings(data.settings);
-      if (data.settings?.geminiApiKey && isValidApiKey(data.settings.geminiApiKey)) {
-        setApiKeyInput(data.settings.geminiApiKey);
-        try { localStorage.setItem("gemini_api_key", data.settings.geminiApiKey); } catch {}
-      } else if (payload.geminiApiKey) {
+      if (payload.geminiApiKey) {
         setApiKeyInput(payload.geminiApiKey);
       }
       showToast("success", isRtl ? "تم حفظ إعدادات الذكاء الاصطناعي بنجاح!" : "AI Settings saved!");
@@ -1637,8 +1640,7 @@ export default function CurriculumPage() {
     setTestingKey(true);
     setTestResult(null);
     try {
-      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      const keyToTest = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : undefined);
+      const keyToTest = isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : undefined;
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
@@ -1669,11 +1671,6 @@ export default function CurriculumPage() {
       }
 
       if (data?.success) {
-        if (isValidApiKey(apiKeyInput)) {
-          try {
-            localStorage.setItem("gemini_api_key", apiKeyInput.trim());
-          } catch {}
-        }
         if (data.activeModel) {
           setSettings((prev) => (prev ? { ...prev, defaultModel: data.activeModel, hasApiKey: true } : null));
           if (data.fallbackUsed) {
@@ -1699,8 +1696,7 @@ export default function CurriculumPage() {
   const handleAutoDetectModels = async () => {
     setDetectingModels(true);
     try {
-      const localKey = typeof window !== "undefined" ? localStorage.getItem("gemini_api_key") : null;
-      const keyToUse = (isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : null) || (isValidApiKey(localKey) ? localKey!.trim() : undefined);
+      const keyToUse = isValidApiKey(apiKeyInput) ? apiKeyInput.trim() : undefined;
 
       const res = await fetch(`/api/groups/${groupId}/curriculum/settings/test`, {
         method: "POST",
@@ -1914,8 +1910,23 @@ export default function CurriculumPage() {
       ═══════════════════════════════════════════════════════════ */}
       {activeTab === "generate" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+          <section className="curriculum-output-choice" aria-label={isRtl ? "نوع المحتوى" : "Creation output"}>
+            <div>
+              <strong>{isRtl ? "اختر وجهة الأسئلة قبل التوليد" : "Choose where the questions will go"}</strong>
+              <p>{isRtl ? "يمكنك تغيير الاختيار بعد مراجعة الأسئلة أيضاً." : "You can change this after reviewing the generated questions."}</p>
+            </div>
+            <div className="curriculum-output-choice__buttons">
+              <button type="button" className={`btn ${creationOutput === "quiz" ? "btn-brand" : "btn-ghost"}`} aria-pressed={creationOutput === "quiz"} onClick={() => setCreationOutput("quiz")}>
+                <Send size={17} />{isRtl ? "كويز Telegram" : "Telegram Quiz"}
+              </button>
+              <button type="button" className={`btn ${creationOutput === "exam" ? "btn-brand" : "btn-ghost"}`} aria-pressed={creationOutput === "exam"} onClick={() => setCreationOutput("exam")}>
+                <GraduationCap size={18} />{isRtl ? "اختبار متكامل" : "Full Exam"}
+              </button>
+            </div>
+          </section>
+
           {/* Missing API Key Alert */}
-          {(!settings?.hasApiKey && !(typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && !process.env.NEXT_PUBLIC_DEV_KEY && (
+          {(!settings?.hasApiKey && !isValidApiKey(apiKeyInput)) && !process.env.NEXT_PUBLIC_DEV_KEY && (
             <div
               style={{
                 background: "rgba(245, 158, 11, 0.12)",
@@ -1957,7 +1968,7 @@ export default function CurriculumPage() {
           )}
 
           {/* Persistent Key Active Indicator */}
-          {(settings?.hasApiKey || (typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && (
+          {(settings?.hasApiKey || isValidApiKey(apiKeyInput)) && (
             <div
               style={{
                 background: "rgba(16, 185, 129, 0.08)",
@@ -2334,7 +2345,8 @@ export default function CurriculumPage() {
                     <Save size={16} />
                     <span>{isRtl ? "حفظ في بنك الأسئلة" : "Save to Library"}</span>
                   </button>
-                  <button
+                  {creationOutput === "exam" && (
+                    <button
                     type="button"
                     onClick={handleOpenExamModal}
                     disabled={selectedQuestions.length === 0}
@@ -2342,9 +2354,11 @@ export default function CurriculumPage() {
                     style={{ gap: 6 }}
                   >
                     <GraduationCap size={16} />
-                    <span>{isRtl ? "إنشاء اختبار متكامل" : "Create Exam"}</span>
-                  </button>
-                  <button
+                    <span>{isRtl ? "إنشاء اختبار متكامل" : "Create full exam"}</span>
+                    </button>
+                  )}
+                  {creationOutput === "quiz" && (
+                    <button
                     type="button"
                     onClick={() => setShowBroadcastModal(true)}
                     disabled={selectedQuestions.length === 0}
@@ -2352,8 +2366,9 @@ export default function CurriculumPage() {
                     style={{ gap: 6, background: "var(--clr-success)", color: "#fff" }}
                   >
                     <Send size={16} />
-                    <span>{isRtl ? "نشر فوري في تليجرام" : "Broadcast Telegram"}</span>
-                  </button>
+                    <span>{isRtl ? "إعداد وإرسال كويز Telegram" : "Configure Telegram quiz"}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -3572,7 +3587,7 @@ export default function CurriculumPage() {
             </p>
 
             {/* Persistent Key Active Indicator */}
-            {(settings?.hasApiKey || (typeof window !== "undefined" && isValidApiKey(localStorage.getItem("gemini_api_key")))) && (
+            {(settings?.hasApiKey || isValidApiKey(apiKeyInput)) && (
               <div
                 style={{
                   background: "rgba(16, 185, 129, 0.1)",

@@ -1,9 +1,11 @@
+import { getErrorMessage } from "@/lib/errors";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getAuthorizedUser(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -96,6 +98,9 @@ export async function POST(
   const { groupId } = await params;
   const auth = await getAuthorizedUser(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   try {
     const body: PostRequestBody = await req.json();
@@ -204,9 +209,9 @@ export async function POST(
             disable_notification: disableNotification,
           });
           messageId = res.message_id;
-        } catch (photoErr: any) {
+        } catch (photoErr: unknown) {
           // If parse mode entity error, retry without parse_mode
-          if (parseMode && String(photoErr?.message || "").includes("parse entities")) {
+          if (parseMode && getErrorMessage(photoErr, "").includes("parse entities")) {
             const res = await telegram.sendPhotoBase64({
               chat_id: chatId,
               message_thread_id: topicId,
@@ -233,8 +238,8 @@ export async function POST(
             disable_notification: disableNotification,
           });
           messageId = res.message_id;
-        } catch (photoErr: any) {
-          if (parseMode && String(photoErr?.message || "").includes("parse entities")) {
+        } catch (photoErr: unknown) {
+          if (parseMode && getErrorMessage(photoErr, "").includes("parse entities")) {
             const res = await telegram.sendPhoto({
               chat_id: chatId,
               message_thread_id: topicId,
@@ -261,8 +266,8 @@ export async function POST(
           disable_notification: disableNotification,
         });
         messageId = res.message_id;
-      } catch (msgErr: any) {
-        if (parseMode && String(msgErr?.message || "").includes("parse entities")) {
+      } catch (msgErr: unknown) {
+        if (parseMode && getErrorMessage(msgErr, "").includes("parse entities")) {
           const res = await telegram.sendMessage({
             chat_id: chatId,
             message_thread_id: topicId,
@@ -288,7 +293,7 @@ export async function POST(
     if (body.pinMessage && messageId) {
       try {
         pinned = await telegram.pinChatMessage(chatId, messageId, disableNotification);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn("[Post Send] Pinning message failed:", err instanceof Error ? err.message : err);
         pinError = err instanceof Error ? err.message : "Pinning not permitted";
       }
@@ -302,7 +307,7 @@ export async function POST(
       chatTitle: groupTitle,
       processedText: text,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[Post Send Error]", err);
     const msg = err instanceof Error ? err.message : "Internal Server Error";
     return NextResponse.json({ error: msg }, { status: 500 });

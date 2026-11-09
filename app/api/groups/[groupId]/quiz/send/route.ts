@@ -1,9 +1,11 @@
+import { getErrorMessage } from "@/lib/errors";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram, TelegramApiError } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getAuthorizedUser(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -29,6 +31,9 @@ export async function POST(
   const { groupId } = await params;
   const auth = await getAuthorizedUser(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json();
   const {
@@ -152,7 +157,7 @@ export async function POST(
     }));
 
     const targetCids: string[] = Array.isArray(collectionIds)
-      ? collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+      ? collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0)
       : collectionId && typeof collectionId === "string" && collectionId.trim().length > 0
       ? [collectionId.trim()]
       : [];
@@ -225,9 +230,9 @@ export async function POST(
   try {
     try {
       message = await telegram.sendPoll(basePollPayload);
-    } catch (pollErr: any) {
+    } catch (pollErr: unknown) {
       // If Telegram failed due to unescaped HTML tags in explanation, retry as plain text
-      if (basePollPayload.explanation_parse_mode && String(pollErr?.message || "").includes("parse entities")) {
+      if (basePollPayload.explanation_parse_mode && getErrorMessage(pollErr, "").includes("parse entities")) {
         const fallbackPayload = { ...basePollPayload };
         delete fallbackPayload.explanation_parse_mode;
         message = await telegram.sendPoll(fallbackPayload);
@@ -272,7 +277,7 @@ export async function POST(
   }));
 
   const targetCids: string[] = Array.isArray(collectionIds)
-    ? collectionIds.filter((cid: any) => typeof cid === "string" && cid.trim().length > 0)
+    ? collectionIds.filter((cid: unknown) => typeof cid === "string" && cid.trim().length > 0)
     : collectionId && typeof collectionId === "string" && collectionId.trim().length > 0
     ? [collectionId.trim()]
     : [];

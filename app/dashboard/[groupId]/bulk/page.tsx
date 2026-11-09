@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   FileText, UploadCloud, LayoutList, CheckCircle2, 
   Settings2, Copy, AlertCircle, Trash2, Sparkles,
-  PlusCircle, ChevronDown, ChevronUp
+  PlusCircle, ChevronDown, ChevronUp, GraduationCap
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as mammoth from "mammoth";
@@ -78,17 +78,19 @@ function validate(p: Partial<QuizPreview>): string[] {
   if (!q) e.push("Question is missing");
   else if (q.length > 300) e.push(`Question exceeds 300 chars (${q.length}/300)`);
 
-  const cleanOpts = (p.options || []).map(o => o.trim()).filter(Boolean);
-  if (cleanOpts.length < 2) e.push("Need at least 2 options");
-  else if (cleanOpts.length > 10) e.push("Max 10 options allowed by Telegram");
+  const cleanOpts = (p.options || []).map(o => o.trim());
+  const nonEmptyOptions = cleanOpts.filter(Boolean);
+  if (nonEmptyOptions.length < 2) e.push("Need at least 2 options");
+  if (nonEmptyOptions.length !== cleanOpts.length) e.push("Options cannot be empty");
+  if (cleanOpts.length > 10) e.push("Max 10 options allowed by Telegram");
 
   if (cleanOpts.some(o => o.length > 100)) e.push("Each option must be 100 characters or less");
 
-  const lower = cleanOpts.map(o => o.toLowerCase());
+  const lower = nonEmptyOptions.map(o => o.toLowerCase());
   if (new Set(lower).size !== lower.length) e.push("Options must be unique (duplicate answers found)");
 
   if (p.type === "quiz") {
-    if (p.correctOptionId === undefined || p.correctOptionId === null || p.correctOptionId < 0 || p.correctOptionId >= cleanOpts.length) {
+    if (p.correctOptionId === undefined || p.correctOptionId === null || p.correctOptionId < 0 || p.correctOptionId >= cleanOpts.length || !cleanOpts[p.correctOptionId]) {
       e.push("Quiz needs a valid correct answer");
     }
   }
@@ -615,12 +617,15 @@ function parseCSV(text: string, topicsList: Topic[] = [], collectionsList: Colle
 export default function BulkPage() {
   const { groupId } = useParams() as { groupId: string };
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const [creationTarget, setCreationTarget] = useState<"quiz" | "exam">(() => searchParams.get("target") === "exam" ? "exam" : "quiz");
   const [mode, setMode] = useState<"smart" | "file">("smart");
   const [rawText, setRawText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [queue, setQueue] = useState<QuizPreview[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [preparingExam, setPreparingExam] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; processed?: number; errors?: string[] } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "info" | "error"; msg: string } | null>(null);
@@ -1131,6 +1136,23 @@ export default function BulkPage() {
 
   const updateItem = (id: string, updates: Partial<QuizPreview>) => setQueue(prev => prev.map(p => p.id === id ? { ...p, ...updates, errors: validate({ ...p, ...updates }) } : p));
   const deleteItem = (id: string) => setQueue(prev => prev.filter(p => p.id !== id));
+  const removeOptionFromItem = (itemId: string, optionIndex: number) => {
+    const item = queue.find((candidate) => candidate.id === itemId);
+    if (!item) return;
+
+    const correctOptionId = typeof item.correctOptionId !== "number"
+      ? item.correctOptionId
+      : item.correctOptionId === optionIndex
+        ? null
+        : item.correctOptionId > optionIndex
+          ? item.correctOptionId - 1
+          : item.correctOptionId;
+
+    updateItem(itemId, {
+      options: item.options.filter((_, index) => index !== optionIndex),
+      correctOptionId,
+    });
+  };
 
 
   // ── Convert valid quiz questions to Exam ─────────────────────────────────
@@ -1149,10 +1171,12 @@ export default function BulkPage() {
       explanation: q.explanation || undefined,
     }));
     try {
+      setPreparingExam(true);
       sessionStorage.setItem("exam-draft-from-bulk", JSON.stringify(examQuestions));
       notify("success", `تم تجهيز ${examQuestions.length} سؤال لإنشاء الامتحان...`);
       setTimeout(() => router.push(`/dashboard/${groupId}/exams?fromBulk=1`), 500);
     } catch (e) {
+      setPreparingExam(false);
       notify("error", "فشل حفظ الأسئلة في الذاكرة المؤقتة. حاول مرة أخرى.");
     }
   }, [queue, groupId, router]);
@@ -1181,6 +1205,7 @@ export default function BulkPage() {
           <button
             type="button"
             onClick={() => setShowCompletionPostModal(true)}
+            disabled={uploading || preparingExam}
             className="btn btn-ghost"
             style={{
               border: completionPostConfig.enabled ? "1px solid var(--clr-brand)" : "1px solid var(--clr-border)",
@@ -1199,9 +1224,26 @@ export default function BulkPage() {
             </span>
           </button>
           <Link href={`/dashboard/${groupId}/library`} className="btn btn-ghost"><LayoutList size={16} /> Library</Link>
-          <Link href={`/dashboard/${groupId}/quiz/new`} className="btn btn-ghost"><PlusCircle size={16} /> New Quiz</Link>
+          <Link href={`/dashboard/${groupId}/wizard`} className="btn btn-ghost"><PlusCircle size={16} /> Create</Link>
         </div>
       </div>
+
+      <section className="bulk-destination" aria-label="Choose what to create">
+        <div className="bulk-destination__heading">
+          <strong>{creationTarget === "exam" ? "Exam workflow" : "Telegram quiz workflow"}</strong>
+          <span>{creationTarget === "exam"
+            ? "Valid questions with a correct answer will be moved into the exam editor. Opinion polls are excluded."
+            : "Questions will be reviewed, saved to the library, or sent to Telegram with the selected quiz or poll behavior."}</span>
+        </div>
+        <div className="bulk-destination__choices">
+          <button type="button" disabled={uploading || preparingExam} className={`bulk-destination__choice ${creationTarget === "quiz" ? "is-selected" : ""}`} aria-pressed={creationTarget === "quiz"} onClick={() => setCreationTarget("quiz")}>
+            <Sparkles size={18} /><span><strong>Telegram Quiz / Poll</strong><small>Send or save imported questions</small></span>
+          </button>
+          <button type="button" disabled={uploading || preparingExam} className={`bulk-destination__choice ${creationTarget === "exam" ? "is-selected" : ""}`} aria-pressed={creationTarget === "exam"} onClick={() => setCreationTarget("exam")}>
+            <GraduationCap size={20} /><span><strong>Full exam</strong><small>Continue with answerable quiz questions</small></span>
+          </button>
+        </div>
+      </section>
 
       <div className="card" style={{ padding: "1.5rem", border: "1px solid var(--clr-border)", borderRadius: "16px", background: "var(--clr-bg-surface)" }}>
         <div style={{ display: "flex", gap: "1rem", marginBottom: "1.5rem", borderBottom: "1px solid var(--clr-border)", paddingBottom: "1rem" }}>
@@ -1523,6 +1565,7 @@ export default function BulkPage() {
                   gap: 6,
                 }}
                 onClick={() => setShowCompletionPostModal(true)}
+                disabled={uploading || preparingExam}
                 title="تخصيص بوست الختام التلقائي بعد إرسال الكويزات"
               >
                 <span>📢 بوست الختام:</span>
@@ -1531,7 +1574,7 @@ export default function BulkPage() {
                 </span>
               </button>
               <button
-                className="btn btn-ghost btn-sm"
+                className={`btn btn-sm ${creationTarget === "exam" ? "btn-primary" : "btn-ghost"}`}
                 style={{
                   border: "1px solid var(--clr-brand)",
                   color: "var(--clr-brand)",
@@ -1542,15 +1585,16 @@ export default function BulkPage() {
                 }}
                 onClick={handleConvertToExam}
                 title="تحويل الأسئلة الصالحة إلى امتحان جديد"
-                disabled={queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length === 0}
+                disabled={uploading || preparingExam || queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length === 0}
               >
-                🎓 تحويل إلى امتحان ({queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length})
+                <GraduationCap size={16} />
+                {preparingExam ? "Opening exam editor…" : creationTarget === "exam" ? "Create exam (" + queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length + ")" : "Prepare exam (" + queue.filter(q => q.type === "quiz" && (!q.errors || q.errors.length === 0)).length + ")"}
               </button>
-              <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={() => setQueue([])}>Clear</button>
-              <button className="btn btn-secondary" onClick={() => handleSend("save")} disabled={uploading}>📁 Save</button>
-              <button className="btn btn-primary" onClick={() => handleSend("send")} disabled={uploading || queue.filter(q => !q.errors?.length).length === 0}>
+              <button className="btn btn-ghost" style={{ color: "var(--clr-danger)" }} onClick={() => setQueue([])} disabled={uploading || preparingExam}>Clear</button>
+              <button className="btn btn-secondary" onClick={() => handleSend("save")} disabled={uploading || preparingExam}>📁 Save to library</button>
+              {creationTarget === "quiz" && <button className="btn btn-primary" onClick={() => handleSend("send")} disabled={uploading || preparingExam || queue.filter(q => !q.errors?.length).length === 0}>
                 {uploading && progress ? `🚀 جارٍ الإرسال (${progress.current}/${progress.total})` : `🚀 Send (${queue.filter(q => !q.errors?.length).length})`}
-              </button>
+              </button>}
             </div>
           </div>
           
@@ -1587,25 +1631,25 @@ export default function BulkPage() {
                       {hasErr && <div style={{ marginTop: "8px", fontSize: "0.85rem", color: "var(--clr-danger)" }}>{p.errors?.join(" • ")}</div>}
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(isEditing ? null : p.id)}>{isEditing ? "Done" : "Edit"}</button>
-                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)" }} onClick={() => deleteItem(p.id)}><Trash2 size={16} /></button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(isEditing ? null : p.id)} disabled={uploading || preparingExam}>{isEditing ? "Done" : "Edit"}</button>
+                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--clr-danger)" }} onClick={() => deleteItem(p.id)} disabled={uploading || preparingExam}><Trash2 size={16} /></button>
                     </div>
                   </div>
                   
                   {isEditing && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--clr-border)", display: "flex", flexDirection: "column", gap: "1rem" }}>
-                      <textarea className="input" rows={2} value={p.question} onChange={e => updateItem(p.id, { question: e.target.value })} placeholder="Question text" />
+                      <textarea className="input" rows={2} value={p.question} onChange={e => updateItem(p.id, { question: e.target.value })} placeholder="Question text" disabled={uploading || preparingExam} />
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                         {p.options.map((opt, oIdx) => (
                           <div key={oIdx} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                            {p.type === "quiz" && <input type="radio" checked={p.correctOptionId === oIdx} onChange={() => updateItem(p.id, { correctOptionId: oIdx })} style={{ width: "1.2rem", height: "1.2rem" }} />}
-                            <input className="input" value={opt} onChange={e => { const opts = [...p.options]; opts[oIdx] = e.target.value; updateItem(p.id, { options: opts }); }} style={{ flex: 1 }} />
-                            <button className="btn btn-ghost btn-sm text-danger" onClick={() => updateItem(p.id, { options: p.options.filter((_, i) => i !== oIdx) })}>✕</button>
+                            {p.type === "quiz" && <input type="radio" checked={p.correctOptionId === oIdx} onChange={() => updateItem(p.id, { correctOptionId: oIdx })} style={{ width: "1.2rem", height: "1.2rem" }} disabled={uploading || preparingExam} />}
+                            <input className="input" value={opt} onChange={e => { const opts = [...p.options]; opts[oIdx] = e.target.value; updateItem(p.id, { options: opts }); }} style={{ flex: 1 }} disabled={uploading || preparingExam} />
+                            <button className="btn btn-ghost btn-sm text-danger" aria-label={`Remove option ${oIdx + 1}`} onClick={() => removeOptionFromItem(p.id, oIdx)} disabled={uploading || preparingExam}>✕</button>
                           </div>
                         ))}
-                        {p.options.length < 10 && <button className="btn btn-secondary btn-sm" style={{ alignSelf: "flex-start" }} onClick={() => updateItem(p.id, { options: [...p.options, ""] })}>+ Add Option</button>}
+                        {p.options.length < 10 && <button className="btn btn-secondary btn-sm" style={{ alignSelf: "flex-start" }} onClick={() => updateItem(p.id, { options: [...p.options, ""] })} disabled={uploading || preparingExam}>+ Add Option</button>}
                       </div>
-                      {p.type === "quiz" && <input className="input" value={p.explanation || ""} onChange={e => updateItem(p.id, { explanation: e.target.value })} placeholder="Explanation (optional)" />}
+                      {p.type === "quiz" && <input className="input" value={p.explanation || ""} onChange={e => updateItem(p.id, { explanation: e.target.value })} placeholder="Explanation (optional)" disabled={uploading || preparingExam} />}
                     </motion.div>
                   )}
                 </div>

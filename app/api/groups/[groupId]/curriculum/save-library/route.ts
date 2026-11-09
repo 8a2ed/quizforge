@@ -1,8 +1,9 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function checkAuth(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
@@ -39,11 +40,7 @@ async function ensureTemplateGroup(userId: string): Promise<string> {
 }
 
 // POST /api/groups/[groupId]/curriculum/save-library
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ groupId: string }> }
-) {
-  const { groupId: _groupId } = await params;
+export async function POST(req: NextRequest) {
   const userId = await checkAuth(req);
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

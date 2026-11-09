@@ -1,11 +1,13 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 import { ensureFeedbackTable } from "@/lib/feedback";
-import { mapStudentAnswersToMaster, parseExamConfig, type StudentExamQuestion } from "@/lib/examConfig";
+import { extractStudentMasterAnswers, parseExamConfig } from "@/lib/examConfig";
+import { isRecord } from "@/lib/http";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function authorize(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -15,8 +17,9 @@ async function authorize(req: NextRequest, groupId: string) {
     const userId = (payload as { sub: string }).sub;
     const m = await withRetry(() => prisma.groupMember.findUnique({
       where: { userId_groupId: { userId, groupId } },
+      select: { approved: true, role: true },
     }));
-    return m?.approved ? { userId } : null;
+    return m?.approved && (m.role === "OWNER" || m.role === "ADMIN") ? { userId } : null;
   } catch { return null; }
 }
 
@@ -28,60 +31,6 @@ interface ExamQuestion {
   imageUrl?: string;
 }
 
-
-function extractStudentMasterAnswers(
-  rawAnswers: unknown,
-  masterQuestions: ExamQuestion[]
-): Record<string, number> {
-  if (!rawAnswers) return {};
-
-  let parsed: any = rawAnswers;
-  if (typeof rawAnswers === "string") {
-    try { parsed = JSON.parse(rawAnswers); } catch { return {}; }
-  }
-
-  if (typeof parsed !== "object" || parsed === null) return {};
-
-  // Case A: Session format { answers: { ... }, questions: [...] }
-  if (parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
-    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-      try {
-        const mapped = mapStudentAnswersToMaster(parsed.questions as StudentExamQuestion[], parsed.answers);
-        const res: Record<string, number> = {};
-        for (const [k, v] of Object.entries(mapped)) {
-          res[String(k)] = Number(v);
-        }
-        return res;
-      } catch {
-        // fallback
-      }
-    }
-    const res: Record<string, number> = {};
-    for (const [k, v] of Object.entries(parsed.answers)) {
-      res[String(k)] = Number(v);
-    }
-    return res;
-  }
-
-  // Case B: Array format [1, 0, 2] or [{ questionIndex: 0, optionIndex: 1 }]
-  if (Array.isArray(parsed)) {
-    const res: Record<string, number> = {};
-    parsed.forEach((val, idx) => {
-      if (typeof val === "number") res[String(idx)] = val;
-      else if (val && typeof val.chosenOptionId === "number") res[String(idx)] = val.chosenOptionId;
-    });
-    return res;
-  }
-
-  // Case C: Flat object { "0": 1, "1": 0 }
-  const res: Record<string, number> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    if (v !== undefined && v !== null && !isNaN(Number(v))) {
-      res[String(k)] = Number(v);
-    }
-  }
-  return res;
-}
 
 // GET /api/groups/[groupId]/exams/[examId]/results
 export async function GET(
@@ -106,8 +55,8 @@ export async function GET(
   }));
   if (!exam) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const rawQuestions = Array.isArray(exam.questions) ? exam.questions : [];
-  const questions: ExamQuestion[] = rawQuestions.map((q: any) => ({
+  const rawQuestions: unknown[] = Array.isArray(exam.questions) ? exam.questions : [];
+  const questions: ExamQuestion[] = rawQuestions.filter(isRecord).map((q) => ({
     question: String(q?.question || ""),
     options: Array.isArray(q?.options) ? q.options.map(String) : [],
     correctOptionId: Number(q?.correctOptionId) || 0,
@@ -140,7 +89,7 @@ export async function GET(
     const optionCounts = new Array(q.options.length).fill(0);
 
     for (const r of completedResults) {
-      const userAnswers = extractStudentMasterAnswers(r.answers, questions);
+      const userAnswers = extractStudentMasterAnswers(r.answers);
       const chosen = userAnswers[String(qIdx)] ?? userAnswers[qIdx];
       if (chosen !== undefined && chosen !== null) {
         const chosenNum = Number(chosen);
@@ -229,7 +178,7 @@ export async function GET(
   }
 
   const attemptNumberMap: Record<string, number> = {};
-  for (const [key, list] of Object.entries(studentSubmissionsMap)) {
+  for (const list of Object.values(studentSubmissionsMap)) {
     const sorted = [...list].sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
     sorted.forEach((item, idx) => {
       attemptNumberMap[item.id] = idx + 1;
@@ -237,7 +186,7 @@ export async function GET(
   }
 
   const studentResults = allResults.map(r => {
-    const userAnswers = extractStudentMasterAnswers(r.answers, questions);
+    const userAnswers = extractStudentMasterAnswers(r.answers);
     let correctCount = 0;
 
     const details = questions.map((q, qIdx) => {

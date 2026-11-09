@@ -1,10 +1,13 @@
+import { getErrorMessage } from "@/lib/errors";
+import { readJsonObject } from "@/lib/http";
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 import { generateWebhookSecret } from "@/lib/crypto";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 const IS_DEV = process.env.NODE_ENV === "development";
 
 async function getUserFromRequest(req: NextRequest) {
@@ -29,7 +32,6 @@ export async function GET(req: NextRequest) {
       group: {
         include: {
           _count: { select: { quizzes: true } },
-          botConfig: { select: { webhookSecret: true } },
         },
       },
     },
@@ -52,15 +54,24 @@ export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { chatId } = await req.json();
-  if (!chatId) return NextResponse.json({ error: "chatId is required" }, { status: 400 });
+  const body = await readJsonObject(req);
+  if (!body) return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const rawChatId = body.chatId;
+  const chatId = typeof rawChatId === "string"
+    ? rawChatId.trim()
+    : typeof rawChatId === "number" && Number.isSafeInteger(rawChatId)
+    ? String(rawChatId)
+    : "";
+  if (!chatId || (!/^-?\d+$/.test(chatId) && !/^@[A-Za-z0-9_]{5,32}$/.test(chatId))) {
+    return NextResponse.json({ error: "A valid Telegram chat ID or public group username is required" }, { status: 400 });
+  }
 
   // ─── Step 1: Verify bot can access the chat ───────────────────────────────
   let chat: { title?: string; username?: string; is_forum?: boolean } | undefined;
   try {
     chat = await telegram.getChat(chatId);
-  } catch (err: any) {
-    const msg = err?.message || "";
+  } catch (err: unknown) {
+    const msg = getErrorMessage(err, "");
     // Give specific diagnostics
     if (msg.includes("chat not found") || msg.includes("Bad Request")) {
       return NextResponse.json({
@@ -83,7 +94,11 @@ export async function POST(req: NextRequest) {
   let memberVerified = false;
 
   try {
-    const member = await telegram.getChatMember(chatId, parseInt(user.telegramId));
+    const telegramUserId = Number(user.telegramId);
+    if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
+      return NextResponse.json({ error: "Your account is not linked to a Telegram user" }, { status: 403 });
+    }
+    const member = await telegram.getChatMember(chatId, telegramUserId);
     if (!["creator", "administrator"].includes(member.status)) {
       return NextResponse.json({
         error: "You must be an admin or owner of this group to add it.",
@@ -91,7 +106,7 @@ export async function POST(req: NextRequest) {
     }
     memberRole = member.status === "creator" ? "OWNER" : "ADMIN";
     memberVerified = true;
-  } catch (err: any) {
+  } catch {
     if (IS_DEV) {
       // In dev: if bot isn't in group, getChatMember fails.
       // Default to OWNER role so you can still manage the group in dev.

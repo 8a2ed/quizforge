@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram, STANDARD_FORUM_TOPICS, type TelegramForumTopic } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function getAuth(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -17,7 +18,7 @@ async function getAuth(req: NextRequest, groupId: string) {
         include: { group: true },
       })
     );
-    return membership || null;
+    return membership?.approved ? membership : null;
   } catch {
     return null;
   }
@@ -34,6 +35,9 @@ export async function GET(
 
   const group = membership.group;
   const shouldAutoCreate = req.nextUrl.searchParams.get("autoCreate") === "true";
+  if (shouldAutoCreate && membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let isForum = group.isForum;
   let canManageTopics = false;
@@ -172,6 +176,9 @@ export async function POST(
   const { groupId } = await params;
   const membership = await getAuth(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const group = membership.group;
   const body = await req.json().catch(() => ({}));
@@ -276,6 +283,9 @@ export async function PATCH(
   const { groupId } = await params;
   const membership = await getAuth(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const group = membership.group;
   const body = await req.json().catch(() => ({}));
@@ -331,6 +341,9 @@ export async function DELETE(
   const { groupId } = await params;
   const membership = await getAuth(req, groupId);
   if (!membership) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (membership.role !== "OWNER" && membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const group = membership.group;
   const body = await req.json().catch(() => ({}));

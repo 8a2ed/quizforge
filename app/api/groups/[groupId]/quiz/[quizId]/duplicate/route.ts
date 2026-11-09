@@ -1,8 +1,9 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 // POST /api/groups/[groupId]/quiz/[quizId]/duplicate
 export async function POST(
@@ -20,7 +21,9 @@ export async function POST(
   const membership = await prisma.groupMember.findUnique({
     where: { userId_groupId: { userId, groupId } },
   });
-  if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   // Find the original quiz
   const original = await prisma.quiz.findUnique({

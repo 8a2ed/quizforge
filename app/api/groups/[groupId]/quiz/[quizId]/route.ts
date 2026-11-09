@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 // DELETE /api/groups/[groupId]/quiz/[quizId]
 // Deletes a quiz from Telegram (if possible) and marks it as deleted in DB
@@ -24,7 +25,7 @@ export async function DELETE(
       include: { group: true },
     }));
 
-    if (!membership || !membership.approved) {
+    if (!membership?.approved || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
 

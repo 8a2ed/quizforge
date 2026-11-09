@@ -1,9 +1,10 @@
+import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_SECRET || "secret");
+const JWT_SECRET = getAuthSecret();
 
 async function requireMember(req: NextRequest, groupId: string) {
   const token = req.cookies.get("qf_session")?.value;
@@ -15,7 +16,7 @@ async function requireMember(req: NextRequest, groupId: string) {
     where: { userId_groupId: { userId, groupId } },
     include: { group: true },
   });
-  return m ? { userId, membership: m } : null;
+  return m?.approved ? { userId, membership: m } : null;
 }
 
 // GET — list admins (Telegram group admins + DB-only members)
@@ -26,6 +27,9 @@ export async function GET(
   const { groupId } = await params;
   const auth = await requireMember(req, groupId);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.membership.role !== "OWNER" && auth.membership.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const group = auth.membership.group;
 
