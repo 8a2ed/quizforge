@@ -9,17 +9,26 @@ export async function GET(req: NextRequest) {
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return NextResponse.json({ user: null });
 
+  let userId: string;
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    const userId = (payload as { sub: string }).sub;
+    if (typeof payload.sub !== "string" || !payload.sub) {
+      return NextResponse.json({ user: null }, { status: 401 });
+    }
+    userId = payload.sub;
+  } catch {
+    return NextResponse.json({ user: null }, { status: 401 });
+  }
 
+  try {
     const user = await withRetry(() => prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, firstName: true, lastName: true, username: true, photoUrl: true, telegramId: true },
     }));
 
     return NextResponse.json({ user });
-  } catch {
-    return NextResponse.json({ user: null });
+  } catch (error) {
+    console.error("[auth/me] User lookup failed:", error);
+    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
   }
 }

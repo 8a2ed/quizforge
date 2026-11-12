@@ -22,70 +22,55 @@ export async function syncAnonymousPollAnswers(
   if (!quizId || !Array.isArray(options)) return;
 
   try {
-    // 1. Fetch current anonymous answers for this quiz
-    const existingAnswers = await withRetry(() =>
-      prisma.pollAnswer.findMany({
-        where: {
-          quizId,
-          telegramUserId: { startsWith: `anon_${quizId}_` },
-        },
-        select: { id: true, telegramUserId: true },
-      })
-    );
+    const optionCounts = options.map((option, optionId) => ({
+      optionId,
+      voterCount: Math.max(0, Math.floor(Number(option.voter_count) || 0)),
+    }));
+    const optionCountsJson = JSON.stringify(optionCounts);
 
-    const existingSet = new Set(existingAnswers.map((a) => a.telegramUserId));
-    const neededKeys = new Set<string>();
+    // Reconcile anonymous vote rows inside PostgreSQL. This avoids downloading
+    // every synthetic voter ID and sending a potentially large createMany array
+    // on each Telegram poll update. The unique key makes retries idempotent.
+    await withRetry(() => prisma.$executeRaw`
+      WITH option_counts AS (
+        SELECT "optionId", "voterCount"
+        FROM jsonb_to_recordset(${optionCountsJson}::jsonb)
+          AS row_data("optionId" integer, "voterCount" integer)
+      ),
+      expected_answers AS (
+        SELECT
+          CONCAT('anon_', ${quizId}, '_opt', counts."optionId", '_', voter_num)::text AS telegram_user_id,
+          counts."optionId" AS option_id
+        FROM option_counts counts
+        CROSS JOIN LATERAL generate_series(1, counts."voterCount") AS voter_num
+      ),
+      removed_answers AS (
+        DELETE FROM "poll_answers" answer
+        WHERE answer."quizId" = ${quizId}
+          AND starts_with(answer."telegramUserId", CONCAT('anon_', ${quizId}, '_opt'))
+          AND NOT EXISTS (
+            SELECT 1 FROM expected_answers expected
+            WHERE expected.telegram_user_id = answer."telegramUserId"
+          )
+        RETURNING 1
+      )
+      INSERT INTO "poll_answers" (
+        "id", "optionIds", "answeredAt", "quizId", "telegramUserId", "firstName", "username"
+      )
+      SELECT
+        gen_random_uuid()::text,
+        ARRAY[expected.option_id],
+        NOW(),
+        ${quizId},
+        expected.telegram_user_id,
+        'طالب (مجهول)',
+        NULL
+      FROM expected_answers expected
+      WHERE (SELECT COUNT(*) FROM removed_answers) >= 0
+      ON CONFLICT ("quizId", "telegramUserId") DO NOTHING
+    `);
 
-    const toCreate: Array<{
-      quizId: string;
-      telegramUserId: string;
-      firstName: string;
-      username: null;
-      optionIds: number[];
-      answeredAt: Date;
-    }> = [];
-
-    // 2. Determine required records per option
-    for (let optIdx = 0; optIdx < options.length; optIdx++) {
-      const voterCount = options[optIdx].voter_count || 0;
-      for (let voterNum = 1; voterNum <= voterCount; voterNum++) {
-        const key = `anon_${quizId}_opt${optIdx}_${voterNum}`;
-        neededKeys.add(key);
-
-        if (!existingSet.has(key)) {
-          toCreate.push({
-            quizId,
-            telegramUserId: key,
-            firstName: "طالب (مجهول)",
-            username: null,
-            optionIds: [optIdx],
-            answeredAt: new Date(),
-          });
-        }
-      }
-    }
-
-    // 3. Find excess records to delete (e.g., if a vote was removed or revoted)
-    const toDeleteIds = existingAnswers
-      .filter((a) => !neededKeys.has(a.telegramUserId))
-      .map((a) => a.id);
-
-    if (toDeleteIds.length > 0) {
-      await withRetry(() =>
-        prisma.pollAnswer.deleteMany({
-          where: { id: { in: toDeleteIds } },
-        })
-      ).catch((err) => console.error("[pollSync] Delete error:", err));
-    }
-
-    if (toCreate.length > 0) {
-      await withRetry(() =>
-        prisma.pollAnswer.createMany({
-          data: toCreate,
-          skipDuplicates: true,
-        })
-      ).catch((err) => console.error("[pollSync] Create error:", err));
-    }
+    void totalVoterCount;
   } catch (error) {
     console.error("[pollSync] syncAnonymousPollAnswers error:", error);
   }

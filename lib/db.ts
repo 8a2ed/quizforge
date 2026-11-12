@@ -2,19 +2,38 @@ import { PrismaClient } from "@prisma/client";
 
 declare global {
   // Prevent multiple Prisma instances in dev hot-reload
-  // eslint-disable-next-line no-var
   var __prisma: PrismaClient | undefined;
 }
 
 function createPrismaClient(): PrismaClient {
   const url = process.env.DATABASE_URL;
+  let connectionUrl = url;
+
+  // Each production function instance should hold only a small local pool.
+  // Preserve an explicit provider setting if the operator already supplied one.
+  if (url) {
+    try {
+      const parsedUrl = new URL(url);
+      if (!parsedUrl.searchParams.has("connection_limit")) {
+        const configuredLimit = Number.parseInt(process.env.DB_CONNECTION_LIMIT || "1", 10);
+        parsedUrl.searchParams.set(
+          "connection_limit",
+          String(Number.isFinite(configuredLimit) && configuredLimit > 0 ? configuredLimit : 1)
+        );
+      }
+      connectionUrl = parsedUrl.toString();
+    } catch {
+      // Let Prisma report malformed connection strings with its normal error.
+    }
+  }
+
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
-    ...(url
+    ...(connectionUrl
       ? {
           datasources: {
             db: {
-              url,
+              url: connectionUrl,
             },
           },
         }
@@ -26,9 +45,7 @@ function createPrismaClient(): PrismaClient {
 export const prisma: PrismaClient =
   globalThis.__prisma ?? createPrismaClient();
 
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__prisma = prisma;
-}
+globalThis.__prisma = prisma;
 
 // ── Transient error detection ──────────────────────────────────────────────────
 const TRANSIENT_CODES = new Set(["P1001", "P1008", "P1017", "P2024"]);
@@ -53,13 +70,13 @@ function isTransientError(err: unknown): boolean {
 }
 
 /**
- * Retry wrapper with exponential backoff for Neon DB auto-pause / transient errors.
- * Retries up to 5 times: 200ms → 400ms → 800ms → 1600ms
+ * Retry transient connection errors once. A high retry count multiplies database
+ * traffic during an outage and can cause webhook/API requests to pile up.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  retries = 5,
-  baseDelayMs = 200
+  retries = 2,
+  baseDelayMs = 150
 ): Promise<T> {
   let lastError: unknown;
 
@@ -90,14 +107,6 @@ export async function withRetry<T>(
   }
 
   throw lastError ?? new Error("[DB] Max retries exceeded");
-}
-
-/**
- * Lightweight keep-alive ping. Call from /api/cron to prevent Neon from sleeping.
- * Also warms the connection pool on cold starts.
- */
-export async function dbPing(): Promise<void> {
-  await prisma.$queryRaw`SELECT 1`;
 }
 
 /**

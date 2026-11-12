@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma, dbPing } from "@/lib/db";
+import { prisma } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
 import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
@@ -9,9 +9,9 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 /**
  * GET /api/cron
- * Runs every minute. Does three things:
- * 1. Keeps the DB alive (Neon ping)
- * 2. Sends due scheduled quizzes (with dedup guard)
+ * Runs on the schedule configured in vercel.json. Does three things:
+ * 1. Sends due scheduled quizzes (with dedup guard)
+ * 2. Expires exams and timed polls
  * 3. Detects quizzes deleted from Telegram (stopPoll → message not found → mark deletedAt)
  */
 export async function GET(req: Request) {
@@ -27,8 +27,6 @@ export async function GET(req: Request) {
   } catch (error) {
     console.error("[Cron] checkAndExpireExamSessions error:", error);
   }
-
-  await dbPing().catch(() => {});
 
   const processed: string[] = [];
   const errors: { id: string; error: string }[] = [];

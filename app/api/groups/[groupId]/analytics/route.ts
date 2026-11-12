@@ -14,9 +14,18 @@ export async function GET(
   const token = req.cookies.get("qf_session")?.value;
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  let userId: string;
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    const userId = (payload as { sub: string }).sub;
+    if (typeof payload.sub !== "string" || !payload.sub) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = payload.sub;
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
     const membership = await withRetry(() => prisma.groupMember.findUnique({
       where: { userId_groupId: { userId, groupId } },
       select: { approved: true, role: true },
@@ -26,7 +35,8 @@ export async function GET(
     }
 
     const { searchParams } = req.nextUrl;
-    const rangeDays = parseInt(searchParams.get("days") || "30");
+    const requestedDays = Number.parseInt(searchParams.get("days") || "30", 10);
+    const rangeDays = Number.isFinite(requestedDays) ? Math.min(365, Math.max(1, requestedDays)) : 30;
     const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
 
     // ── Parallel base queries ──────────────────────────────────────────────────
@@ -35,7 +45,6 @@ export async function GET(
       totalAnswers,
       deletedCount,
       closedCount,
-      quizBreakdown,
       recentQuizzes,
       allTimeActivity,
       byTopic,
@@ -46,20 +55,23 @@ export async function GET(
       withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId } } })),
       withRetry(() => prisma.quiz.count({ where: { groupId, deletedAt: { not: null } } })),
       withRetry(() => prisma.quiz.count({ where: { groupId, pollClosed: true, deletedAt: null } })),
-      withRetry(() => prisma.quiz.findMany({
-        where: { groupId, type: "QUIZ", sentAt: { not: null } },
-        select: { id: true, question: true, correctOptionId: true, _count: { select: { answers: true } } },
-      })),
-      withRetry(() => prisma.quiz.findMany({
-        where: { groupId, sentAt: { gte: since } },
-        select: { sentAt: true },
-        orderBy: { sentAt: "asc" },
-      })),
-      // 12-week activity (for trend chart)
-      withRetry(() => prisma.quiz.findMany({
-        where: { groupId, sentAt: { gte: new Date(Date.now() - 84 * 24 * 60 * 60 * 1000) } },
-        select: { sentAt: true },
-      })),
+      // Aggregate on the database instead of transferring one row per quiz.
+      prisma.$queryRaw<Array<{ date: string; count: bigint }>>`
+        SELECT TO_CHAR(DATE_TRUNC('day', "sentAt" AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
+               COUNT(*)::bigint AS count
+        FROM "quizzes"
+        WHERE "groupId" = ${groupId} AND "sentAt" >= ${since}
+        GROUP BY 1 ORDER BY 1
+      `,
+      // 12-week peak-hour histogram; one compact row per hour.
+      prisma.$queryRaw<Array<{ hour: number; count: bigint }>>`
+        SELECT EXTRACT(HOUR FROM ("sentAt" AT TIME ZONE 'UTC'))::int AS hour,
+               COUNT(*)::bigint AS count
+        FROM "quizzes"
+        WHERE "groupId" = ${groupId}
+          AND "sentAt" >= ${new Date(Date.now() - 84 * 24 * 60 * 60 * 1000)}
+        GROUP BY 1
+      `,
       withRetry(() => prisma.quiz.groupBy({
         by: ["topicName", "topicId"],
         where: { groupId, sentAt: { not: null } },
@@ -80,55 +92,69 @@ export async function GET(
       })),
     ]);
 
-    // ── Correct rates per quiz (batch) ────────────────────────────────────────
-    const quizzesWithAnswers = quizBreakdown.filter(q => q._count.answers > 0 && q.correctOptionId !== null);
-    const correctCounts = await Promise.all(
-      quizzesWithAnswers.map(q =>
-        withRetry(() => prisma.pollAnswer.count({
-          where: { quizId: q.id, optionIds: { has: q.correctOptionId! } },
-        })).then(correct => ({
-          id: q.id,
-          question: q.question,
-          total: q._count.answers,
-          correct,
-          rate: Math.round((correct / q._count.answers) * 100),
-        }))
+    // Rank the hardest/easiest quizzes in SQL and return only ten rows instead of
+    // transferring every historical question and calculating rates in Node.
+    type RankedQuizRow = {
+      total_answered: bigint;
+      total_correct: bigint;
+      quiz_id: string | null;
+      question: string | null;
+      answer_count: bigint | null;
+      correct_count: bigint | null;
+      rate: number | null;
+      hard_rank: bigint | null;
+      easy_rank: bigint | null;
+    };
+    const rankedQuizRows = await prisma.$queryRaw<RankedQuizRow[]>`
+      WITH per_quiz AS (
+        SELECT q."id", q."question", COUNT(pa."id")::bigint AS total,
+               COUNT(pa."id") FILTER (WHERE q."correctOptionId" = ANY(pa."optionIds"))::bigint AS correct
+        FROM "quizzes" q
+        JOIN "poll_answers" pa ON pa."quizId" = q."id"
+        WHERE q."groupId" = ${groupId} AND q."type" = 'QUIZ'
+          AND q."sentAt" IS NOT NULL AND q."correctOptionId" IS NOT NULL
+        GROUP BY q."id", q."question"
+      ),
+      stats AS (
+        SELECT COALESCE(SUM(total), 0)::bigint AS total_answered,
+               COALESCE(SUM(correct), 0)::bigint AS total_correct
+        FROM per_quiz
+      ),
+      ranked AS (
+        SELECT id, question, total, correct,
+               ROUND(correct::numeric * 100 / NULLIF(total, 0))::int AS rate,
+               ROW_NUMBER() OVER (ORDER BY correct::numeric / NULLIF(total, 0) ASC, total DESC) AS hard_rank,
+               ROW_NUMBER() OVER (ORDER BY correct::numeric / NULLIF(total, 0) DESC, total DESC) AS easy_rank
+        FROM per_quiz WHERE total >= 2
       )
-    );
-
-    const totalAnswered = correctCounts.reduce((s, r) => s + r.total, 0);
-    const totalCorrect = correctCounts.reduce((s, r) => s + r.correct, 0);
+      SELECT stats.total_answered, stats.total_correct, ranked.id AS quiz_id,
+             ranked.question, ranked.total AS answer_count, ranked.correct AS correct_count,
+             ranked.rate, ranked.hard_rank, ranked.easy_rank
+      FROM stats LEFT JOIN ranked ON ranked.hard_rank <= 5 OR ranked.easy_rank <= 5
+      ORDER BY ranked.hard_rank NULLS LAST
+    `;
+    const firstRankedRow = rankedQuizRows[0];
+    const totalAnswered = Number(firstRankedRow?.total_answered ?? 0);
+    const totalCorrect = Number(firstRankedRow?.total_correct ?? 0);
     const overallCorrectRate = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
 
-    // Hardest / Easiest (min 2 answers)
-    const ranked = correctCounts.filter(r => r.total >= 2).sort((a, b) => a.rate - b.rate);
-    const hardestQuizzes = ranked.slice(0, 5);
-    const easiestQuizzes = [...ranked].reverse().slice(0, 5);
+    const hardestQuizzes = rankedQuizRows
+      .filter(row => row.quiz_id !== null && Number(row.hard_rank) <= 5)
+      .map(row => ({ id: row.quiz_id!, question: row.question!, total: Number(row.answer_count), correct: Number(row.correct_count), rate: Number(row.rate) }));
+    const easiestQuizzes = rankedQuizRows
+      .filter(row => row.quiz_id !== null && Number(row.easy_rank) <= 5)
+      .sort((a, b) => Number(a.easy_rank) - Number(b.easy_rank))
+      .map(row => ({ id: row.quiz_id!, question: row.question!, total: Number(row.answer_count), correct: Number(row.correct_count), rate: Number(row.rate) }));
 
     // ── Activity heatmap (daily) ───────────────────────────────────────────────
-    const activityMap: Record<string, number> = {};
-    recentQuizzes.forEach(q => {
-      if (q.sentAt) {
-        const key = q.sentAt.toISOString().slice(0, 10);
-        activityMap[key] = (activityMap[key] || 0) + 1;
-      }
-    });
-    const activityData = Object.entries(activityMap)
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const activityData = recentQuizzes.map(row => ({ date: row.date, count: Number(row.count) }));
 
     // ── Peak hours (0-23 histogram) ────────────────────────────────────────────
-    const hourMap: Record<number, number> = {};
-    allTimeActivity.forEach(q => {
-      if (q.sentAt) {
-        const h = q.sentAt.getUTCHours();
-        hourMap[h] = (hourMap[h] || 0) + 1;
-      }
-    });
+    const hourMap = new Map(allTimeActivity.map(row => [Number(row.hour), Number(row.count)]));
     const peakHours = Array.from({ length: 24 }, (_, h) => ({
       hour: h,
       label: `${String(h).padStart(2, "0")}:00`,
-      count: hourMap[h] || 0,
+      count: hourMap.get(h) || 0,
     }));
 
     // ── Drop-off by topic ──────────────────────────────────────────────────────
@@ -152,44 +178,58 @@ export async function GET(
     );
 
     // ── Response rate by topic ────────────────────────────────────────────────
-    const responseRateByTopic = await Promise.all(
-      byTopic.slice(0, 8).map(async t => {
-        const avgAnswers = await withRetry(() => prisma.quiz.aggregate({
-          where: { groupId, topicName: t.topicName, sentAt: { not: null } },
-          _avg: { _count: undefined } as never,
-        })).catch(() => null);
-        void avgAnswers; // not used below — use raw count
-        const quizCount = t._count.id;
-        const answerSum = await withRetry(() => prisma.pollAnswer.count({
-          where: { quiz: { groupId, topicName: t.topicName } },
-        }));
-        return {
-          topic: t.topicName || "General",
-          quizCount,
-          avgResponses: quizCount > 0 ? Math.round(answerSum / quizCount) : 0,
-        };
-      })
-    );
+    type TopicResponseRow = { topic_id: number | null; topic_name: string | null; quiz_count: bigint; answer_count: bigint };
+    const topicResponseRows = await prisma.$queryRaw<TopicResponseRow[]>`
+      SELECT q."topicId" AS topic_id, q."topicName" AS topic_name,
+             COUNT(DISTINCT q."id")::bigint AS quiz_count,
+             COUNT(pa."id")::bigint AS answer_count
+      FROM "quizzes" q
+      LEFT JOIN "poll_answers" pa ON pa."quizId" = q."id"
+      WHERE q."groupId" = ${groupId} AND q."sentAt" IS NOT NULL
+      GROUP BY q."topicId", q."topicName"
+    `;
+    const topicResponseMap = new Map(topicResponseRows.map(row => [
+      `${row.topic_id ?? "null"}:${row.topic_name ?? ""}`,
+      { quizCount: Number(row.quiz_count), answerCount: Number(row.answer_count) },
+    ]));
+    const responseRateByTopic = byTopic.slice(0, 8).map(t => {
+      const stats = topicResponseMap.get(`${t.topicId ?? "null"}:${t.topicName ?? ""}`);
+      const quizCount = Number(t._count.id);
+      return {
+        topic: t.topicName || "General",
+        quizCount,
+        avgResponses: quizCount > 0 ? Math.round((stats?.answerCount ?? 0) / quizCount) : 0,
+      };
+    });
 
     // ── Sender details ────────────────────────────────────────────────────────
-    const senderDetails = await Promise.all(
-      bySender.map(async s => {
-        const user = await withRetry(() => prisma.user.findUnique({
-          where: { id: s.sentById },
-          select: { id: true, firstName: true, username: true, photoUrl: true },
-        }));
-        return { ...s, user };
-      })
-    );
+    const senderIds = bySender.map(s => s.sentById).filter((id): id is string => id !== null);
+    const senderUsers = senderIds.length ? await withRetry(() => prisma.user.findMany({
+      where: { id: { in: senderIds } },
+      select: { id: true, firstName: true, username: true, photoUrl: true },
+    })) : [];
+    const usersById = new Map(senderUsers.map(user => [user.id, user]));
+    const senderDetails = bySender.map(s => ({ ...s, user: s.sentById ? usersById.get(s.sentById) ?? null : null }));
 
     // ── Anonymous vs Public Quizzes stats ─────────────────────────────────────
-    const [anonQuizzesCount, publicQuizzesCount, anonAnswersCount, publicAnswersCount, aiAnalytics] = await Promise.all([
-      withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: true, sentAt: { not: null } } })),
-      withRetry(() => prisma.quiz.count({ where: { groupId, isAnonymous: false, sentAt: { not: null } } })),
-      withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: true } } })),
-      withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, isAnonymous: false } } })),
+    const [privacyStats, aiAnalytics] = await Promise.all([
+      prisma.$queryRaw<Array<{ anon_quizzes: bigint; public_quizzes: bigint; anon_answers: bigint; public_answers: bigint }>>`
+        SELECT
+          COUNT(*) FILTER (WHERE q."isAnonymous" = true AND q."sentAt" IS NOT NULL)::bigint AS anon_quizzes,
+          COUNT(*) FILTER (WHERE q."isAnonymous" = false AND q."sentAt" IS NOT NULL)::bigint AS public_quizzes,
+          (SELECT COUNT(*) FROM "poll_answers" pa JOIN "quizzes" aq ON aq."id" = pa."quizId"
+            WHERE aq."groupId" = ${groupId} AND aq."isAnonymous" = true)::bigint AS anon_answers,
+          (SELECT COUNT(*) FROM "poll_answers" pa JOIN "quizzes" pq ON pq."id" = pa."quizId"
+            WHERE pq."groupId" = ${groupId} AND pq."isAnonymous" = false)::bigint AS public_answers
+        FROM "quizzes" q WHERE q."groupId" = ${groupId}
+      `,
       getAIAnalytics(groupId).catch(() => null),
     ]);
+    const privacy = privacyStats[0];
+    const anonQuizzesCount = Number(privacy?.anon_quizzes ?? 0);
+    const publicQuizzesCount = Number(privacy?.public_quizzes ?? 0);
+    const anonAnswersCount = Number(privacy?.anon_answers ?? 0);
+    const publicAnswersCount = Number(privacy?.public_answers ?? 0);
 
     const anonymousStats = {
       anonQuizzes: anonQuizzesCount,
@@ -223,6 +263,6 @@ export async function GET(
     });
   } catch (err) {
     console.error("[analytics]", err);
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Failed to load analytics" }, { status: 500 });
   }
 }

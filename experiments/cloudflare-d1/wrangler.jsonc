@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quizforge-d1-loadtest",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-12",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "quizforge-test",
+      "database_id": "e16bc54d-3fe2-46b6-85e1-c651693f9045"
+    }
+  ]
+}

@@ -1,9 +1,42 @@
 import { prisma, withRetry } from "@/lib/db";
+import { randomUUID } from "node:crypto";
 import { telegram } from "@/lib/telegram";
 import {
   mapStudentAnswersToMaster,
   type StudentExamQuestion,
 } from "@/lib/examConfig";
+import { isRecord } from "@/lib/http";
+
+export interface ExamQuestion {
+  question: string;
+  options: string[];
+  correctOptionId: number;
+  explanation?: string;
+  imageUrl?: string;
+  originalQIndex?: number;
+  originalOptionIndices?: number[];
+}
+
+export interface ExamSession {
+  resultId?: string;
+  examId: string;
+  examTitle: string;
+  chatId: number;
+  msgId: number;
+  name: string;
+  telegramId: string;
+  questions: ExamQuestion[];
+  answers: Record<number, number>;
+  currentQ: number;
+  startedAt: number;
+  lastActiveAt?: number;
+  warnedAt?: number | null;
+  timeLimit: number | null;
+  passingScore: number;
+  maxAttempts?: number;
+  showSolutionsImmediately?: boolean;
+  completedAttemptsBefore?: number;
+}
 
 function escapeHtml(s: string): string {
   return String(s || "")
@@ -18,14 +51,38 @@ export interface ExamExpiryStats {
   warnedCount: number;
   activeCount: number;
   timestamp: string;
+  lockSkipped?: boolean;
+}
+
+const EXAM_EXPIRY_LOCK_NAME = "exam-expiry-sweep";
+const EXAM_EXPIRY_LOCK_LEASE_MS = 3 * 60 * 1000;
+
+async function acquireExamExpiryLock(): Promise<string | null> {
+  const ownerToken = randomUUID();
+  const rows = await prisma.$queryRaw<Array<{ ownerToken: string }>>`
+    INSERT INTO "scheduled_job_locks" ("name", "ownerToken", "leaseUntil")
+    VALUES (${EXAM_EXPIRY_LOCK_NAME}, ${ownerToken}, NOW() + (${EXAM_EXPIRY_LOCK_LEASE_MS} * INTERVAL '1 millisecond'))
+    ON CONFLICT ("name") DO UPDATE
+      SET "ownerToken" = EXCLUDED."ownerToken", "leaseUntil" = EXCLUDED."leaseUntil"
+      WHERE "scheduled_job_locks"."leaseUntil" <= NOW()
+    RETURNING "ownerToken"
+  `;
+  return rows[0]?.ownerToken ?? null;
+}
+
+async function releaseExamExpiryLock(ownerToken: string): Promise<void> {
+  await prisma.$executeRaw`
+    DELETE FROM "scheduled_job_locks"
+    WHERE "name" = ${EXAM_EXPIRY_LOCK_NAME} AND "ownerToken" = ${ownerToken}
+  `;
 }
 
 declare global {
-  var __examSessions: Map<string, any> | undefined;
+  var __examSessions: Map<string, ExamSession> | undefined;
   var __examExpiryWatcherStarted: boolean | undefined;
 }
 
-export const examSessions: Map<string, any> = (globalThis.__examSessions ??= new Map());
+export const examSessions: Map<string, ExamSession> = (globalThis.__examSessions ??= new Map());
 export const sessionKey = (telegramId: string, examId: string) => `${telegramId}:${examId}`;
 
 /**
@@ -53,6 +110,11 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
     timestamp: new Date().toISOString(),
   };
 
+  const lockOwner = await acquireExamExpiryLock();
+  if (!lockOwner) {
+    return { ...stats, lockSkipped: true };
+  }
+
   try {
     const inProgressList = await withRetry(() =>
       prisma.examResult.findMany({
@@ -61,7 +123,22 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
           ...(targetExamId ? { examId: targetExamId } : {}),
           ...(targetGroupId ? { exam: { groupId: targetGroupId } } : {}),
         },
-        include: { exam: true },
+        select: {
+          id: true,
+          name: true,
+          telegramId: true,
+          answers: true,
+          completedAt: true,
+          exam: {
+            select: {
+              id: true,
+              title: true,
+              questions: true,
+              timeLimit: true,
+              passingScore: true,
+            },
+          },
+        },
       })
     );
 
@@ -72,12 +149,23 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
       const exam = record.exam;
       if (!exam) continue;
 
-      const rawData = (record.answers as Record<string, any>) || {};
-      const startedAt = Number(rawData.startedAt) || record.completedAt?.getTime() || now;
-      const lastActiveAt = Number(rawData.lastActiveAt) || startedAt;
-      const warnedAt = rawData.warnedAt ? Number(rawData.warnedAt) : null;
-      const chatId = Number(rawData.chatId) || (record.telegramId ? Number(record.telegramId) : null);
-      const msgId = Number(rawData.msgId) || 0;
+      const rawData = isRecord(record.answers) ? record.answers : {};
+      const startedAtValue = Number(rawData.startedAt);
+      const startedAt = Number.isFinite(startedAtValue) && startedAtValue > 0
+        ? startedAtValue
+        : record.completedAt?.getTime() || now;
+      const lastActiveValue = Number(rawData.lastActiveAt);
+      const lastActiveAt = Number.isFinite(lastActiveValue) && lastActiveValue > 0
+        ? lastActiveValue
+        : startedAt;
+      const warnedValue = Number(rawData.warnedAt);
+      const warnedAt = Number.isFinite(warnedValue) && warnedValue > 0 ? warnedValue : null;
+      const chatValue = Number(rawData.chatId);
+      const chatId = Number.isFinite(chatValue) && chatValue !== 0
+        ? chatValue
+        : (record.telegramId ? Number(record.telegramId) : null);
+      const msgValue = Number(rawData.msgId);
+      const msgId = Number.isFinite(msgValue) ? msgValue : 0;
 
       const studentQuestions = (
         Array.isArray(rawData.questions) && rawData.questions.length > 0
@@ -87,7 +175,9 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
           : []
       ) as unknown as StudentExamQuestion[];
 
-      const studentAnswers = (rawData.answers as Record<string, number>) || {};
+      const studentAnswers = isRecord(rawData.answers)
+        ? Object.fromEntries(Object.entries(rawData.answers).filter((entry): entry is [string, number] => typeof entry[1] === "number"))
+        : {};
       const timeLimitSeconds = exam.timeLimit ? Number(exam.timeLimit) : null;
       const passingScore = Number(exam.passingScore) || 60;
       const studentName = record.name || "طالب";
@@ -289,6 +379,12 @@ stats.activeCount++;
     }
   } catch (error) {
     console.error("[examExpiry] Error checking exam sessions:", error);
+  } finally {
+    try {
+      await releaseExamExpiryLock(lockOwner);
+    } catch (error) {
+      console.error("[examExpiry] Failed to release shared lock:", error);
+    }
   }
 
   return stats;

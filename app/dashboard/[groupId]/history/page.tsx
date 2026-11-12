@@ -65,6 +65,14 @@ interface TopicItem {
   iconColor: number | null;
 }
 
+interface ArchivePreview {
+  cutoff: string;
+  retentionDays: number;
+  counts: { quizzes: number; examResults: number; feedback: number };
+  total: number;
+  archiveToken: string;
+}
+
 export default function HistoryPage() {
   const params = useParams();
   const router = useRouter();
@@ -116,6 +124,12 @@ export default function HistoryPage() {
     onConfirm: () => void;
   } | null>(null);
 
+  const [archivePreview, setArchivePreview] = useState<ArchivePreview | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveSaved, setArchiveSaved] = useState(false);
+  const [archiveDownloaded, setArchiveDownloaded] = useState({ csv: false, json: false });
+  const [archiveDeleting, setArchiveDeleting] = useState(false);
+
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Read view mode preference
@@ -142,6 +156,69 @@ export default function HistoryPage() {
   const showToast = (type: "success" | "error" | "info", msg: string) => {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 3800);
+  };
+
+  const loadArchivePreview = async () => {
+    setArchiveLoading(true);
+    setArchiveSaved(false);
+    setArchiveDownloaded({ csv: false, json: false });
+    try {
+      const response = await fetch(`/api/groups/${groupId}/archive?preview=1`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "تعذر معاينة الأرشيف");
+      setArchivePreview(data as ArchivePreview);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "تعذر معاينة الأرشيف");
+    } finally {
+      setArchiveLoading(false);
+    }
+  };
+
+  const startArchiveDownload = (format: "csv" | "json") => {
+    const anchor = document.createElement("a");
+    const query = new URLSearchParams({ format, token: archivePreview?.archiveToken || "" });
+    anchor.href = `/api/groups/${groupId}/archive?${query.toString()}`;
+    anchor.download = `quizforge-archive-${groupId}.${format}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setArchiveDownloaded((previous) => ({ ...previous, [format]: true }));
+    setArchiveSaved(false);
+  };
+
+  const deleteArchivedRecords = () => {
+    if (!archivePreview || !archiveSaved || !archiveDownloaded.csv || !archiveDownloaded.json) return;
+    const counts = archivePreview.counts;
+    setConfirmModal({
+      open: true,
+      title: "حذف السجلات المؤرشفة نهائيًا؟",
+      message: `سيتم حذف ${counts.quizzes} كويز مرسل (وإجاباته)، و${counts.examResults} نتيجة امتحان، و${counts.feedback} تقييم أقدم من ${archivePreview.retentionDays} يومًا. ستبقى تعريفات الامتحانات والمجموعات. تأكد أنك حفظت ملفي CSV وJSON خارج الموقع.`,
+      confirmText: "حفظت النسختين، احذف البيانات",
+      cancelText: "إلغاء",
+      isDanger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setArchiveDeleting(true);
+        try {
+          const response = await fetch(`/api/groups/${groupId}/archive`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirmation: "DELETE_OLDER_THAN_1_YEAR", archiveToken: archivePreview.archiveToken }),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || "فشل حذف السجلات القديمة");
+          showToast("success", `تم حذف ${data.total} سجلًا قديمًا، مع الإبقاء على تعريفات الامتحانات والمجموعات`);
+          setArchiveSaved(false);
+          setArchiveDownloaded({ csv: false, json: false });
+          await loadArchivePreview();
+          load(true);
+        } catch (error) {
+          showToast("error", error instanceof Error ? error.message : "فشل حذف السجلات القديمة");
+        } finally {
+          setArchiveDeleting(false);
+        }
+      },
+    });
   };
 
   // Live timer interval for active polls with openPeriod
@@ -859,6 +936,59 @@ export default function HistoryPage() {
           </Link>
         </div>
       </div>
+
+      <section
+        className="card animate-fade-up"
+        aria-labelledby="archive-section-title"
+        style={{ padding: "var(--space-4)", marginBottom: "var(--space-5)" }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 220, flex: "1 1 300px" }}>
+            <h2 id="archive-section-title" style={{ margin: "0 0 4px", fontSize: "1.05rem" }}>أرشفة بيانات أقدم من سنة</h2>
+            <p style={{ margin: 0, color: "var(--clr-text-secondary)", fontSize: "0.84rem" }}>
+              تصدير الكويزات المرسلة وإجاباتها ونتائج الامتحانات والتقييمات بصيغتي CSV وJSON. حذفها خطوة منفصلة، وتبقى تعريفات الامتحانات والمجموعات.
+            </p>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={loadArchivePreview} disabled={archiveLoading || archiveDeleting}>
+            {archiveLoading ? "جارٍ حساب السجلات…" : "معاينة بيانات الأرشيف"}
+          </button>
+        </div>
+
+        {archivePreview && (
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: "0.84rem", color: "var(--clr-text-secondary)" }}>
+              قبل {new Date(archivePreview.cutoff).toLocaleDateString("ar-EG")} — {archivePreview.counts.quizzes} كويز، {archivePreview.counts.examResults} نتيجة امتحان، {archivePreview.counts.feedback} تقييم (الإجمالي {archivePreview.total}).
+              {archivePreview.total === 0 && " لا توجد سجلات أقدم من سنة للحذف."}
+            </div>
+
+            {archivePreview.total > 0 && (
+              <>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => startArchiveDownload("csv")}>
+                    تنزيل نسخة CSV {archiveDownloaded.csv ? "✓" : ""}
+                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => startArchiveDownload("json")}>
+                    تنزيل نسخة JSON {archiveDownloaded.json ? "✓" : ""}
+                  </button>
+                </div>
+
+                {archiveDownloaded.csv && archiveDownloaded.json && (
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: "0.84rem" }}>
+                    <input type="checkbox" checked={archiveSaved} onChange={(event) => setArchiveSaved(event.target.checked)} />
+                    <span>حفظت ملفي CSV وJSON ويمكنني فتحهما من جهازي.</span>
+                  </label>
+                )}
+
+                <div>
+                  <button className="btn btn-danger btn-sm" onClick={deleteArchivedRecords} disabled={!archiveSaved || archiveDeleting}>
+                    {archiveDeleting ? "جارٍ حذف السجلات…" : "حذف السجلات القديمة نهائيًا"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* KPI Overview Summary Bar */}
       {summary && (

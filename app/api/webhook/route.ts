@@ -1,5 +1,5 @@
 import { ensureFeedbackTable, notifyAdminsFeedback } from "@/lib/feedback";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { prisma, withRetry } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { safeSecretEquals } from "@/lib/crypto";
@@ -23,14 +23,38 @@ import {
   startExamExpiryWatcher,
   examSessions,
   sessionKey,
+  type ExamQuestion,
+  type ExamSession,
 } from "@/lib/examExpiry";
-
-// Start background watcher for long-running Node environments
-startExamExpiryWatcher(25_000);
 
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
 let cachedBotUsername = (process.env.NEXT_PUBLIC_BOT_USERNAME || "").replace(/^@/, "");
+let lastExpirySweepAt = 0;
+let expirySweepInFlight = false;
+const EXPIRY_SWEEP_COOLDOWN_MS = 60_000;
+
+// Keep the local development convenience, but do not start a permanent timer
+// inside each serverless production instance.
+if (process.env.NODE_ENV === "development") {
+  startExamExpiryWatcher(60_000);
+}
+
+function scheduleExamExpirySweep(): void {
+  if (expirySweepInFlight || Date.now() - lastExpirySweepAt < EXPIRY_SWEEP_COOLDOWN_MS) return;
+
+  lastExpirySweepAt = Date.now();
+  expirySweepInFlight = true;
+  after(async () => {
+    try {
+      await checkAndExpireExamSessions();
+    } catch (error) {
+      console.error("[webhook] checkAndExpire error:", error);
+    } finally {
+      expirySweepInFlight = false;
+    }
+  });
+}
 
 async function getBotUsername(): Promise<string> {
   if (cachedBotUsername) return cachedBotUsername;
@@ -46,34 +70,15 @@ async function getBotUsername(): Promise<string> {
   return "";
 }
 
-// ─── Exam session store & persistent fallback ──────────────────────────────
-interface ExamQuestion {
-  question: string;
-  options: string[];
-  correctOptionId: number;
-  explanation?: string;
-  imageUrl?: string;
-  originalQIndex?: number;
-  originalOptionIndices?: number[];
-}
-interface ExamSession {
-  resultId?: string;
-  examId: string;
-  examTitle: string;
-  chatId: number;
-  msgId: number;
-  name: string;
-  telegramId: string;
-  questions: ExamQuestion[];
-  answers: Record<number, number>;
-  currentQ: number;
-  startedAt: number;
-  lastActiveAt?: number;
-  warnedAt?: number | null;
-  timeLimit: number | null;
-  passingScore: number;
+async function getCompletedAttemptStats(examId: string, telegramId: string) {
+  return withRetry(() => prisma.examResult.aggregate({
+    where: { examId, telegramId, score: { gte: 0 } },
+    _count: { _all: true },
+    _max: { score: true },
+  }));
 }
 
+// ─── Exam session store & persistent fallback ──────────────────────────────
 interface TelegramWebhookMessage {
   message_id: number;
   chat: { id: number; type: string; title?: string };
@@ -134,10 +139,19 @@ function escapeHtml(s: string): string {
 
 // ─── Send exam preview into a DM ────────────────────────────────────────────
 async function sendExamPreview(chatId: number | string, examId: string, telegramId: string) {
-  let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+  const examSelect = {
+    id: true,
+    title: true,
+    description: true,
+    questions: true,
+    timeLimit: true,
+    passingScore: true,
+    isPublished: true,
+  } as const;
+  let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: examSelect })).catch(() => null);
   if (!exam) {
     const stripped = examId.replace(/^exam[_-]/i, "");
-    exam = await withRetry(() => prisma.exam.findUnique({ where: { id: stripped } })).catch(() => null);
+    exam = await withRetry(() => prisma.exam.findUnique({ where: { id: stripped }, select: examSelect })).catch(() => null);
   }
 
   if (!exam) {
@@ -169,20 +183,17 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
   }
   const maxAttempts = cfg.maxAttempts ?? 1;
 
-  // Check completed attempts
-  const completedAttempts = await withRetry(() => prisma.examResult.findMany({
-    where: { examId: exam.id, telegramId, score: { gte: 0 } },
-    orderBy: { score: "desc" },
-  }));
-  const attemptCount = completedAttempts.length;
-
-  // Check for in-progress session
-  const inProgress = await withRetry(() => prisma.examResult.findFirst({
-    where: { examId: exam.id, telegramId, score: -1 }
-  }));
+  const [completedAttempts, inProgress] = await Promise.all([
+    getCompletedAttemptStats(exam.id, telegramId),
+    withRetry(() => prisma.examResult.findFirst({
+      where: { examId: exam.id, telegramId, score: -1 },
+      select: { id: true },
+    })),
+  ]);
+  const attemptCount = completedAttempts._count._all;
 
   if (!inProgress && maxAttempts > 0 && attemptCount >= maxAttempts) {
-    const bestScore = completedAttempts[0]?.score ?? 0;
+    const bestScore = completedAttempts._max.score ?? 0;
     const reviewKeyboard = cfg.showSolutionsImmediately !== false
       ? [[{ text: "📖 مراجعة الأسئلة والإجابات النموذجية", callback_data: `exam_review:${exam.id}:0` }]]
       : [];
@@ -211,7 +222,7 @@ async function sendExamPreview(chatId: number | string, examId: string, telegram
     `\n\n📊 <b>${questions.length} أسئلة</b>`,
     exam.timeLimit ? `\n⏱ <b>المدة الزمنية: ${Math.floor(exam.timeLimit / 60)} دقيقة</b>` : "",
     `\n✅ <b>درجة النجاح: ${exam.passingScore}%</b>`,
-    maxAttempts === 1 ? "" : `\n🔄 <b>المحاولات المسموحة: ${maxAttempts === 0 ? "غير محدود" : maxAttempts}</b> (المحاولة الحالية: <b>${attemptCount + 1}</b>${attemptCount > 0 ? ` · أفضل درجة سابقة: <b>${completedAttempts[0]?.score}%</b>` : ""})`,
+    maxAttempts === 1 ? "" : `\n🔄 <b>المحاولات المسموحة: ${maxAttempts === 0 ? "غير محدود" : maxAttempts}</b> (المحاولة الحالية: <b>${attemptCount + 1}</b>${attemptCount > 0 ? ` · أفضل درجة سابقة: <b>${completedAttempts._max.score}%</b>` : ""})`,
     cfg.shuffleQuestions || cfg.shuffleOptions ? `\n🛡 <b>مكافحة الغش: ترتيب عشوائي للأسئلة والخيارات</b>` : "",
     inProgress ? "\n\n⚠️ <i>لديك جلسة امتحان جارية! اضغط على استئناف للمتابعة.</i>" : "\n\n👉 <i>اضغط على زر البدء أدناه لبدء الاختبار — تصلك الأسئلة سؤالاً تلو الآخر.</i>",
   ].filter(Boolean).join("");
@@ -433,7 +444,14 @@ async function sendQuestion(session: ExamSession, cbId?: string) {
   }
 }
 
-async function persistExamProgress(session: ExamSession): Promise<void> {
+class ExamProgressConflictError extends Error {
+  constructor() {
+    super("Exam progress was advanced by another webhook request.");
+    this.name = "ExamProgressConflictError";
+  }
+}
+
+async function persistExamProgress(session: ExamSession, expectedCurrentQ: number): Promise<void> {
   let resultId = session.resultId;
   if (!resultId) {
     const existing = await withRetry(() => prisma.examResult.findFirst({
@@ -450,23 +468,29 @@ async function persistExamProgress(session: ExamSession): Promise<void> {
     session.resultId = resultId;
   }
 
-  const result = await withRetry(() => prisma.examResult.updateMany({
-    where: { id: resultId, score: -1 },
-    data: {
-      answers: {
-        answers: session.answers,
-        questions: session.questions,
-        currentQ: session.currentQ,
-        startedAt: session.startedAt,
-        lastActiveAt: session.lastActiveAt ?? Date.now(),
-        warnedAt: session.warnedAt ?? null,
-        msgId: session.msgId,
-        chatId: session.chatId,
-      } as unknown as Prisma.InputJsonValue,
-    },
-  }));
+  const selectedOptionId = session.answers[expectedCurrentQ];
+  if (!Number.isInteger(selectedOptionId)) {
+    throw new Error("Cannot persist exam progress without the selected option.");
+  }
 
-  if (result.count !== 1) throw new Error("The in-progress exam result was not updated.");
+  // Keep the randomized question snapshot written at exam start. Each answer only
+  // patches the small progress fields, avoiding resending the full question set.
+  const updatedRows = await withRetry(() => prisma.$executeRaw`
+    UPDATE "exam_results"
+    SET "answers" = COALESCE("answers", '{}'::jsonb) || jsonb_build_object(
+      'answers', COALESCE("answers"->'answers', '{}'::jsonb) || jsonb_build_object(${String(expectedCurrentQ)}, ${selectedOptionId}::int),
+      'currentQ', ${session.currentQ}::int,
+      'lastActiveAt', ${session.lastActiveAt ?? Date.now()}::bigint,
+      'warnedAt', 'null'::jsonb,
+      'msgId', ${session.msgId}::int,
+      'chatId', ${session.chatId}::bigint
+    )
+    WHERE "id" = ${resultId}
+      AND "score" = -1
+      AND "answers"->>'currentQ' = ${String(expectedCurrentQ)}
+  `);
+
+  if (updatedRows !== 1) throw new ExamProgressConflictError();
 }
 
 // ─── Finish exam ─────────────────────────────────────────────────────────────
@@ -548,21 +572,15 @@ async function finishExam(session: ExamSession, timedOut = false, callbackId?: s
   examSessions.delete(sessionKey(telegramId, examId));
   if (callbackId) await ackCb(callbackId, "تم حفظ إجابتك، جارٍ تجهيز نتيجتك.");
 
-  // Check exam config for solutions review and max attempts
-  let allowSolutions = true;
-  let maxAttempts = 1;
-  try {
-    const examRec = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: { description: true } }));
-    if (examRec) {
-      const cfg = parseExamConfig(examRec.description);
-      allowSolutions = cfg.showSolutionsImmediately !== false;
-      maxAttempts = cfg.maxAttempts ?? 1;
-    }
-  } catch {}
-
-  const completedAttemptsCount = await withRetry(() => prisma.examResult.count({
-    where: { examId, telegramId, score: { gte: 0 } }
-  })).catch(() => 1);
+  // Session metadata avoids re-reading the exam and counting attempts again
+  // for every completion. Legacy sessions fall back to the database once.
+  const allowSolutions = session.showSolutionsImmediately !== false;
+  const maxAttempts = session.maxAttempts ?? 1;
+  const completedAttemptsCount = session.completedAttemptsBefore !== undefined
+    ? session.completedAttemptsBefore + 1
+    : await withRetry(() => prisma.examResult.count({
+        where: { examId, telegramId, score: { gte: 0 } },
+      })).catch(() => 1);
 
   const hasMoreAttempts = maxAttempts === 0 || completedAttemptsCount < maxAttempts;
   const remainingAttempts = maxAttempts === 0 ? "غير محدود" : Math.max(0, maxAttempts - completedAttemptsCount);
@@ -670,9 +688,10 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
   const cbId       = cb.id as string;
 
   try {
-    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    const examSelect = { id: true, description: true, isPublished: true } as const;
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: examSelect })).catch(() => null);
     if (!exam) {
-      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") }, select: examSelect })).catch(() => null);
     }
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح حالياً.", true);
 
@@ -682,14 +701,11 @@ async function handleExamStart(cb: Record<string, unknown>, examId: string) {
     }
     const maxAttempts = cfg.maxAttempts ?? 1;
 
-    const completedAttempts = await withRetry(() => prisma.examResult.findMany({
-      where: { examId: exam.id, telegramId, score: { gte: 0 } },
-      orderBy: { score: "desc" },
-    }));
-    const attemptCount = completedAttempts.length;
+    const completedAttempts = await getCompletedAttemptStats(exam.id, telegramId);
+    const attemptCount = completedAttempts._count._all;
 
     if (maxAttempts > 0 && attemptCount >= maxAttempts) {
-      const best = completedAttempts[0]?.score ?? 0;
+      const best = completedAttempts._max.score ?? 0;
       return ackCb(cbId, `لقد استنفدت جميع محاولاتك (${attemptCount}/${maxAttempts}). أفضل درجة: ${best}%.`, true);
     }
 
@@ -721,9 +737,18 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
   const name       = [firstName, lastName].filter(Boolean).join(" ");
 
   try {
-    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId } })).catch(() => null);
+    const examSelect = {
+      id: true,
+      title: true,
+      description: true,
+      questions: true,
+      timeLimit: true,
+      passingScore: true,
+      isPublished: true,
+    } as const;
+    let exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId }, select: examSelect })).catch(() => null);
     if (!exam) {
-      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") } })).catch(() => null);
+      exam = await withRetry(() => prisma.exam.findUnique({ where: { id: examId.replace(/^exam[_-]/i, "") }, select: examSelect })).catch(() => null);
     }
     if (!exam || !exam.isPublished) return ackCb(cbId, "هذا الاختبار غير متاح.", true);
 
@@ -733,20 +758,18 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     }
     const maxAttempts = cfg.maxAttempts ?? 1;
 
-    const inProgress = await withRetry(() => prisma.examResult.findFirst({
-      where: { examId: exam.id, telegramId, score: -1 }
-    }));
-
-    if (!inProgress) {
-      const completedAttempts = await withRetry(() => prisma.examResult.findMany({
+    const [inProgress, completedAttemptsCount] = await Promise.all([
+      withRetry(() => prisma.examResult.findFirst({
+        where: { examId: exam.id, telegramId, score: -1 },
+        select: { id: true, answers: true },
+      })),
+      withRetry(() => prisma.examResult.count({
         where: { examId: exam.id, telegramId, score: { gte: 0 } },
-        orderBy: { score: "desc" },
-      }));
-      const attemptCount = completedAttempts.length;
+      })),
+    ]);
 
-      if (maxAttempts > 0 && attemptCount >= maxAttempts) {
-        return ackCb(cbId, `عذراً، لقد استنفدت الحد الأقصى للمحاولات المسموحة (${maxAttempts}).`, true);
-      }
+    if (!inProgress && maxAttempts > 0 && completedAttemptsCount >= maxAttempts) {
+      return ackCb(cbId, `عذراً، لقد استنفدت الحد الأقصى للمحاولات المسموحة (${maxAttempts}).`, true);
     }
 
     let session: ExamSession;
@@ -772,6 +795,9 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
         warnedAt: null,
         timeLimit: exam.timeLimit,
         passingScore: exam.passingScore,
+        maxAttempts,
+        showSolutionsImmediately: cfg.showSolutionsImmediately !== false,
+        completedAttemptsBefore: completedAttemptsCount,
       };
 
       // Reset activity and clear warning in database
@@ -790,6 +816,9 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
             warnedAt: null,
             msgId,
             chatId,
+            maxAttempts,
+            showSolutionsImmediately: cfg.showSolutionsImmediately !== false,
+            completedAttemptsBefore: completedAttemptsCount,
           } as unknown as Prisma.InputJsonValue,
         },
       })).catch(() => {});
@@ -812,6 +841,9 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
         warnedAt: null,
         timeLimit: exam.timeLimit,
         passingScore: exam.passingScore,
+        maxAttempts,
+        showSolutionsImmediately: cfg.showSolutionsImmediately !== false,
+        completedAttemptsBefore: completedAttemptsCount,
       };
 
       const createdResult = await withRetry(() => prisma.examResult.create({
@@ -825,7 +857,10 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
             lastActiveAt: session.lastActiveAt,
             warnedAt: null,
             msgId,
-            chatId
+            chatId,
+            maxAttempts,
+            showSolutionsImmediately: cfg.showSolutionsImmediately !== false,
+            completedAttemptsBefore: completedAttemptsCount,
           } as unknown as Prisma.InputJsonValue,
           score: -1,
           passed: false,
@@ -868,13 +903,25 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
       try {
         let inProgress = await withRetry(() => prisma.examResult.findFirst({
           where: { examId, telegramId, score: -1 },
-          include: { exam: true },
+          select: {
+            id: true,
+            examId: true,
+            name: true,
+            answers: true,
+            exam: { select: { title: true, description: true, questions: true, timeLimit: true, passingScore: true } },
+          },
         }));
         if (!inProgress) {
           const stripped = examId.replace(/^exam[_-]/i, "");
           inProgress = await withRetry(() => prisma.examResult.findFirst({
             where: { examId: stripped, telegramId, score: -1 },
-            include: { exam: true },
+            select: {
+              id: true,
+              examId: true,
+              name: true,
+              answers: true,
+              exam: { select: { title: true, description: true, questions: true, timeLimit: true, passingScore: true } },
+            },
           }));
         }
         if (inProgress && inProgress.exam) {
@@ -899,6 +946,15 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
             startedAt: Number(data.startedAt) || Date.now(),
             timeLimit: inProgress.exam.timeLimit,
             passingScore: inProgress.exam.passingScore,
+            maxAttempts: Number.isInteger(data.maxAttempts)
+              ? Number(data.maxAttempts)
+              : (parseExamConfig(inProgress.exam.description).maxAttempts ?? 1),
+            showSolutionsImmediately: typeof data.showSolutionsImmediately === "boolean"
+              ? data.showSolutionsImmediately
+              : parseExamConfig(inProgress.exam.description).showSolutionsImmediately !== false,
+            completedAttemptsBefore: Number.isInteger(data.completedAttemptsBefore)
+              ? Number(data.completedAttemptsBefore)
+              : undefined,
           };
           examSessions.set(key, session);
         }
@@ -916,6 +972,7 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
             { examId: examId.replace(/^exam[_-]/i, ""), telegramId, score: { gte: 0 } },
           ],
         },
+        select: { score: true },
       })).catch(() => null);
 
       if (finished) {
@@ -973,13 +1030,48 @@ async function handleExamAnswer(cb: Record<string, unknown>, examId: string, qIn
     }
 
     try {
-      await persistExamProgress(session);
+      await persistExamProgress(session, previousCurrentQ);
     } catch (error) {
       if (previousAnswer === undefined) delete session.answers[qIndex];
       else session.answers[qIndex] = previousAnswer;
       session.currentQ = previousCurrentQ;
       session.lastActiveAt = previousLastActiveAt;
       session.warnedAt = previousWarnedAt;
+
+      if (error instanceof ExamProgressConflictError && session.resultId) {
+        try {
+          const latest = await withRetry(() => prisma.examResult.findUnique({
+            where: { id: session!.resultId! },
+            select: { score: true, answers: true },
+          }));
+
+          if (latest && latest.score >= 0) {
+            await ackCb(cbId, "تم حفظ إجابتك والامتحان مكتمل بالفعل.", true);
+            return;
+          }
+
+          const savedProgress = latest && isRecord(latest.answers) ? latest.answers : {};
+          const savedAnswers = isRecord(savedProgress.answers) ? savedProgress.answers : {};
+          const maxSavedQuestion = Object.keys(savedAnswers).reduce((max, answerIndex) => {
+            const index = Number(answerIndex);
+            return Number.isInteger(index) ? Math.max(max, index) : max;
+          }, -1);
+          session.answers = savedAnswers as Record<number, number>;
+          session.currentQ = Math.max(Number(savedProgress.currentQ) || 0, maxSavedQuestion + 1);
+          session.lastActiveAt = Number(savedProgress.lastActiveAt) || Date.now();
+          session.warnedAt = Number(savedProgress.warnedAt) || null;
+          session.msgId = Number(savedProgress.msgId) || session.msgId;
+          session.chatId = Number(savedProgress.chatId) || session.chatId;
+          examSessions.set(key, session);
+          await ackCb(cbId, "تمت مزامنة إجابتك مع تقدم الامتحان. جارٍ عرض السؤال الحالي.");
+          if (session.currentQ >= session.questions.length) await finishExam(session);
+          else await sendQuestion(session);
+          return;
+        } catch (syncError) {
+          console.error("[exam] concurrent progress recovery failed:", syncError);
+        }
+      }
+
       console.error("[exam] answer persistence failed:", error);
       await ackCb(cbId, "تعذّر حفظ الإجابة مؤقتاً. بقي السؤال كما هو؛ اضغط الإجابة مرة أخرى.", true);
       return;
@@ -1426,13 +1518,25 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
     try {
       let inProgress = await withRetry(() => prisma.examResult.findFirst({
         where: { examId, telegramId, score: -1 },
-        include: { exam: true },
+        select: {
+          id: true,
+          examId: true,
+          name: true,
+          answers: true,
+          exam: { select: { title: true, description: true, questions: true, timeLimit: true, passingScore: true } },
+        },
       }));
       if (!inProgress) {
         const stripped = examId.replace(/^exam[_-]/i, "");
         inProgress = await withRetry(() => prisma.examResult.findFirst({
           where: { examId: stripped, telegramId, score: -1 },
-          include: { exam: true },
+          select: {
+            id: true,
+            examId: true,
+            name: true,
+            answers: true,
+            exam: { select: { title: true, description: true, questions: true, timeLimit: true, passingScore: true } },
+          },
         }));
       }
       if (inProgress && inProgress.exam) {
@@ -1460,6 +1564,15 @@ async function handleExamResume(cb: Record<string, unknown>, examId: string) {
           warnedAt: null,
           timeLimit: inProgress.exam.timeLimit,
           passingScore: inProgress.exam.passingScore,
+          maxAttempts: Number.isInteger(data.maxAttempts)
+            ? Number(data.maxAttempts)
+            : (parseExamConfig(inProgress.exam.description).maxAttempts ?? 1),
+          showSolutionsImmediately: typeof data.showSolutionsImmediately === "boolean"
+            ? data.showSolutionsImmediately
+            : parseExamConfig(inProgress.exam.description).showSolutionsImmediately !== false,
+          completedAttemptsBefore: Number.isInteger(data.completedAttemptsBefore)
+            ? Number(data.completedAttemptsBefore)
+            : undefined,
         };
         examSessions.set(key, session);
       }
@@ -1616,13 +1729,30 @@ export async function POST(req: NextRequest) {
     // ── Poll answer (for non-anonymous polls) ────────────────────────────────
     if (update.poll_answer) {
       const { poll_id, user, option_ids } = update.poll_answer;
-      const quiz = await withRetry(() => prisma.quiz.findFirst({ where: { pollId: poll_id } }));
-      if (quiz) {
-        await withRetry(() => prisma.pollAnswer.upsert({
-          where:  { quizId_telegramUserId: { quizId: quiz.id, telegramUserId: String(user.id) } },
-          update: { optionIds: option_ids, answeredAt: new Date(), firstName: user.first_name, username: user.username },
-          create: { quizId: quiz.id, telegramUserId: String(user.id), optionIds: option_ids, firstName: user.first_name, username: user.username },
-        }));
+      if (Array.isArray(option_ids) && option_ids.every(Number.isInteger)) {
+        // Resolve the quiz and upsert its answer in one database operation.
+        await withRetry(() => prisma.$executeRaw`
+          INSERT INTO "poll_answers" (
+            "id", "optionIds", "answeredAt", "quizId", "telegramUserId", "firstName", "username"
+          )
+          SELECT
+            gen_random_uuid()::text,
+            ${option_ids}::integer[],
+            NOW(),
+            quiz."id",
+            ${String(user.id)},
+            ${user.first_name ?? null},
+            ${user.username ?? null}
+          FROM "quizzes" quiz
+          WHERE quiz."pollId" = ${poll_id}
+          ORDER BY quiz."createdAt" DESC
+          LIMIT 1
+          ON CONFLICT ("quizId", "telegramUserId") DO UPDATE SET
+            "optionIds" = EXCLUDED."optionIds",
+            "answeredAt" = EXCLUDED."answeredAt",
+            "firstName" = EXCLUDED."firstName",
+            "username" = EXCLUDED."username"
+        `);
       }
     }
 
@@ -2074,8 +2204,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Sweep and expire overdue/inactive exam sessions in the background
-    checkAndExpireExamSessions().catch((e) => console.error("[webhook] checkAndExpire error:", e));
+    // Preserve opportunistic expiry checks without querying once per Telegram
+    // update. Each warm instance can start at most one sweep per minute.
+    scheduleExamExpirySweep();
 
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quizforge-exam-expiry-scheduler",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-12",
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "APP_BASE_URL": "https://agricult-quizmaker-nine.vercel.app"
+  },
+  "triggers": {
+    "crons": ["*/1 * * * *"]
+  }
+}

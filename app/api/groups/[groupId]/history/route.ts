@@ -42,22 +42,11 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // ── 1. Smart Auto-Expire Sync for Telegram Timed Polls ─────────────────
-    // Automatically close expired polls in the DB using a single fast SQL statement.
-    // In Telegram Bot API, polls with open_period close automatically after open_period seconds.
-    await prisma.$executeRaw`
-      UPDATE "quizzes"
-      SET "pollClosed" = true
-      WHERE "groupId" = ${groupId}
-        AND "pollClosed" = false
-        AND "openPeriod" IS NOT NULL
-        AND "sentAt" IS NOT NULL
-        AND EXTRACT(EPOCH FROM (NOW() - "sentAt")) >= "openPeriod"
-    `.catch((err) => console.error("[history] Auto-expire DB update error:", err));
-
     const { searchParams } = req.nextUrl;
-    const page      = Math.max(1, parseInt(searchParams.get("page")  || "1"));
-    const limit     = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "15")));
+    const parsedPage = Number.parseInt(searchParams.get("page") || "1", 10);
+    const parsedLimit = Number.parseInt(searchParams.get("limit") || "15", 10);
+    const page = Number.isFinite(parsedPage) ? Math.max(1, parsedPage) : 1;
+    const limit = Number.isFinite(parsedLimit) ? Math.min(50, Math.max(1, parsedLimit)) : 15;
     const type      = searchParams.get("type"); // QUIZ | POLL
     const status    = searchParams.get("status"); // active | closed | deleted
     const privacy   = searchParams.get("privacy"); // anonymous | public
@@ -123,7 +112,7 @@ export async function GET(
     // ── 2. Parallel Fetch: quizzes, total count, group KPIs, topics, tags, avg accuracy ────
     type AccuracyRow = { total_answers: bigint; total_correct: bigint };
 
-    const [quizzes, total, summaryCounts, groupTopics, groupQuizzesTags, groupAccuracyRows] = await Promise.all([
+    const [quizzes, total, summaryRow, groupTopics, tagRows, groupAccuracyRows] = await Promise.all([
       withRetry(() =>
         prisma.quiz.findMany({
           where,
@@ -137,17 +126,30 @@ export async function GET(
         })
       ),
       withRetry(() => prisma.quiz.count({ where })),
-      // Summary KPIs across the group (for active sent quizzes)
-      Promise.all([
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, type: "QUIZ", deletedAt: null } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, type: "POLL", deletedAt: null } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, pollClosed: false, deletedAt: null } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, pollClosed: true, deletedAt: null } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, isAnonymous: true, deletedAt: null } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, isAnonymous: false, deletedAt: null } })),
-        withRetry(() => prisma.pollAnswer.count({ where: { quiz: { groupId, sentAt: { not: null } } } })),
-        withRetry(() => prisma.quiz.count({ where: { groupId, sentAt: { not: null }, deletedAt: { not: null } } })),
-      ]),
+      // Compute all group-wide summary values with one database roundtrip.
+      prisma.$queryRaw<Array<{
+        totalQuizzes: bigint;
+        totalPolls: bigint;
+        activeCount: bigint;
+        closedCount: bigint;
+        anonymousCount: bigint;
+        publicCount: bigint;
+        totalResponses: bigint;
+        deletedCount: bigint;
+      }>>`
+        SELECT
+          COUNT(*) FILTER (WHERE q."type" = 'QUIZ' AND q."deletedAt" IS NULL)::bigint AS "totalQuizzes",
+          COUNT(*) FILTER (WHERE q."type" = 'POLL' AND q."deletedAt" IS NULL)::bigint AS "totalPolls",
+          COUNT(*) FILTER (WHERE q."pollClosed" = false AND q."deletedAt" IS NULL)::bigint AS "activeCount",
+          COUNT(*) FILTER (WHERE q."pollClosed" = true AND q."deletedAt" IS NULL)::bigint AS "closedCount",
+          COUNT(*) FILTER (WHERE q."isAnonymous" = true AND q."deletedAt" IS NULL)::bigint AS "anonymousCount",
+          COUNT(*) FILTER (WHERE q."isAnonymous" = false AND q."deletedAt" IS NULL)::bigint AS "publicCount",
+          (SELECT COUNT(*) FROM "poll_answers" pa JOIN "quizzes" sent_q ON sent_q."id" = pa."quizId"
+            WHERE sent_q."groupId" = ${groupId} AND sent_q."sentAt" IS NOT NULL)::bigint AS "totalResponses",
+          COUNT(*) FILTER (WHERE q."deletedAt" IS NOT NULL)::bigint AS "deletedCount"
+        FROM "quizzes" q
+        WHERE q."groupId" = ${groupId} AND q."sentAt" IS NOT NULL
+      `,
       withRetry(() =>
         prisma.topic.findMany({
           where: { groupId },
@@ -155,12 +157,12 @@ export async function GET(
           orderBy: { name: "asc" },
         })
       ),
-      withRetry(() =>
-        prisma.quiz.findMany({
-          where: { groupId, sentAt: { not: null } },
-          select: { tags: true },
-        })
-      ),
+      prisma.$queryRaw<Array<{ tag: string }>>`
+        SELECT DISTINCT tag
+        FROM "quizzes" q, UNNEST(q."tags") AS tag
+        WHERE q."groupId" = ${groupId} AND q."sentAt" IS NOT NULL AND tag <> ''
+        ORDER BY tag
+      `,
       // Group overall accuracy calculation
       prisma.$queryRaw<AccuracyRow[]>`
         SELECT
@@ -177,13 +179,7 @@ export async function GET(
     ]);
 
     // Unique tags across group
-    const tagSet = new Set<string>();
-    for (const item of groupQuizzesTags) {
-      if (Array.isArray(item.tags)) {
-        for (const t of item.tags) if (t) tagSet.add(t);
-      }
-    }
-    const availableTags = Array.from(tagSet).sort();
+    const availableTags = tagRows.map(({ tag }) => tag);
 
     // Calculate group average accuracy
     let groupAvgAccuracy: number | null = null;
@@ -339,16 +335,7 @@ export async function GET(
       enriched.sort((a, b) => (a.correctRate ?? 999) - (b.correctRate ?? 999));
     }
 
-    const [
-      totalQuizzesCount,
-      totalPollsCount,
-      activeCount,
-      closedCount,
-      anonymousCount,
-      publicCount,
-      totalResponsesCount,
-      deletedCount,
-    ] = summaryCounts;
+    const summary = summaryRow[0];
 
     return NextResponse.json({
       quizzes: enriched,
@@ -364,14 +351,14 @@ export async function GET(
       availableTopics: groupTopics,
       availableTags,
       summary: {
-        totalQuizzes: totalQuizzesCount,
-        totalPolls: totalPollsCount,
-        activeCount,
-        closedCount,
-        anonymousCount,
-        publicCount,
-        totalResponses: totalResponsesCount,
-        deletedCount,
+        totalQuizzes: Number(summary?.totalQuizzes ?? 0),
+        totalPolls: Number(summary?.totalPolls ?? 0),
+        activeCount: Number(summary?.activeCount ?? 0),
+        closedCount: Number(summary?.closedCount ?? 0),
+        anonymousCount: Number(summary?.anonymousCount ?? 0),
+        publicCount: Number(summary?.publicCount ?? 0),
+        totalResponses: Number(summary?.totalResponses ?? 0),
+        deletedCount: Number(summary?.deletedCount ?? 0),
         avgAccuracyRate: groupAvgAccuracy,
       },
     });

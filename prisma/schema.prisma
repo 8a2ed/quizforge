@@ -90,6 +90,7 @@ model GroupMember {
   group  Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([userId, groupId])
+  @@index([groupId, userId])
   @@map("group_members")
 }
 
@@ -127,7 +128,9 @@ model Quiz {
   collections CollectionQuiz[]
 
   @@index([groupId, createdAt])
+  @@index([groupId, sentAt])
   @@index([scheduledAt])
+  @@index([sentAt, scheduledAt])
   @@index([pollId])
   @@map("quizzes")
 }
@@ -193,7 +196,7 @@ model Topic {
 
 model BotConfig {
   id                 String  @id @default(cuid())
-  webhookSecret      String  @default(cuid())
+  webhookSecret      String  @unique @default(cuid())
   defaultAnonymous   Boolean @default(true)
   defaultOpenPeriod  Int     @default(0)
   defaultType        QuizType @default(QUIZ)
@@ -249,9 +252,9 @@ model ExamResult {
   exam   Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
 
   @@index([examId, telegramId, score])
+  @@index([score, examId])
   @@index([examId, completedAt])
   @@index([telegramId])
-  @@index([score])
   @@map("exam_results")
 }
 
