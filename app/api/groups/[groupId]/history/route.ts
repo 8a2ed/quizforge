@@ -2,6 +2,7 @@ import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
+import { parsePollOptionCounts } from "@/lib/pollSnapshots";
 
 const JWT_SECRET = getAuthSecret();
 
@@ -119,6 +120,7 @@ export async function GET(
           include: {
             sentBy: { select: { id: true, firstName: true, username: true, photoUrl: true } },
             _count: { select: { answers: true } },
+            pollSnapshot: { select: { optionCounts: true, totalVoterCount: true, updatedAt: true } },
           },
           orderBy,
           skip: (page - 1) * limit,
@@ -193,12 +195,22 @@ export async function GET(
 
     // ── 3. Batch correct-rate in ONE raw SQL query ─────────────────────────────
     const quizIdsForRate = quizzes
-      .filter((q) => q.type === "QUIZ" && q.correctOptionId !== null && q._count.answers > 0)
+      .filter((q) => q.type === "QUIZ" && q.correctOptionId !== null && !q.isAnonymous && q._count.answers > 0)
       .map((q) => q.id);
 
     const rateMap: Record<string, number | null> = {};
     for (const id of quizIdsForRate) {
       rateMap[id] = 0;
+    }
+
+    // Anonymous Telegram polls have no user-level answer payload. Their exact
+    // latest tallies live in quiz_poll_snapshots, not synthetic poll_answers.
+    for (const quiz of quizzes) {
+      if (!quiz.isAnonymous || quiz.type !== "QUIZ" || quiz.correctOptionId === null) continue;
+      const total = quiz.pollSnapshot?.totalVoterCount ?? 0;
+      const correct = parsePollOptionCounts(quiz.pollSnapshot?.optionCounts)
+        .find((item) => item.optionId === quiz.correctOptionId)?.voterCount ?? 0;
+      rateMap[quiz.id] = total > 0 ? Math.round((correct / total) * 100) : null;
     }
 
     if (quizIdsForRate.length > 0) {
@@ -233,15 +245,26 @@ export async function GET(
           pa."quizId" AS quiz_id,
           opt.opt_id,
           COUNT(pa.id) AS vote_count
-        FROM "poll_answers" pa,
+        FROM "poll_answers" pa
+        JOIN "quizzes" q ON q."id" = pa."quizId",
         UNNEST(pa."optionIds") AS opt(opt_id)
         WHERE pa."quizId" = ANY(${allQuizIds}::text[])
+          AND q."isAnonymous" = false
         GROUP BY pa."quizId", opt.opt_id
       `.catch(() => [] as OptionVoteRow[]);
 
       for (const r of optionVoteRows) {
         if (!optionVotesMap[r.quiz_id]) optionVotesMap[r.quiz_id] = {};
         optionVotesMap[r.quiz_id][Number(r.opt_id)] = Number(r.vote_count);
+      }
+
+      for (const quiz of quizzes) {
+        if (!quiz.isAnonymous) continue;
+        const snapshotVotes: Record<number, number> = {};
+        for (const item of parsePollOptionCounts(quiz.pollSnapshot?.optionCounts)) {
+          snapshotVotes[item.optionId] = item.voterCount;
+        }
+        optionVotesMap[quiz.id] = snapshotVotes;
       }
     }
 
@@ -317,8 +340,14 @@ export async function GET(
         secondsLeft = Math.max(0, Math.floor((expiryTime - now) / 1000));
       }
 
+      const responseCount = q.isAnonymous
+        ? (q.pollSnapshot?.totalVoterCount ?? 0)
+        : q._count.answers;
+
       return {
         ...q,
+        _count: { ...q._count, answers: responseCount },
+        pollSnapshot: undefined,
         pollClosed: isClosed,
         secondsLeft,
         correctRate: rateMap[q.id] ?? null,

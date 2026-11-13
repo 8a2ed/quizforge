@@ -2,7 +2,8 @@ import { getAuthSecret } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { prisma, withRetry } from "@/lib/db";
-import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
+import { sendPollClosureSummary } from "@/lib/pollSync";
+import { upsertAnonymousPollSnapshot } from "@/lib/pollSnapshots";
 
 const JWT_SECRET = getAuthSecret();
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -63,7 +64,7 @@ export async function POST(
           // If returned poll has options and is anonymous, sync voter counts
           if (data.result && Array.isArray(data.result.options)) {
             if (quiz.isAnonymous) {
-              await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+              await upsertAnonymousPollSnapshot(quiz.id, data.result.options, data.result.total_voter_count || 0);
             }
             if ((data.result.total_voter_count || 0) > 0) {
               await sendPollClosureSummary({ ...quiz, group: membership.group }, data.result);

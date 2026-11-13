@@ -125,6 +125,7 @@ model Quiz {
   group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
   sentBy   User   @relation(fields: [sentById], references: [id])
   answers  PollAnswer[]
+  pollSnapshot QuizPollSnapshot?
   collections CollectionQuiz[]
 
   @@index([groupId, createdAt])
@@ -133,6 +134,19 @@ model Quiz {
   @@index([sentAt, scheduledAt])
   @@index([pollId])
   @@map("quizzes")
+}
+
+// One live, aggregated tally for an anonymous Telegram poll. Individual voter
+// identities are unavailable from Telegram and must not be fabricated locally.
+model QuizPollSnapshot {
+  quizId          String   @id
+  optionCounts    Json     @default("[]")
+  totalVoterCount Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@map("quiz_poll_snapshots")
 }
 
 

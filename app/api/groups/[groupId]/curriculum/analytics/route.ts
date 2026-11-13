@@ -40,12 +40,16 @@ export async function GET(
         },
         include: {
           _count: { select: { answers: true } },
+          pollSnapshot: { select: { totalVoterCount: true } },
         },
       })
     );
 
     broadcastedQuizzesCount = quizzes.length;
-    studentAnswersCount = quizzes.reduce((acc, q) => acc + (q._count?.answers || 0), 0);
+    studentAnswersCount = quizzes.reduce(
+      (acc, q) => acc + (q.isAnonymous ? q.pollSnapshot?.totalVoterCount || 0 : q._count?.answers || 0),
+      0
+    );
 
     // 2. Exams in this group
     const exams = await withRetry(() =>

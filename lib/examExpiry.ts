@@ -54,14 +54,14 @@ export interface ExamExpiryStats {
   lockSkipped?: boolean;
 }
 
-const EXAM_EXPIRY_LOCK_NAME = "exam-expiry-sweep";
+const EXAM_EXPIRY_LOCK_PREFIX = "exam-expiry";
 const EXAM_EXPIRY_LOCK_LEASE_MS = 3 * 60 * 1000;
 
-async function acquireExamExpiryLock(): Promise<string | null> {
+async function acquireExamExpiryLock(lockName: string): Promise<string | null> {
   const ownerToken = randomUUID();
   const rows = await prisma.$queryRaw<Array<{ ownerToken: string }>>`
     INSERT INTO "scheduled_job_locks" ("name", "ownerToken", "leaseUntil")
-    VALUES (${EXAM_EXPIRY_LOCK_NAME}, ${ownerToken}, NOW() + (${EXAM_EXPIRY_LOCK_LEASE_MS} * INTERVAL '1 millisecond'))
+    VALUES (${lockName}, ${ownerToken}, NOW() + (${EXAM_EXPIRY_LOCK_LEASE_MS} * INTERVAL '1 millisecond'))
     ON CONFLICT ("name") DO UPDATE
       SET "ownerToken" = EXCLUDED."ownerToken", "leaseUntil" = EXCLUDED."leaseUntil"
       WHERE "scheduled_job_locks"."leaseUntil" <= NOW()
@@ -70,10 +70,10 @@ async function acquireExamExpiryLock(): Promise<string | null> {
   return rows[0]?.ownerToken ?? null;
 }
 
-async function releaseExamExpiryLock(ownerToken: string): Promise<void> {
+async function releaseExamExpiryLock(lockName: string, ownerToken: string): Promise<void> {
   await prisma.$executeRaw`
     DELETE FROM "scheduled_job_locks"
-    WHERE "name" = ${EXAM_EXPIRY_LOCK_NAME} AND "ownerToken" = ${ownerToken}
+    WHERE "name" = ${lockName} AND "ownerToken" = ${ownerToken}
   `;
 }
 
@@ -86,22 +86,16 @@ export const examSessions: Map<string, ExamSession> = (globalThis.__examSessions
 export const sessionKey = (telegramId: string, examId: string) => `${telegramId}:${examId}`;
 
 /**
- * Silence required to trigger inactivity warning: exactly 1 hour (60 minutes) from last interaction
- */
-export const INACTIVITY_SILENCE_MS = 60 * 60 * 1000;
-
-/**
- * Grace period given to the student after the 1-hour warning: 5 minutes
- */
-export const INACTIVITY_GRACE_PERIOD_MS = 5 * 60 * 1000;
-
-/**
  * Checks all in-progress exam sessions (score === -1):
  * 1. If overall elapsed time >= timeLimit, marks user as failed, sends 'Time is Over' to Telegram, and closes session.
- * 2. If user is inactive >= INACTIVITY_SILENCE_MS (1 hour), sends a warning message with an interactive resume button.
- * 3. If user remains inactive after warning for >= INACTIVITY_GRACE_PERIOD_MS (5 minutes), marks as failed with partial score.
+ * The Durable Object scheduler calls this at the exact deadline for an active
+ * result. General scans remain available only as a recovery/administrative path.
  */
-export async function checkAndExpireExamSessions(targetExamId?: string, targetGroupId?: string): Promise<ExamExpiryStats> {
+export async function checkAndExpireExamSessions(
+  targetExamId?: string,
+  targetGroupId?: string,
+  targetResultId?: string
+): Promise<ExamExpiryStats> {
   const stats: ExamExpiryStats = {
     checkedCount: 0,
     expiredCount: 0,
@@ -110,7 +104,8 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
     timestamp: new Date().toISOString(),
   };
 
-  const lockOwner = await acquireExamExpiryLock();
+  const lockName = `${EXAM_EXPIRY_LOCK_PREFIX}:${targetResultId || targetExamId || targetGroupId || "sweep"}`;
+  const lockOwner = await acquireExamExpiryLock(lockName);
   if (!lockOwner) {
     return { ...stats, lockSkipped: true };
   }
@@ -120,6 +115,7 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
       prisma.examResult.findMany({
         where: {
           score: -1,
+          ...(targetResultId ? { id: targetResultId } : {}),
           ...(targetExamId ? { examId: targetExamId } : {}),
           ...(targetGroupId ? { exam: { groupId: targetGroupId } } : {}),
         },
@@ -154,12 +150,6 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
       const startedAt = Number.isFinite(startedAtValue) && startedAtValue > 0
         ? startedAtValue
         : record.completedAt?.getTime() || now;
-      const lastActiveValue = Number(rawData.lastActiveAt);
-      const lastActiveAt = Number.isFinite(lastActiveValue) && lastActiveValue > 0
-        ? lastActiveValue
-        : startedAt;
-      const warnedValue = Number(rawData.warnedAt);
-      const warnedAt = Number.isFinite(warnedValue) && warnedValue > 0 ? warnedValue : null;
       const chatValue = Number(rawData.chatId);
       const chatId = Number.isFinite(chatValue) && chatValue !== 0
         ? chatValue
@@ -197,9 +187,11 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
         const masterAnswers = mapStudentAnswersToMaster(studentQuestions, studentAnswers);
 
         // Mark as failed due to time over
-        await withRetry(() =>
-          prisma.examResult.update({
-            where: { id: record.id },
+        const finalised = await withRetry(() =>
+          prisma.examResult.updateMany({
+            // Guarding score makes concurrent Telegram callbacks and alarm
+            // delivery idempotent: exactly one caller can finalise a result.
+            where: { id: record.id, score: -1 },
             data: {
               score: finalScore,
               passed: false, // Explicitly marked as failed when time expires
@@ -209,6 +201,8 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
             },
           })
         );
+
+        if (finalised.count !== 1) continue;
 
         // Delete from in-memory session store
         if (record.telegramId) {
@@ -253,135 +247,13 @@ export async function checkAndExpireExamSessions(targetExamId?: string, targetGr
         continue;
       }
 
-      // ─── 2. Inactivity Tracking (1-Hour Silence + 5-Minute Grace) ───────
-      const inactiveMs = now - lastActiveAt;
-
-      // Case 2A: User has been inactive for 1 hour and has NOT been warned yet
-      if (inactiveMs >= INACTIVITY_SILENCE_MS && !warnedAt) {
-        rawData.warnedAt = now;
-
-        await withRetry(() =>
-          prisma.examResult.update({
-            where: { id: record.id },
-            data: { answers: rawData },
-          })
-        );
-
-        const memSession = record.telegramId ? examSessions.get(sessionKey(record.telegramId, exam.id)) : null;
-        if (memSession) {
-          memSession.warnedAt = now;
-        }
-
-        if (chatId) {
-          const warnText = [
-            `⚠️ <b>تنبيه عدم التفاعل: اختبار ${escapeHtml(exam.title)}</b>`,
-            "",
-            `مرحباً <b>${escapeHtml(studentName)}</b>، نلاحظ توقفك عن الإجابة في الاختبار لمدة <b>ساعة كاملة (60 دقيقة)</b>!`,
-            "",
-            `⏱ <b>لديك مهلة 5 دقائق</b> للضغط على زر متابعة الاختبار أدناه أو إرسال إجابة السؤال، وإلا سيتم إغلاق الاختبار تلقائياً واحتساب النتيجة بالرسوب ❌.`,
-            "",
-            `👉 <i>اضغط على الزر بالأسفل لتأكيد تواجدك ومتابعة الاختبار:</i>`,
-          ].join("\n");
-
-          await telegram.sendMessage({
-            chat_id: chatId,
-            text: warnText,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: "▶️ متابعة الاختبار (أنا هنا)",
-                    callback_data: `exam_resume:${exam.id}`,
-                  },
-                ],
-              ],
-            },
-          }).catch((tgErr) => {
-            console.error("[examExpiry] Failed to send inactive warning:", tgErr);
-          });
-        }
-
-        stats.warnedCount++;
-        stats.activeCount++;
-        continue;
-      }
-
-      // Case 2B: User was already warned and the 5-minute grace period expired with no response
-      if (warnedAt && now - warnedAt >= INACTIVITY_GRACE_PERIOD_MS) {
-        let correctCount = 0;
-        for (let i = 0; i < studentQuestions.length; i++) {
-          const chosen = studentAnswers[i] ?? studentAnswers[String(i)] ?? -1;
-          if (chosen === studentQuestions[i].correctOptionId) {
-            correctCount++;
-          }
-        }
-        const totalQ = Math.max(1, studentQuestions.length);
-        const finalScore = Math.round((correctCount / totalQ) * 100);
-        const masterAnswers = mapStudentAnswersToMaster(studentQuestions, studentAnswers);
-
-        // Mark as failed due to inactivity
-        await withRetry(() =>
-          prisma.examResult.update({
-            where: { id: record.id },
-            data: {
-              score: finalScore,
-              passed: false,
-              duration: elapsedSeconds,
-              answers: masterAnswers,
-              completedAt: new Date(),
-            },
-          })
-        );
-
-        if (record.telegramId) {
-          examSessions.delete(sessionKey(record.telegramId, exam.id));
-        }
-
-        if (chatId) {
-          const inactiveFailText = [
-            `🛑 <b>انتهى الاختبار بسبب عدم التفاعل (Inactivity Timeout)</b>`,
-            "",
-            `عذراً <b>${escapeHtml(studentName)}</b>، تم إنهاء جلستك في اختبار:`,
-            `📋 <b>${escapeHtml(exam.title)}</b>`,
-            `نظراً لعدم التفاعل لمدة ساعة وتجاوز مهلة الـ 5 دقائق الإضافية دون استجابة.`,
-            "",
-            `❌ <b>النتيجة النهائية: راسب (عدم استجابة)</b>`,
-            `📊 الدرجة المحتسبة للأسئلة المنجزة: <b>${finalScore}%</b> (${correctCount}/${totalQ} إجابة صحيحة)`,
-            `⏱ الوقت المنقضي: <b>${Math.floor(elapsedSeconds / 60)}د ${elapsedSeconds % 60}ث</b>`,
-            "",
-            `<i>إذا واجهتك مشكلة تقنية، يرجى التواصل مع مشرف المادة لإعادة تعيين المحاولة.</i>`,
-          ].join("\n");
-
-          try {
-            if (msgId) {
-              await telegram.editMessageText({
-                chat_id: chatId,
-                message_id: msgId,
-                text: inactiveFailText,
-                parse_mode: "HTML",
-                reply_markup: { inline_keyboard: [] },
-              }).catch(async () => {
-                await telegram.sendMessage({ chat_id: chatId, text: inactiveFailText, parse_mode: "HTML" });
-              });
-            } else {
-              await telegram.sendMessage({ chat_id: chatId, text: inactiveFailText, parse_mode: "HTML" });
-            }
-          } catch (tgErr) {
-            console.error("[examExpiry] Failed to send inactive telegram notice:", tgErr);
-          }
-        }
-
-        stats.expiredCount++;
-        continue;
-      }
 stats.activeCount++;
     }
   } catch (error) {
     console.error("[examExpiry] Error checking exam sessions:", error);
   } finally {
     try {
-      await releaseExamExpiryLock(lockOwner);
+      await releaseExamExpiryLock(lockName, lockOwner);
     } catch (error) {
       console.error("[examExpiry] Failed to release shared lock:", error);
     }

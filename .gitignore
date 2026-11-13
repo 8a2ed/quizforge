@@ -15,3 +15,4 @@ coverage/
 tsconfig.tsbuildinfo
 *.bak
 data/
+exported_data/

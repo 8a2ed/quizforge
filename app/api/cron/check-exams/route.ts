@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const examId = searchParams.get("examId") || undefined;
+    const resultId = searchParams.get("resultId") || undefined;
     const groupId = searchParams.get("groupId");
     if (!(await isAuthorized(req, groupId))) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -43,7 +44,7 @@ export async function GET(req: NextRequest) {
       if (!exam) return NextResponse.json({ ok: false, error: "Exam not found" }, { status: 404 });
     }
 
-    const stats = await checkAndExpireExamSessions(examId, groupId || undefined);
+    const stats = await checkAndExpireExamSessions(examId, groupId || undefined, resultId);
 
     return NextResponse.json({
       ok: true,

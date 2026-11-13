@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { telegram } from "@/lib/telegram";
-import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
+import { sendPollClosureSummary } from "@/lib/pollSync";
+import { upsertAnonymousPollSnapshot } from "@/lib/pollSnapshots";
 import { checkAndExpireExamSessions } from "@/lib/examExpiry";
 import { safeSecretEquals } from "@/lib/crypto";
 
@@ -190,7 +191,7 @@ export async function GET(req: Request) {
           await prisma.quiz.update({ where: { id: quiz.id }, data: { pollClosed: true } });
           if (data.result && Array.isArray(data.result.options)) {
             if (quiz.isAnonymous) {
-              await syncAnonymousPollAnswers(quiz.id, data.result.options, data.result.total_voter_count || 0);
+              await upsertAnonymousPollSnapshot(quiz.id, data.result.options, data.result.total_voter_count || 0);
             }
             if ((data.result.total_voter_count || 0) > 0) {
               await sendPollClosureSummary(quiz, data.result);

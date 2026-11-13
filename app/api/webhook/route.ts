@@ -13,13 +13,14 @@ import {
   type StudentExamQuestion,
   type MasterExamQuestion,
 } from "@/lib/examConfig";
-import { syncAnonymousPollAnswers, sendPollClosureSummary } from "@/lib/pollSync";
+import { sendPollClosureSummary } from "@/lib/pollSync";
+import { upsertAnonymousPollSnapshot } from "@/lib/pollSnapshots";
+import { cancelExamDeadline, scheduleExamDeadline } from "@/lib/examScheduler";
 import {
   handleStudentQuizCommand,
   handleStudentQuizCallback,
 } from "@/lib/studentQuizWizard";
 import {
-  checkAndExpireExamSessions,
   startExamExpiryWatcher,
   examSessions,
   sessionKey,
@@ -30,30 +31,11 @@ import {
 const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || "";
 const BOT_TOKEN       = process.env.TELEGRAM_BOT_TOKEN!;
 let cachedBotUsername = (process.env.NEXT_PUBLIC_BOT_USERNAME || "").replace(/^@/, "");
-let lastExpirySweepAt = 0;
-let expirySweepInFlight = false;
-const EXPIRY_SWEEP_COOLDOWN_MS = 60_000;
 
 // Keep the local development convenience, but do not start a permanent timer
 // inside each serverless production instance.
 if (process.env.NODE_ENV === "development") {
   startExamExpiryWatcher(60_000);
-}
-
-function scheduleExamExpirySweep(): void {
-  if (expirySweepInFlight || Date.now() - lastExpirySweepAt < EXPIRY_SWEEP_COOLDOWN_MS) return;
-
-  lastExpirySweepAt = Date.now();
-  expirySweepInFlight = true;
-  after(async () => {
-    try {
-      await checkAndExpireExamSessions();
-    } catch (error) {
-      console.error("[webhook] checkAndExpire error:", error);
-    } finally {
-      expirySweepInFlight = false;
-    }
-  });
 }
 
 async function getBotUsername(): Promise<string> {
@@ -570,6 +552,9 @@ async function finishExam(session: ExamSession, timedOut = false, callbackId?: s
   }
 
   examSessions.delete(sessionKey(telegramId, examId));
+  after(() => cancelExamDeadline(session.resultId).catch((error) => {
+    console.error("[exam] scheduler cancellation failed:", error);
+  }));
   if (callbackId) await ackCb(callbackId, "تم حفظ إجابتك، جارٍ تجهيز نتيجتك.");
 
   // Session metadata avoids re-reading the exam and counting attempts again
@@ -872,6 +857,15 @@ async function handleExamBegin(cb: Record<string, unknown>, examId: string) {
     }
 
     examSessions.set(sessionKey(telegramId, exam.id), session);
+    if (session.resultId && session.timeLimit) {
+      after(() => scheduleExamDeadline({
+        resultId: session.resultId!,
+        examId: session.examId,
+        dueAt: session.startedAt + session.timeLimit! * 1000,
+      }).catch((error) => {
+        console.error("[exam] deadline scheduling failed:", error);
+      }));
+    }
     await sendQuestion(session, cbId);
   } catch (e) {
     console.error("[exam] handleExamBegin:", e);
@@ -1779,9 +1773,11 @@ export async function POST(req: NextRequest) {
           ).catch(() => {});
         }
 
-        // If anonymous, sync the aggregated option votes into poll_answers
+        // Telegram exposes only anonymous aggregate totals. Keep one live
+        // snapshot instead of rebuilding one synthetic row per voter on every
+        // poll update; long-lived quizzes may receive updates for months.
         if (poll.is_anonymous && Array.isArray(poll.options)) {
-          await syncAnonymousPollAnswers(quiz.id, poll.options, poll.total_voter_count || 0);
+          await upsertAnonymousPollSnapshot(quiz.id, poll.options, poll.total_voter_count || 0);
         }
 
         // If poll just transitioned to closed, send a polite closing summary
@@ -2203,10 +2199,6 @@ export async function POST(req: NextRequest) {
         await ackCb(cb.id as string, "تم التخطي! شكراً على وقتك 😊", false);
       }
     }
-
-    // Preserve opportunistic expiry checks without querying once per Telegram
-    // update. Each warm instance can start at most one sweep per minute.
-    scheduleExamExpirySweep();
 
     return NextResponse.json({ ok: true });
   } catch (err) {
