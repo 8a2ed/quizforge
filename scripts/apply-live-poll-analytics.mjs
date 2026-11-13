@@ -16,7 +16,24 @@ try {
   `);
 
   if (prepareOnly) {
-    console.log(JSON.stringify({ ok: true, prepared: true }));
+    const [counts] = await prisma.$queryRawUnsafe(`
+      SELECT
+        COUNT(*)::int AS "totalRows",
+        COUNT(*) FILTER (WHERE "telegramUserId" LIKE 'anon\\_%' ESCAPE '\\')::int AS "syntheticAnonRows"
+      FROM "poll_answers"
+    `);
+    const [snapshots] = await prisma.$queryRawUnsafe(`
+      SELECT
+        COUNT(*)::int AS "snapshotRows",
+        COALESCE(SUM("totalVoterCount"), 0)::int AS "snapshotVoters"
+      FROM "quiz_poll_snapshots"
+    `);
+    const [inProgress] = await prisma.$queryRawUnsafe(`
+      SELECT COUNT(*)::int AS "inProgressExamResults"
+      FROM "exam_results"
+      WHERE "score" = -1
+    `);
+    console.log(JSON.stringify({ ok: true, prepared: true, ...counts, ...snapshots, ...inProgress }));
   } else {
   // Preserve the existing anonymous aggregate data as a starting snapshot.
   // Historic synthetic rows cannot reveal exact distinct voters for multi-answer
